@@ -1,0 +1,47 @@
+{
+  "name": "aiworkflow",
+  "version": "0.1.0",
+  "description": "Flowchart-driven AI Agent execution engine — step-disclosure workflow guidance over HTTP MCP",
+  "type": "module",
+  "bin": {
+    "aiworkflow": "dist/cli.js"
+  },
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc && vite build",
+    "build:web": "vite build",
+    "dev:web": "vite",
+    "start": "node dist/cli.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.web.json --noEmit"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "mcp",
+    "agent",
+    "workflow",
+    "flowchart"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@hono/node-server": "^2.1.1",
+    "@xyflow/react": "^12.11.6",
+    "better-sqlite3": "^13.0.3",
+    "hono": "^4.13.5",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^26.4.1",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.5",
+    "@vitejs/plugin-react": "^6.1.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.2",
+    "vitest": "^4.1.11"
+  }
+}
