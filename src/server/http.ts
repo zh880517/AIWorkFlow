@@ -1,5 +1,5 @@
-// HTTP 服务：面板 REST API（/api/*，token 鉴权）+ 静态面板（dist-web）。
-// MCP 端点（/mcp）在 Phase 2 加入。服务只绑 127.0.0.1（设计文档 §3）。
+// HTTP 服务：面板 REST API（/api/*，token 鉴权）+ MCP 端点（/mcp）+ 静态面板（dist-web）。
+// 服务只绑 127.0.0.1（设计文档 §3）。
 import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
@@ -8,14 +8,23 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { Flow } from '../core/types.js';
 import type { FlowStore } from '../core/flowStore.js';
+import type { ExecutionEngine } from '../core/engine.js';
+import { createMcpApp } from './mcp.js';
 
 export interface ServerDeps {
   store: FlowStore;
   token: string;
+  /** 执行引擎（MCP 端点用；Phase 2 起必传） */
+  engine?: ExecutionEngine;
 }
 
 export function createApp(deps: ServerDeps): Hono {
   const app = new Hono();
+
+  // MCP 端点（Streamable HTTP，token 鉴权在 mcp.ts 内）
+  if (deps.engine !== undefined) {
+    app.route('/', createMcpApp({ engine: deps.engine, store: deps.store, token: deps.token }));
+  }
 
   // token 鉴权：查询参数 k 或 Bearer 头（面板静态资源本身不含数据，只拦 API）
   app.use('/api/*', async (c, next) => {

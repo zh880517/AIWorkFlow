@@ -53,20 +53,20 @@ tests/       # core 层单测 + 端到端 API 测试
 
 **验收**：手写一张图 JSON → 存取往返一致；校验器对设计文档 9.1 的硬拒/警告清单逐条正确判定。
 
-## 阶段 2 — 执行引擎（串行）+ MCP 执行类工具 + 薄 Skill
+## 阶段 2 — 执行引擎（串行）+ MCP 执行类工具 + 薄 Skill ✅
 
 | 任务 | 状态 |
 |---|---|
-| `core/engine.ts`：start_run / get_current_step / complete_step（单事务推进） | ⬜ |
-| 插值渲染 `{{nodeId.payload.field}}`（服务端渲染后下发） | ⬜ |
-| `{{…}}` 下发时剥离 `to`、progress 不含总数、响应复述 runId+nodeId | ⬜ |
-| 自愈式报错（三段式：错在哪 + 正确姿势 + 当前一步） | ⬜ |
-| HTTP 服务：MCP Streamable HTTP 端点（token 鉴权、绑 127.0.0.1） | ⬜ |
-| CLI 入口 `npx aiworkflow`（生成 token、打印两个 URL） | ⬜ |
-| 薄 Skill 文件（入场：list_flows → start_run） | ⬜ |
-| 执行阶段 0 探针 | ⬜ |
+| `core/engine.ts`：start_run / get_current_step / complete_step（单事务推进） | ✅ |
+| 插值渲染 `{{nodeId.payload.field}}`（服务端渲染后下发；引用缺失保留原 token） | ✅ |
+| `{{…}}` 下发时剥离 `to`、progress 不含总数、响应复述 runId+nodeId | ✅ |
+| 自愈式报错（三段式：错在哪 + 正确姿势 + 当前这一步） | ✅ |
+| HTTP 服务：MCP Streamable HTTP 端点（token 鉴权、绑 127.0.0.1、Mcp-Session-Id 会话绑定 run） | ✅ |
+| CLI 入口 `npx aiworkflow`（生成 token、打印面板/MCP/API 三个 URL） | ✅ |
+| 薄 Skill 文件（入场：list_flows → start_run；纪律文本由服务端下发，Skill 刻意不重复） | ✅ |
+| 执行阶段 0 探针 | ⬜（需真实宿主 Claude Code / Codex，与验收一并做） |
 
-**验收**：在 Claude Code 里真跑通一条无分支直线流程（prompt → tool → end）。
+**验收**：✅（2026-09-03）SDK MCP 客户端对真实服务走 Streamable HTTP 全链路：initialize 建会话 → list_flows → start_run（纪律文本 + 第一步）→ complete_step（payload 插值服务端渲染）→ get_current_step 幂等且靠 Mcp-Session-Id 会话绑定定位 → 终结 + 结束后查询返回终结态。直线流程 prompt → tool → end 跑通；非法 branchId 三段式自愈且不落库（事务回滚）。Claude Code 宿主内的实机复验并入阶段 0 探针一起做。
 
 ## 阶段 3 — 分支求值 + 环与迭代上限 + report_blocked
 
