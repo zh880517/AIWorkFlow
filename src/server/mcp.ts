@@ -81,9 +81,11 @@ function buildMcpServer(deps: McpDeps, sessionId: () => string | undefined): Mcp
         flowName: z.string().describe('流程 id 或展示名（可先调 list_flows 查）'),
         cwd: z.string().optional().describe('当前项目目录，用于面板按项目分组'),
         projectName: z.string().optional().describe('项目名，面板展示用'),
+        ...injectedIdentity,
       },
     },
-    async (args) => text(deps.engine.startRun({ ...args, mcpSessionId: sessionId() })),
+    async ({ _host, _sid, ...args }) =>
+      text(deps.engine.startRun({ ...args, hostSession: hostSessionOf(_host, _sid), mcpSessionId: sessionId() })),
   );
 
   server.registerTool(
@@ -95,9 +97,11 @@ function buildMcpServer(deps: McpDeps, sessionId: () => string | undefined): Mcp
       inputSchema: {
         runId: z.string().optional().describe('run id（可省略，按 MCP 会话自动定位）'),
         childToken: z.string().optional().describe('子 Agent 专用的身份令牌'),
+        ...injectedIdentity,
       },
     },
-    async (args) => text(deps.engine.getCurrentStep(args, sessionId())),
+    async ({ _host, _sid, ...args }) =>
+      text(deps.engine.getCurrentStep({ ...args, hostSession: hostSessionOf(_host, _sid) }, sessionId())),
   );
 
   server.registerTool(
@@ -113,9 +117,11 @@ function buildMcpServer(deps: McpDeps, sessionId: () => string | undefined): Mcp
         nodeId: z.string().optional().describe('当前节点 id（复述身份用，省略亦可）'),
         runId: z.string().optional().describe('run id（可省略，按 MCP 会话自动定位）'),
         childToken: z.string().optional().describe('子 Agent 专用的身份令牌'),
+        ...injectedIdentity,
       },
     },
-    async (args) => text(deps.engine.completeStep(args, sessionId())),
+    async ({ _host, _sid, ...args }) =>
+      text(deps.engine.completeStep({ ...args, hostSession: hostSessionOf(_host, _sid) }, sessionId())),
   );
 
   return server;
@@ -123,4 +129,16 @@ function buildMcpServer(deps: McpDeps, sessionId: () => string | undefined): Mcp
 
 function text(payload: unknown): { content: Array<{ type: 'text'; text: string }> } {
   return { content: [{ type: 'text', text: typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2) }] };
+}
+
+/** 宿主 PreToolUse hook 自动注入的身份字段（设计文档 §8.1）。模型不应填写；_aid 暂不消费，阶段 6 预留 */
+const injectedIdentity = {
+  _host: z.string().optional().describe('宿主 hook 自动注入，勿手动填写'),
+  _sid: z.string().optional().describe('宿主 hook 自动注入的会话 id，勿手动填写'),
+  _aid: z.string().optional().describe('宿主 hook 自动注入的子 Agent id，勿手动填写'),
+};
+
+/** 注入字段 → 引擎的 hostSession（"<host>:<sid>"）；缺失时 undefined，回退 Mcp-Session-Id 定位 */
+function hostSessionOf(host: string | undefined, sid: string | undefined): string | undefined {
+  return host !== undefined && sid !== undefined ? `${host}:${sid}` : undefined;
 }

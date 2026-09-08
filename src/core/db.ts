@@ -81,6 +81,11 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX IF NOT EXISTS idx_gates_run ON gate_decisions(run_id);
   `,
+  // v2：阶段 2.5 宿主身份注入——run 绑定宿主会话 id（"<host>:<sid>"，由 PreToolUse hook 注入）
+  `
+  ALTER TABLE runs ADD COLUMN host_session TEXT;
+  CREATE INDEX IF NOT EXISTS idx_runs_host_session ON runs(host_session);
+  `,
 ];
 
 function migrate(db: Database.Database): void {

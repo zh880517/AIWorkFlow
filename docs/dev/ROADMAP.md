@@ -32,12 +32,12 @@ tests/       # core 层单测 + 端到端 API 测试
 
 设计文档第 10 节的三个前提，需要在 Phase 2 末尾用真实宿主验证（服务端起来之后才能测）：
 
-- [ ] P0-1 Claude Code 的 HTTP MCP 客户端是否携带 `Mcp-Session-Id`；同会话是否稳定；重连是否更换
-- [ ] P0-2 子 Agent（Task 调用）是否复用父会话的同一 `Mcp-Session-Id`
+- [x] P0-1 Claude Code 的 HTTP MCP 客户端是否携带 `Mcp-Session-Id`；同会话是否稳定；重连是否更换 → **文档级答案（2026-09-08）**：两端均按 Streamable HTTP 规范携带；**Codex 会话过期后重新握手会换 id**（源码 `reinitialize_after_session_expiry`）。已被阶段 2.5 的宿主会话注入消解为非阻塞项——身份不再依赖传输层 id 稳定性。实机观察留验收
+- [x] P0-2 子 Agent（Task 调用）是否复用父会话的同一 `Mcp-Session-Id` → **文档级答案：是**。两端子 Agent 的工具调用触发 hook 时都沿用父会话 id（Claude Code 另带 `agent_id` 区分；Codex 内部共享 `Arc<McpManager>`）。childToken 设计维持；hook 的 `_aid` 为阶段 6 提供额外区分手段。实机观察留验收
 - [x] P0-3 Codex 是否具备子 Agent 派发/并行能力 → **是**（2026-09-08 用户实机确认：Claude CLI 与 Codex CLI 都支持子 Agent 并行；fan-out 无需降级，文档 §10.3 / §12.5 已同步更新）
 
 方法：临时在 MCP 端点打请求日志，宿主里跑最小流程观察。结论记入本文件，验证代码删除。
-影响：P0-2 若为否，`childToken` 机制仍保留（幂等无害）；P0-3 已确认为支持并行，无需降级。
+影响：三项均有答案且均不改变现设计；剩余动作只是实机复核（与阶段 2/2.5 验收合并做）。
 
 ## 阶段 1 — SQLite 层 + 图 DSL 校验 + 快照机制 ✅
 
@@ -67,6 +67,21 @@ tests/       # core 层单测 + 端到端 API 测试
 | 执行阶段 0 探针 | ⬜（需真实宿主 Claude Code / Codex，与验收一并做） |
 
 **验收**：✅（2026-09-03）SDK MCP 客户端对真实服务走 Streamable HTTP 全链路：initialize 建会话 → list_flows → start_run（纪律文本 + 第一步）→ complete_step（payload 插值服务端渲染）→ get_current_step 幂等且靠 Mcp-Session-Id 会话绑定定位 → 终结 + 结束后查询返回终结态。直线流程 prompt → tool → end 跑通；非法 branchId 三段式自愈且不落库（事务回滚）。Claude Code 宿主内的实机复验并入阶段 0 探针一起做。
+
+## 阶段 2.5 — 宿主身份注入 hook ✅
+
+> 背景：Codex 源码证实 `Mcp-Session-Id` 在会话过期重握手后会更换，传输层 id 不可作唯一锚点（P0-1 风险坐实）。两端宿主的 PreToolUse hook 都支持 `allow + updatedInput` 改写 MCP 工具入参，且载荷公共字段带稳定的会话级 `session_id`。设计文档 §8.1 已同步修订（原"不使用任何 hook"收窄为"仅允许身份注入"）。
+
+| 任务 | 状态 |
+|---|---|
+| `src/hook.ts`：buildHookOutput / runHook（纯 stdin→stdout，永不 deny，失败静默 exit 0） | ✅ |
+| CLI 子命令 `aiworkflow hook <claude-code\|codex>`（在服务副作用之前分派） | ✅ |
+| db migration v2：`runs.host_session` + 索引（真实 v1 库升级实测通过） | ✅ |
+| 引擎定位顺序：childToken → runId → **hostSession（"<host>:<sid>"）** → mcpSessionId 兜底 | ✅ |
+| MCP 工具 schema：`_host/_sid/_aid` 注入字段（剥离后组装 hostSession；_aid 阶段 6 前不消费） | ✅ |
+| 测试：hook 6 条（两宿主载荷形态/伪造覆盖/静默）+ 引擎 6 条（持久化/定位/优先级/回落/终结态/跨 MCP 会话推进）+ MCP 端到端 1 条（新客户端新 Mcp-Session-Id 仅靠注入身份盲调） | ✅ |
+
+**验收**：✅（2026-09-08，自动化层面）typecheck + 118 测试全绿；`aiworkflow hook` 子命令真机冒烟（注入/坏 JSON 静默/非 PreToolUse 静默/缺参用法）；v1→v2 迁移在真实旧库上验证（user_version 1→2、数据完好、host_session 可查）。**实机确认**（真装 hook 到两宿主里盲调）并入阶段 0 实机验证。手动配置片段见设计文档 §8.1；`install` 自动写入留阶段 9。
 
 ## 阶段 3 — 分支求值 + 环与迭代上限 + report_blocked
 

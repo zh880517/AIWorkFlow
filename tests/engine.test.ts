@@ -450,3 +450,64 @@ describe('执行轨迹落库', () => {
     expect(run.status).toBe('running');
   });
 });
+
+describe('宿主会话定位（阶段 2.5：hostSession，hook 注入）', () => {
+  it('start_run 持久化 host_session', () => {
+    const { engine } = makeEngine([linearFlow()]);
+    const db = (engine as unknown as { db: import('better-sqlite3').Database }).db;
+    const start = engine.startRun({ flowName: '直线图', hostSession: 'claude-code:s1' });
+    if (!isStep(start)) throw new Error('start 失败');
+    const run = db.prepare('SELECT host_session FROM runs WHERE id = ?').get(start.runId) as {
+      host_session: string | null;
+    };
+    expect(run.host_session).toBe('claude-code:s1');
+  });
+
+  it('不带 runId/childToken 时按 hostSession 定位当前步', () => {
+    const { engine } = makeEngine([linearFlow()]);
+    const start = engine.startRun({ flowName: '直线图', hostSession: 'codex:thr_1' });
+    const cur = engine.getCurrentStep({ hostSession: 'codex:thr_1' });
+    if (!isStep(cur)) throw new Error('应按 hostSession 定位成功');
+    expect(cur.runId).toBe(start.runId);
+    expect(cur.step.nodeId).toBe('n1');
+  });
+
+  it('hostSession 优先于 mcpSessionId（即使后者匹配更新的 run）', () => {
+    const { engine } = makeEngine([linearFlow()]);
+    const a = engine.startRun({ flowName: '直线图', hostSession: 'claude-code:s1', mcpSessionId: 'm1' });
+    engine.startRun({ flowName: '直线图', mcpSessionId: 'm2' }); // 更晚创建，只绑 MCP 会话
+    const cur = engine.getCurrentStep({ hostSession: 'claude-code:s1' }, 'm2');
+    if (!isStep(cur)) throw new Error('应定位成功');
+    expect(cur.runId).toBe(a.runId);
+  });
+
+  it('hostSession 无匹配时回落 mcpSessionId', () => {
+    const { engine } = makeEngine([linearFlow()]);
+    const a = engine.startRun({ flowName: '直线图', mcpSessionId: 'm1' });
+    const cur = engine.getCurrentStep({ hostSession: 'claude-code:unknown' }, 'm1');
+    if (!isStep(cur)) throw new Error('应回落到 mcpSessionId 定位');
+    expect(cur.runId).toBe(a.runId);
+  });
+
+  it('run 终结后按 hostSession 回落最近 run，返回终结态而非找不到', () => {
+    const { engine } = makeEngine([linearFlow()]);
+    const start = engine.startRun({ flowName: '直线图', hostSession: 'claude-code:s1' });
+    engine.completeStep({ runId: start.runId, summary: '完成' });
+    const cur = engine.getCurrentStep({ hostSession: 'claude-code:s1' });
+    if (!isFinished(cur)) throw new Error('应返回终结态');
+    expect(cur.runId).toBe(start.runId);
+  });
+
+  it('complete_step 同样按 hostSession 定位并推进（MCP 会话已换的场景）', () => {
+    const { engine } = makeEngine([interpolationFlow()]);
+    engine.startRun({ flowName: '插值图', hostSession: 'claude-code:s1' });
+    // 模拟 Codex 会话过期重握手：Mcp-Session-Id 已变，仅靠 hostSession 定位
+    const next = engine.completeStep(
+      { hostSession: 'claude-code:s1', summary: '项目是 demo', payload: { project: 'apps/demo' } },
+      'mcp-new-after-reconnect',
+    );
+    if (!isStep(next)) throw new Error('应推进成功');
+    expect(next.step.nodeId).toBe('n2');
+    expect(next.step.instruction).toContain('apps/demo');
+  });
+});

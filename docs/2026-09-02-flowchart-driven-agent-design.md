@@ -41,17 +41,17 @@
 选择 HTTP 传输而非 stdio 的后果：
 
 - **收益**：单进程独占 SQLite，无多进程 WAL 争用、无端口抢占、无守护进程接管问题；人工卡点可用进程内 promise + SSE 实现，无需轮询数据库；面板天然是跨会话全局视图。
-- **收益（关键）**：MCP Streamable HTTP 协议中服务端可在 `initialize` 响应下发 `Mcp-Session-Id`，客户端后续每个请求必须携带。**这是传输层字段，模型看不到，因此模型不可能丢失它。** 主 Agent 的会话身份问题被传输层直接消灭。
+- **收益（关键）**：MCP Streamable HTTP 协议中服务端可在 `initialize` 响应下发 `Mcp-Session-Id`，客户端后续每个请求必须携带。**这是传输层字段，模型看不到，因此模型不可能丢失它。** 但它只能作兜底锚点：Codex 侧会话过期后重新握手会更换 id（源码 `reinitialize_after_session_expiry`，2026-09-08 证实）。主 Agent 身份的首要锚点由宿主 hook 注入的会话 id 承担（§8.1）。
 - **代价**：服务端不再知道 Agent 的工作目录。`start_run` 必须显式传入 `cwd` 与 `projectName`，这不是可选项。
 
 ### 身份模型
 
 | 角色 | 身份来源 | 丢失风险 |
 |---|---|---|
-| 主 Agent | `Mcp-Session-Id`（传输层自动携带） | 无（模型不接触） |
+| 主 Agent | 宿主会话 id `_sid`（PreToolUse hook 注入，§8.1）；未装 hook 时退回 `Mcp-Session-Id` | 无（模型不接触） |
 | 子 Agent | `childToken`（服务端签发，写在 preamble 里） | 低（子 Agent 上下文短、生命周期短） |
 
-`Mcp-Session-Id` 在客户端重连时可能更换，因此不作为唯一锚点：run 记录同时绑定 `cwd`，且 `get_current_step` 幂等可随时取回状态。
+run 定位顺序：**childToken → runId → hostSession（hook 注入的 `"<host>:<sid>"`）→ `Mcp-Session-Id`（兜底）**。`Mcp-Session-Id` 在客户端重连时可能更换（Codex 会话过期重握手即换），因此不作为唯一锚点：run 记录同时绑定 `cwd`，且 `get_current_step` 幂等可随时取回状态。
 
 ## 4. 流程 DSL 与数据模型
 
@@ -301,27 +301,54 @@
 
 child run 调 `report_blocked` 时，该 child 置为 `failed`，随后由 7.5 的失败处理接管。
 
-## 8. Skill 引导层
+## 8. Skill 引导层与宿主集成
 
-**不使用任何 hook。** 曾设计过 PreToolUse 拦截层与状态注入层，均已移除：
+**hook 只允许一种用途：身份注入**（2026-09-08 修订；原"不使用任何 hook"收窄，见 §8.1）。曾设计过的另两类 hook 仍然禁止：
 
-- 拦截层与"引导而非约束"矛盾，且收益为负（Agent 在节点执行中顺手多读一个文件本是好事，拦下来纯属妨碍）
-- 注入层被砍后，系统不再依赖任何宿主特定机制，可在任意 MCP 客户端运行
+- 拦截层（PreToolUse deny / 审批）与"引导而非约束"矛盾，且收益为负（Agent 在节点执行中顺手多读一个文件本是好事，拦下来纯属妨碍）
+- 状态注入层（往上下文塞提醒）仍然不做：注入层被砍后，业务语义不依赖任何宿主特定机制，可在任意 MCP 客户端运行
 
 **代价与缓解**：上下文压缩后无人提醒，Agent 可能悄然脱离流程、按自己的方式完成任务。三层缓解——每个 tool 返回值复述状态、`get_current_step` 幂等可随时取回、纪律文本明确写"不记得就调它"。真正的兜底是面板的停滞检测。按"引导"定位，脱离流程本身不算灾难，只是失去逐步披露的收益。
 
-### 8.1 薄 Skill
+### 8.1 宿主身份注入 hook（唯一允许的 hook 用途）
+
+宿主配置 PreToolUse hook 匹配 `mcp__aiworkflow__.*`，执行 `aiworkflow hook <host>`（`node <安装路径>/dist/cli.js hook claude-code|codex`）。它读 stdin 的事件 JSON，输出：
+
+```json
+{ "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "allow",
+  "updatedInput": { "…原 tool_input 原样回显…", "_host": "claude-code", "_sid": "<宿主会话id>", "_aid": "<agent_id，子 Agent 时才有>" } } }
+```
+
+- **两端都支持**：Claude Code（settings.json hooks，command 型）与 Codex（hooks.json，command 型）的 PreToolUse 都支持 `allow + updatedInput` 整体替换工具入参，载荷公共字段都带稳定的会话级 `session_id`（Claude Code 为对话 UUID，Codex 为 thread id）。
+- **为什么它比 `Mcp-Session-Id` 可靠**：宿主会话 id 由 hook 注入、模型不书写也就不可能丢失；整场对话稳定，而传输层 id 在 Codex 上会因会话过期重握手而更换。服务端把 `_host:_sid` 组成 hostSession 绑定 run（§3 身份模型）。
+- **约束**：纯本地 stdin→stdout，不访问网络、不依赖服务进程；永不 deny（拦截层禁令适用）；任何解析失败静默放行（exit 0 无输出）。`allow` 顺带免确认本服务工具（本机 127.0.0.1 + token 鉴权，可接受；Codex 也不支持 ask）。`updatedInput` 必须完整回显原 tool_input（宿主语义是整体替换），hook 对已存在的 `_sid` 一律覆盖——注入的唯一权威。
+- **信任级别**：`_sid` 与 runId / childToken 同级，是身份提示而非安全边界（模型理论上可伪造，但 hook 每次调用都覆盖）。
+- **`_aid`**：子 Agent 的 agent_id（仅 Claude Code 携带）。阶段 6 前服务端不消费，仅透传剥离，为子 Agent 流量区分预留。
+- **未装 hook 时零破坏**：定位顺序里 hostSession 缺位自动落到 `Mcp-Session-Id`，行为与旧版一致。
+- **安装**：手动配置片段如下；`npx aiworkflow install` 自动写入是阶段 9 的任务。
+
+```jsonc
+// Claude Code — ~/.claude/settings.json
+{ "hooks": { "PreToolUse": [ { "matcher": "mcp__aiworkflow__.*",
+  "hooks": [ { "type": "command", "command": "node <安装路径>/dist/cli.js hook claude-code", "timeout": 15 } ] } ] } }
+
+// Codex — ~/.codex/hooks.json（command 型 handler，stdin 收 JSON）
+{ "PreToolUse": [ { "matcher": "mcp__aiworkflow__.*",
+  "hooks": [ { "type": "command", "command": "node <安装路径>/dist/cli.js hook codex", "timeout": 15 } ] } ] }
+```
+
+### 8.2 薄 Skill
 
 Skill 只管入场：列出可用流程、确认用哪个、调 `start_run`。几十行，很少变动。
 
 `npx aiworkflow install` 检测已安装的宿主并写入对应位置：
 
-| 宿主 | 入场文件位置 |
-|---|---|
-| Claude Code | Skill 目录 |
-| Codex | `~/.codex/prompts/` 自定义 prompt + AGENTS.md 片段 |
+| 宿主 | 入场文件位置 | hook 配置（§8.1） |
+|---|---|---|
+| Claude Code | Skill 目录 | `~/.claude/settings.json` 的 hooks 段 |
+| Codex | `~/.codex/prompts/` 自定义 prompt + AGENTS.md 片段 | `~/.codex/hooks.json` |
 
-### 8.2 子 Agent preamble
+### 8.3 子 Agent preamble
 
 `subagent` 节点下发时给出一段**必须原样前置、不许改写或摘要**的文本：
 
@@ -364,7 +391,7 @@ Skill 只管入场：列出可用流程、确认用哪个、调 `start_run`。�
 - 点节点 → 侧栏显示该次的 `summary`、`payload`、耗时、迭代序号
 - 子 Agent 按 run 树折叠展示；fan-out 的 N 个并排；**被 `max` 截断丢掉的显性列出**
 - 人工卡点可直接在此回答（按钮即 `options`）
-- **停滞检测**：`last_activity` 超过 **15 分钟标黄提示**（不自动做任何处理），**24 小时自动标 `stale`**。这是移除 hook 后唯一的异常发现渠道，必须显眼
+- **停滞检测**：`last_activity` 超过 **15 分钟标黄提示**（不自动做任何处理），**24 小时自动标 `stale`**。这是唯一的异常发现渠道（§8.1 的身份注入 hook 不上报任何事件），必须显眼
 
 ### 9.3 实时通道
 
@@ -374,10 +401,10 @@ Skill 只管入场：列出可用流程、确认用哪个、调 `start_run`。�
 
 ## 10. 待实测的前提
 
-以下前提影响设计细节，**实现前必须先用一次性探针验证**（代码不留）：
+三个前提均已有一手答案（2026-09-08，官方文档 + Codex 源码 + 用户实机确认），剩余动作只是实机复核、与阶段验收合并做：
 
-1. Claude Code / Codex 的 HTTP MCP 客户端是否遵循 `Mcp-Session-Id`？同一会话是否稳定？重连是否更换？
-2. 子 Agent 的调用是否复用父会话的同一 `Mcp-Session-Id`？（设计假设为"是"，因此需要 `childToken`）
+1. ~~Claude Code / Codex 的 HTTP MCP 客户端是否遵循 `Mcp-Session-Id`？~~ **两端均按 Streamable HTTP 规范携带；Codex 会话过期后重新握手会更换 id**（源码 `reinitialize_after_session_expiry`）。该风险已被 §8.1 宿主会话注入消解：身份不再依赖传输层 id 的稳定性。
+2. ~~子 Agent 的调用是否复用父会话的同一 `Mcp-Session-Id`？~~ **是。** 两端子 Agent 的工具调用触发 hook 时都沿用父会话 id（Claude Code 另带 `agent_id` 区分，Codex 内部共享 `Arc<McpManager>`）。`childToken` 设计维持；hook 注入的 `_aid` 为阶段 6 提供额外区分手段。
 3. ~~Codex 是否具备子 Agent 派发能力、能否并行？~~ **已确认（2026-09-08，用户实机确认）：Claude CLI 与 Codex CLI 都支持子 Agent 并行。** `subagent` 节点与 fan-out 在两个宿主上都可用，原"不能并行则降级串行"的预案不再需要。
 
 ## 11. v1 范围外
@@ -387,7 +414,7 @@ Skill 只管入场：列出可用流程、确认用哪个、调 `start_run`。�
 - **服务端直连执行 MCP 工具节点** — 若 `tool` 节点的目标本身是 MCP 工具，服务端可作为 MCP 客户端直接执行，使该节点成为真确定性。v1 不做，`tool` 节点仍由 Agent 执行并回报
 - **从项目目录加载图** — 使流程可随项目提交进 git、与同事共享
 - **图的版本管理与 diff**
-- **任何形式的 hook**
+- **拦截类与状态注入类 hook**（身份注入除外——那是 §8.1 唯一放行的用途；deny / 审批 / 往上下文塞提醒仍然不做）
 
 ## 12. 已知局限
 
@@ -406,6 +433,7 @@ Skill 只管入场：列出可用流程、确认用哪个、调 `start_run`。�
 | 0 | 第 10 节的探针 | `Mcp-Session-Id` 行为、子 Agent 共享连接、Codex 并行能力三个前提有明确答案 |
 | 1 | SQLite 层 + 图 DSL 校验 + 快照机制 | 能手写一张图 JSON、存取、校验硬拒/警告正确 |
 | 2 | 执行引擎（串行：`prompt` / `tool` / `end`）+ MCP 执行类工具 + 薄 Skill | 能在 Claude Code 里真跑通一条无分支直线流程 |
+| 2.5 | 宿主身份注入 hook（§8.1：PreToolUse `updatedInput` 注入 `_host`/`_sid`） | 宿主装上 hook 后，MCP 会话失效（重连换 id）也不影响盲调 get_current_step 定位 |
 | 3 | 分支求值 + 环与迭代上限 + `report_blocked` | 能跑通含分支、含"测试失败回退重试"的环 |
 | 4 | 监控面板（run 列表 + 详情 + SSE） | 能在浏览器里看到第 2、3 阶段的执行轨迹 |
 | 5 | `gate` 节点 + 双通道回答 | 流程能挂起等人工确认，面板和聊天两条路都能放行 |

@@ -144,6 +144,35 @@ describe('MCP Streamable HTTP 端点', () => {
     }
   });
 
+  it('hook 注入的 _host/_sid 跨 MCP 会话定位 run（模拟 Codex 重连换 Mcp-Session-Id）', async () => {
+    // 第一个会话 start_run，参数带 hook 注入的宿主身份
+    const c1 = await connect();
+    let runId: string;
+    try {
+      const start = payloadOf(
+        await c1.callTool({
+          name: 'start_run',
+          arguments: { flowName: '直线图', _host: 'codex', _sid: 'thr_hook_1' },
+        }),
+      );
+      runId = start.runId;
+      expect(start.step.nodeId).toBe('n1');
+    } finally {
+      await c1.close();
+    }
+    // 新客户端 = 全新 Mcp-Session-Id；仅靠注入身份盲调（不带 runId）仍能定位
+    const c2 = await connect();
+    try {
+      const cur = payloadOf(
+        await c2.callTool({ name: 'get_current_step', arguments: { _host: 'codex', _sid: 'thr_hook_1' } }),
+      );
+      expect(cur.runId).toBe(runId);
+      expect(cur.step.nodeId).toBe('n1');
+    } finally {
+      await c2.close();
+    }
+  });
+
   it('list_flows 返回流程清单', async () => {
     const client = await connect();
     try {

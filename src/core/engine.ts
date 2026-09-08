@@ -74,7 +74,9 @@ export interface StartRunParams {
   cwd?: string;
   projectName?: string;
   inputs?: Record<string, unknown>;
-  /** 宿主 MCP 会话 id（Mcp-Session-Id），作为主 Agent 身份锚点；探针结论出来前的可选绑定 */
+  /** 宿主会话 id（"<host>:<sid>"，PreToolUse hook 注入），主 Agent 的首要身份锚点，重连不变 */
+  hostSession?: string;
+  /** 宿主 MCP 会话 id（Mcp-Session-Id），传输层兜底锚点；Codex 侧会话过期重握手会更换 */
   mcpSessionId?: string;
 }
 
@@ -82,6 +84,8 @@ export interface StartRunParams {
 export interface RunRef {
   runId?: string;
   childToken?: string;
+  /** 宿主会话 id（hook 注入），优先于 mcpSessionId */
+  hostSession?: string;
 }
 
 export interface CompleteStepParams extends RunRef {
@@ -150,10 +154,10 @@ export class ExecutionEngine {
     this.db
       .prepare(
         `INSERT INTO runs (id, root_run_id, flow_id, flow_snapshot_hash, entry_node, current_node,
-           status, cwd, project_name, mcp_session_id, steps_used, last_activity, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, 0, ?, ?)`,
+           status, cwd, project_name, host_session, mcp_session_id, steps_used, last_activity, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, 0, ?, ?)`,
       )
-      .run(runId, runId, flow.id, hash, flow.entry, flow.entry, params.cwd ?? null, params.projectName ?? null, params.mcpSessionId ?? null, now, now);
+      .run(runId, runId, flow.id, hash, flow.entry, flow.entry, params.cwd ?? null, params.projectName ?? null, params.hostSession ?? null, params.mcpSessionId ?? null, now, now);
 
     return this.stepResult(runId);
   }
@@ -403,7 +407,7 @@ export class ExecutionEngine {
     ).c;
   }
 
-  /** run 定位顺序：childToken（子 Agent）→ runId（显式）→ 会话绑定（主 Agent，Mcp-Session-Id） */
+  /** run 定位顺序：childToken（子 Agent）→ runId（显式）→ hostSession（宿主会话，hook 注入）→ mcpSessionId（传输层兜底） */
   private resolveRun(ref: RunRef, mcpSessionId?: string): RunRow | null {
     if (ref.childToken !== undefined) {
       return this.runBy('child_token = ?', ref.childToken);
@@ -411,21 +415,29 @@ export class ExecutionEngine {
     if (ref.runId !== undefined) {
       return this.runBy('id = ?', ref.runId);
     }
+    if (ref.hostSession !== undefined) {
+      const run = this.latestRunBy('host_session', ref.hostSession);
+      if (run !== null) return run;
+    }
     if (mcpSessionId !== undefined) {
-      // 优先活跃 run；没有时回落到该会话最近的 run（已终结也能答"跑完了"而不是"找不到"）
-      const active = this.db
-        .prepare(
-          "SELECT * FROM runs WHERE mcp_session_id = ? AND status IN ('running', 'waiting_gate', 'waiting_children') ORDER BY created_at DESC LIMIT 1",
-        )
-        .get(mcpSessionId) as RunRow | undefined;
-      if (active !== undefined) return active;
-      return (
-        (this.db
-          .prepare('SELECT * FROM runs WHERE mcp_session_id = ? ORDER BY created_at DESC LIMIT 1')
-          .get(mcpSessionId) as RunRow | undefined) ?? null
-      );
+      return this.latestRunBy('mcp_session_id', mcpSessionId);
     }
     return null;
+  }
+
+  /** 按会话列定位：优先活跃 run；没有时回落到最近的 run（已终结也能答"跑完了"而不是"找不到"）。rowid 决胜同一毫秒的建 run */
+  private latestRunBy(column: 'host_session' | 'mcp_session_id', value: string): RunRow | null {
+    const active = this.db
+      .prepare(
+        `SELECT * FROM runs WHERE ${column} = ? AND status IN ('running', 'waiting_gate', 'waiting_children') ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+      )
+      .get(value) as RunRow | undefined;
+    if (active !== undefined) return active;
+    return (
+      (this.db
+        .prepare(`SELECT * FROM runs WHERE ${column} = ? ORDER BY created_at DESC, rowid DESC LIMIT 1`)
+        .get(value) as RunRow | undefined) ?? null
+    );
   }
 
   private runBy(where: string, arg: string): RunRow | null {
