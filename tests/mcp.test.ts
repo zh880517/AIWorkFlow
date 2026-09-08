@@ -65,12 +65,12 @@ function payloadOf(result: unknown): any {
 }
 
 describe('MCP Streamable HTTP 端点', () => {
-  it('initialize 成功，工具清单含 4 个执行类工具', async () => {
+  it('initialize 成功，工具清单含 5 个执行类工具', async () => {
     const client = await connect();
     try {
       const { tools } = await client.listTools();
       const names = tools.map((t) => t.name).sort();
-      expect(names).toEqual(['complete_step', 'get_current_step', 'list_flows', 'start_run']);
+      expect(names).toEqual(['complete_step', 'get_current_step', 'list_flows', 'report_blocked', 'start_run']);
     } finally {
       await client.close();
     }
@@ -170,6 +170,29 @@ describe('MCP Streamable HTTP 端点', () => {
       expect(cur.step.nodeId).toBe('n1');
     } finally {
       await c2.close();
+    }
+  });
+
+  it('report_blocked 经 MCP 上报：无出口 → run 判失败且轨迹可见', async () => {
+    const noExit: Flow = {
+      id: 'f_block_mcp',
+      name: '无出口阻塞图',
+      entry: 'n1',
+      nodes: [
+        { id: 'n1', type: 'prompt', instruction: '干一件事', branches: [{ id: 'b1', condition: '成功', to: 'n2' }] },
+        { id: 'n2', type: 'end', outcome: 'success' },
+      ],
+    };
+    expect(store.save(noExit).ok).toBe(true);
+    const client = await connect();
+    try {
+      await client.callTool({ name: 'start_run', arguments: { flowName: '无出口阻塞图' } });
+      const res = payloadOf(await client.callTool({ name: 'report_blocked', arguments: { reason: '缺依赖' } }));
+      expect(res.finished).toBe(true);
+      expect(res.outcome).toBe('fail');
+      expect(res.note).toContain('缺依赖');
+    } finally {
+      await client.close();
     }
   });
 

@@ -100,6 +100,83 @@ function gateFlow(): Flow {
   };
 }
 
+// 验收场景：改代码 → 跑测试，失败回退重跑（环），撞 iterationLimit 走逃生
+function retryFlow(escape: boolean): Flow {
+  return {
+    id: escape ? 'f_retry' : 'f_retry_noesc',
+    name: escape ? '测试回退环' : '无逃生回退环',
+    entry: 'n_fix',
+    nodes: [
+      { id: 'n_fix', type: 'prompt', instruction: '按失败原因改代码（第 {{n_test.payload.round}} 轮）', next: 'n_test' },
+      {
+        id: 'n_test',
+        type: 'tool',
+        title: '跑测试',
+        toolName: 'Bash',
+        instruction: '跑测试',
+        params: { command: 'npm test' },
+        iterationLimit: 2,
+        ...(escape ? { onLimitExceeded: 'n_fail' } : {}),
+        branches: [
+          { id: 'b_pass', condition: '全部通过', to: 'n_ok' },
+          { id: 'b_fail', condition: '有测试失败', to: 'n_fix' },
+        ],
+      },
+      { id: 'n_ok', type: 'end', outcome: 'success' },
+      // 无逃生变体不配 onLimitExceeded，n_fail 没有入边会被 E_UNREACHABLE 硬拒
+      ...(escape ? [{ id: 'n_fail', type: 'end' as const, outcome: 'fail' as const }] : []),
+    ],
+  };
+}
+
+function maxStepsFlow(): Flow {
+  return {
+    id: 'f_max',
+    name: '小上限图',
+    entry: 'n1',
+    maxSteps: 1,
+    nodes: [
+      { id: 'n1', type: 'prompt', instruction: '第一步', next: 'n2' },
+      { id: 'n2', type: 'prompt', instruction: '第二步', next: 'n3' },
+      { id: 'n3', type: 'end', outcome: 'success' },
+    ],
+  };
+}
+
+// n1 有 onLimitExceeded 逃生、无 default 分支；n_esc 的插值引用 n1 的产物
+function blockedFlow(): Flow {
+  return {
+    id: 'f_block',
+    name: '阻塞图',
+    entry: 'n1',
+    nodes: [
+      {
+        id: 'n1',
+        type: 'prompt',
+        instruction: '干一件事',
+        iterationLimit: 5,
+        onLimitExceeded: 'n_esc',
+        branches: [{ id: 'b1', condition: '再试一次', to: 'n1' }],
+      },
+      { id: 'n_esc', type: 'prompt', instruction: '善后，处理 {{n1.payload.x}}', next: 'n_end' },
+      { id: 'n_end', type: 'end', outcome: 'fail' },
+    ],
+  };
+}
+
+// n1 无 onLimitExceeded、无 default：report_blocked 后没有任何出口
+function blockedNoExitFlow(): Flow {
+  return {
+    id: 'f_block2',
+    name: '无出口阻塞图',
+    entry: 'n1',
+    nodes: [
+      { id: 'n1', type: 'prompt', instruction: '干一件事', branches: [{ id: 'b1', condition: '成功', to: 'n2' }] },
+      { id: 'n2', type: 'end', outcome: 'success' },
+    ],
+  };
+}
+
 function makeEngine(flows: Flow[]): { engine: ExecutionEngine; store: FlowStore } {
   const db = openMemoryDb();
   const store = new FlowStore(db, path.join(tmpHome, `flows-${Math.random().toString(36).slice(2)}`));
@@ -509,5 +586,175 @@ describe('宿主会话定位（阶段 2.5：hostSession，hook 注入）', () =>
     if (!isStep(next)) throw new Error('应推进成功');
     expect(next.step.nodeId).toBe('n2');
     expect(next.step.instruction).toContain('apps/demo');
+  });
+});
+
+// ---- 阶段 3：分支边界 / 环与迭代上限 / report_blocked ----
+
+describe('分支求值边界（§7.3）', () => {
+  it('选 default 分支（condition:"*"）按其 to 推进', () => {
+    const { engine } = makeEngine([branchFlow()]); // b_default → n3（end/fail）
+    const start = engine.startRun({ flowName: '分支图' });
+    if (!isStep(start)) throw new Error('start 失败');
+    const res = engine.completeStep({ runId: start.runId, summary: '一个条件都不满足', branchId: 'b_default' });
+    if (!isFinished(res)) throw new Error('default 指向 end，应终结');
+    expect(res.outcome).toBe('fail');
+  });
+});
+
+describe('环与迭代上限（§4.5）', () => {
+  it('回退环正常推进：测试失败 → 回到改代码 → 重跑 → 通过（验收场景）', () => {
+    const { engine } = makeEngine([retryFlow(true)]);
+    const start = engine.startRun({ flowName: '测试回退环' });
+    if (!isStep(start)) throw new Error('start 失败');
+    expect(start.step.nodeId).toBe('n_fix');
+    // 首轮：未跑过测试，插值 token 原样保留
+    expect(start.step.instruction).toContain('{{n_test.payload.round}}');
+
+    engine.completeStep({ runId: start.runId, nodeId: 'n_fix', summary: '改了空指针' });
+    const fail1 = engine.completeStep({
+      runId: start.runId,
+      nodeId: 'n_test',
+      summary: '2 个用例失败',
+      payload: { round: 2 },
+      branchId: 'b_fail',
+    });
+    if (!isStep(fail1)) throw new Error('回退应回到 n_fix');
+    expect(fail1.step.nodeId).toBe('n_fix');
+    // 第二轮进改代码：插值用最近一次 completed 的 payload
+    expect(fail1.step.instruction).toContain('第 2 轮');
+
+    engine.completeStep({ runId: start.runId, summary: '修好了' });
+    const done = engine.completeStep({ runId: start.runId, nodeId: 'n_test', summary: '全过', branchId: 'b_pass' });
+    if (!isFinished(done)) throw new Error('应终结');
+    expect(done.outcome).toBe('success');
+    expect(done.progress).toEqual({ completed: 4 });
+  });
+
+  it('撞 iterationLimit 不执行该节点：落 limit_exceeded 轨迹并走 onLimitExceeded 逃生', () => {
+    const { engine } = makeEngine([retryFlow(true)]);
+    const db = (engine as unknown as { db: import('better-sqlite3').Database }).db;
+    const start = engine.startRun({ flowName: '测试回退环' });
+    if (!isStep(start)) throw new Error('start 失败');
+    // 两轮失败（iterationLimit 2 已用完）
+    engine.completeStep({ runId: start.runId, summary: '改一' });
+    engine.completeStep({ runId: start.runId, nodeId: 'n_test', summary: '失败', branchId: 'b_fail' });
+    engine.completeStep({ runId: start.runId, summary: '改二' });
+    engine.completeStep({ runId: start.runId, nodeId: 'n_test', summary: '又失败', branchId: 'b_fail' });
+    // 第三次推进目标 n_test 撞上限：不执行，直接逃生到 n_fail（end/fail）
+    const third = engine.completeStep({ runId: start.runId, summary: '改三' });
+    if (!isFinished(third)) throw new Error('应经逃生口终结');
+    expect(third.outcome).toBe('fail');
+    expect(third.note).toContain('迭代上限');
+
+    const rows = db
+      .prepare("SELECT node_id, iteration, status, summary FROM node_executions WHERE node_id = 'n_test' ORDER BY id")
+      .all() as Array<{ node_id: string; iteration: number; status: string; summary: string }>;
+    expect(rows).toHaveLength(3);
+    expect(rows.filter((r) => r.status === 'completed')).toHaveLength(2);
+    expect(rows[2]).toMatchObject({ status: 'limit_exceeded' });
+    expect(rows[2]!.summary).toContain('未执行');
+    // n_test 的第三次进位被逃生替代，run 在 n_fail 终结（completed）
+    const run = db.prepare('SELECT status, current_node FROM runs WHERE id = ?').get(start.runId) as {
+      status: string;
+      current_node: string;
+    };
+    expect(run).toEqual({ status: 'completed', current_node: 'n_fail' });
+  });
+
+  it('撞上限且无 onLimitExceeded → run 判失败', () => {
+    const { engine } = makeEngine([retryFlow(false)]);
+    const start = engine.startRun({ flowName: '无逃生回退环' });
+    if (!isStep(start)) throw new Error('start 失败');
+    engine.completeStep({ runId: start.runId, summary: '改一' });
+    engine.completeStep({ runId: start.runId, nodeId: 'n_test', summary: '失败', branchId: 'b_fail' });
+    engine.completeStep({ runId: start.runId, summary: '改二' });
+    engine.completeStep({ runId: start.runId, nodeId: 'n_test', summary: '又失败', branchId: 'b_fail' });
+    const third = engine.completeStep({ runId: start.runId, summary: '改三' });
+    if (!isFinished(third)) throw new Error('应判失败终结');
+    expect(third.outcome).toBe('fail');
+    expect(third.note).toContain('迭代上限');
+  });
+
+  it('超出 maxSteps → 第 maxSteps+1 步不再执行，run 判失败', () => {
+    const { engine } = makeEngine([maxStepsFlow()]);
+    const db = (engine as unknown as { db: import('better-sqlite3').Database }).db;
+    const start = engine.startRun({ flowName: '小上限图' });
+    if (!isStep(start)) throw new Error('start 失败');
+    const step2 = engine.completeStep({ runId: start.runId, summary: '做完一' });
+    if (!isStep(step2)) throw new Error('第一步应正常推进');
+    expect(step2.step.nodeId).toBe('n2');
+    const over = engine.completeStep({ runId: start.runId, summary: '做完二' });
+    if (!isFinished(over)) throw new Error('应判失败终结');
+    expect(over.outcome).toBe('fail');
+    expect(over.note).toContain('全局步数上限');
+    const run = db.prepare('SELECT status FROM runs WHERE id = ?').get(start.runId) as { status: string };
+    expect(run.status).toBe('failed');
+    // 超限那步没有落轨迹
+    const count = (
+      db.prepare('SELECT COUNT(*) AS c FROM node_executions WHERE run_id = ?').get(start.runId) as { c: number }
+    ).c;
+    expect(count).toBe(1);
+  });
+});
+
+describe('report_blocked（§7.8）', () => {
+  it('节点无任何出口 → 落 blocked 轨迹并判 run 失败', () => {
+    const { engine } = makeEngine([blockedNoExitFlow()]);
+    const db = (engine as unknown as { db: import('better-sqlite3').Database }).db;
+    const start = engine.startRun({ flowName: '无出口阻塞图' });
+    if (!isStep(start)) throw new Error('start 失败');
+    const res = engine.reportBlocked({ runId: start.runId, reason: '缺少构建依赖 X' });
+    if (!isFinished(res)) throw new Error('应判失败终结');
+    expect(res.outcome).toBe('fail');
+    expect(res.note).toContain('缺少构建依赖 X');
+    expect(res.note).toContain('没有可用出口');
+    const row = db
+      .prepare("SELECT node_id, iteration, status, summary FROM node_executions WHERE run_id = ?")
+      .get(start.runId) as { node_id: string; iteration: number; status: string; summary: string };
+    expect(row).toEqual({ node_id: 'n1', iteration: 1, status: 'blocked', summary: '缺少构建依赖 X' });
+    const run = db.prepare('SELECT status FROM runs WHERE id = ?').get(start.runId) as { status: string };
+    expect(run.status).toBe('failed');
+  });
+
+  it('有 onLimitExceeded → 走逃生节点，返回其步骤', () => {
+    const { engine } = makeEngine([blockedFlow()]);
+    const start = engine.startRun({ flowName: '阻塞图' });
+    if (!isStep(start)) throw new Error('start 失败');
+    engine.completeStep({ runId: start.runId, nodeId: 'n1', summary: '干了一轮', payload: { x: '真实产物' }, branchId: 'b1' });
+    const res = engine.reportBlocked({ runId: start.runId, reason: '依赖没了' });
+    if (!isStep(res)) throw new Error('应推进到逃生节点');
+    expect(res.step.nodeId).toBe('n_esc');
+    // blocked 轨迹不带产物，不得遮蔽此前 completed 的插值来源
+    expect(res.step.instruction).toContain('真实产物');
+  });
+
+  it('无 onLimitExceeded 但有 default 分支 → 走 default', () => {
+    const { engine } = makeEngine([branchFlow()]); // b_default → n3（end/fail）
+    const start = engine.startRun({ flowName: '分支图' });
+    if (!isStep(start)) throw new Error('start 失败');
+    const res = engine.reportBlocked({ runId: start.runId, reason: '判断不了' });
+    if (!isFinished(res)) throw new Error('default 指向 end，应终结');
+    expect(res.outcome).toBe('fail');
+  });
+
+  it('reason 必填，缺失自愈', () => {
+    const { engine } = makeEngine([blockedFlow()]);
+    const start = engine.startRun({ flowName: '阻塞图' });
+    if (!isStep(start)) throw new Error('start 失败');
+    const res = engine.reportBlocked({ runId: start.runId, reason: '  ' });
+    expect(isErr(res)).toBe(true);
+    if (isErr(res)) expect(res.what).toContain('reason');
+  });
+
+  it('结束后再调 report_blocked 返回终结态', () => {
+    const { engine } = makeEngine([blockedFlow()]);
+    const start = engine.startRun({ flowName: '阻塞图' });
+    if (!isStep(start)) throw new Error('start 失败');
+    engine.reportBlocked({ runId: start.runId, reason: '干不下去' }); // → n_esc
+    engine.completeStep({ runId: start.runId, summary: '善后完成' }); // → n_end 终结
+    const res = engine.reportBlocked({ runId: start.runId, reason: '还想报' });
+    expect(isFinished(res)).toBe(true);
+    if (isFinished(res)) expect(res.note).toContain('已经结束');
   });
 });

@@ -83,16 +83,17 @@ tests/       # core 层单测 + 端到端 API 测试
 
 **验收**：✅（2026-09-08，自动化层面）typecheck + 118 测试全绿；`aiworkflow hook` 子命令真机冒烟（注入/坏 JSON 静默/非 PreToolUse 静默/缺参用法）；v1→v2 迁移在真实旧库上验证（user_version 1→2、数据完好、host_session 可查）。**实机确认**（真装 hook 到两宿主里盲调）并入阶段 0 实机验证。手动配置片段见设计文档 §8.1；`install` 自动写入留阶段 9。
 
-## 阶段 3 — 分支求值 + 环与迭代上限 + report_blocked
+## 阶段 3 — 分支求值 + 环与迭代上限 + report_blocked ✅
 
 | 任务 | 状态 |
 |---|---|
-| 分支求值五种边界（设计文档 7.3）：非法 branchId 自愈、default、无 default 判失败 | ⬜ |
-| `iterationLimit`（挂在 run_id+node_id）+ `onLimitExceeded` 逃生 | ⬜ |
-| `maxSteps` 全局兜底 | ⬜ |
-| `report_blocked` 三级出口规则（7.8） | ⬜ |
+| 分支求值五种边界（设计文档 7.3）：非法 branchId 自愈、default、无 default 判失败 | ✅（"多条件都满足"是协议性质——Agent 只回一个 id、服务端不裁决，无代码量；其余四边全落地） |
+| `iterationLimit`（挂在 run_id+node_id）+ `onLimitExceeded` 逃生 | ✅（撞上限不执行该节点，落 `limit_exceeded` 轨迹，逃生链成环防御性判败；逃生发生时响应带 note 解释跳变） |
+| `maxSteps` 全局兜底 | ✅（默认 200，第 N+1 步不再执行、run 判失败；complete_step 与 report_blocked 共用此守卫） |
+| `report_blocked` 三级出口规则（7.8） | ✅（onLimitExceeded → default 分支 → 判失败；落 `blocked` 轨迹；不做自动重试） |
+| 插值只取 `completed` 轨迹 | ✅（blocked / limit_exceeded 不带产物，不得遮蔽此前真实执行的 payload） |
 
-**验收**：跑通"测试失败 → 回退改代码 → 重跑测试"的环，撞 iterationLimit 走逃生节点。
+**验收**：✅（2026-09-08）129 测试全绿；真实 HTTP MCP 服务上 11 项断言全过——回退环两轮失败且环内插值用最新 payload、第三次进"跑测试"撞 iterationLimit 落 limit_exceeded 轨迹并经 onLimitExceeded 终结为 fail（note 解释逃生）、report_blocked 无出口判失败且 note 带原因、全过分支正常终结、终结后再提交返回终结态。
 
 ## 阶段 4 — 监控面板（React Flow 只读渲染 + SSE）
 

@@ -124,6 +124,24 @@ function buildMcpServer(deps: McpDeps, sessionId: () => string | undefined): Mcp
       text(deps.engine.completeStep({ ...args, hostSession: hostSessionOf(_host, _sid) }, sessionId())),
   );
 
+  server.registerTool(
+    'report_blocked',
+    {
+      title: '上报阻塞',
+      description:
+        '当前这一步干不下去了（缺依赖、没权限、分支全不满足且没有默认出口等）时如实上报。服务端按节点的逃生出口推进；没有任何出口则 run 判失败。不会自动重试。',
+      inputSchema: {
+        reason: z.string().describe('一句话说清干不下去的原因，给人看的'),
+        nodeId: z.string().optional().describe('当前节点 id（复述身份用，省略亦可）'),
+        runId: z.string().optional().describe('run id（可省略，按 MCP 会话自动定位）'),
+        childToken: z.string().optional().describe('子 Agent 专用的身份令牌'),
+        ...injectedIdentity,
+      },
+    },
+    async ({ _host, _sid, ...args }) =>
+      text(deps.engine.reportBlocked({ ...args, hostSession: hostSessionOf(_host, _sid) }, sessionId())),
+  );
+
   return server;
 }
 

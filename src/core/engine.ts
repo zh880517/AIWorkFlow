@@ -1,5 +1,6 @@
-// 执行引擎（设计文档 §7）。Phase 2 范围：串行推进 prompt / tool / end，
-// 分支求值边界、环与迭代上限、report_blocked 在阶段 3；gate / subagent / join 在阶段 5-6。
+// 执行引擎（设计文档 §7）。Phase 2-3 范围：串行推进 prompt / tool / end，
+// 分支求值边界（§7.3）、环与迭代上限（§4.5 iterationLimit / maxSteps）、report_blocked（§7.8）；
+// gate / subagent / join 在阶段 5-6。
 // 三条铁律（§6.2 / §6.3 / §7.2）：
 // - 单事务推进：校验、落 node_executions、定位后继、更新 run 一个事务内完成，中途失败不推进
 // - 降噪下发：branches 剥离 to、progress 不含总数；每个响应复述 runId + nodeId
@@ -19,6 +20,7 @@ export const DISCIPLINE_TEXT = [
   '硬的一条：每步做完必须调 complete_step，否则链条断在你这里。',
   '完全放开的：执行某一步时你想多读文件、多跑命令、多查一点，随意，只要最后把结果回报。',
   '不确定自己在哪：调 get_current_step()，它幂等，随时可调。',
+  '干不下去（缺依赖、没权限、分支全不满足且没有默认出口）：调 report_blocked(reason) 如实上报，别硬编。',
 ].join('\n');
 
 // ---- 下发结构（降噪形态） ----
@@ -45,6 +47,8 @@ export interface StepResult {
   discipline: string;
   /** 刻意不含总数（§6.2 降噪） */
   progress: { completed: number };
+  /** 例外推进的说明（如迭代逃生），正常推进不带 */
+  note?: string;
 }
 
 export interface RunFinishedResult {
@@ -95,6 +99,25 @@ export interface CompleteStepParams extends RunRef {
   payload?: Record<string, unknown>;
   branchId?: string;
 }
+
+/** report_blocked（§7.8）：干不下去了，如实上报原因 */
+export interface ReportBlockedParams extends RunRef {
+  reason: string;
+  nodeId?: string;
+}
+
+/** 迭代上限逃生时落的一条"未执行"轨迹 */
+interface LimitRow {
+  nodeId: string;
+  iteration: number;
+  limit: number;
+}
+
+/** 后继解析结果：正常推进 / 判失败（无逃生出口或逃生链成环）/ 后继悬空 */
+type AdvanceOutcome =
+  | { kind: 'advance'; targetId: string | null; limitRows: LimitRow[] }
+  | { kind: 'fail'; reason: string }
+  | { kind: 'dangling'; nodeId: string };
 
 interface RunRow {
   id: string;
@@ -176,7 +199,7 @@ export class ExecutionEngine {
     return this.resultForRun(run, 'get_current_step');
   }
 
-  /** 推进一格：校验 → 落库 → 定位后继 → 渲染插值 → 返回下一步 */
+  /** 推进一格：校验 → 落库 → 定位后继（含迭代上限逃生）→ 渲染插值 → 返回下一步 */
   completeStep(params: CompleteStepParams, mcpSessionId?: string): StepOpResult {
     const run = this.resolveRun(params, mcpSessionId);
     if (run === null) {
@@ -198,6 +221,16 @@ export class ExecutionEngine {
       );
     }
     const snapshot = this.snapshotOf(run);
+    const maxSteps = this.maxStepsOf(snapshot);
+    if (run.steps_used >= maxSteps) {
+      // run 级防绕圈（§4.5）：第 maxSteps+1 步不再执行
+      this.failRun(run);
+      return this.finishedResult(
+        run.id,
+        'fail',
+        `已超出全局步数上限（${maxSteps} 步），run 判失败。如任务仍需推进，请用户修图（调大 maxSteps 或拆分流程）后重新 start_run。`,
+      );
+    }
     const node = snapshot.flows[snapshot.rootFlowId]!.nodes.find((n) => n.id === run.current_node);
     if (node === undefined) {
       return selfHeal(
@@ -234,54 +267,81 @@ export class ExecutionEngine {
     }
 
     const now = new Date().toISOString();
-    const successor = successorId === null ? null : findNode(snapshot, successorId);
-    // 单事务：落本步执行 + 更新 run 指针/状态，任何一步失败整体回滚
-    const completed = this.db.transaction((): number => {
-      const iteration =
-        (
-          this.db
-            .prepare('SELECT COUNT(*) AS c FROM node_executions WHERE run_id = ? AND node_id = ?')
-            .get(run.id, node.id) as { c: number }
-        ).c + 1;
-      this.db
-        .prepare(
-          `INSERT INTO node_executions (run_id, node_id, iteration, status, summary, payload, branch_id, started_at, finished_at)
-           VALUES (?, ?, ?, 'completed', ?, ?, ?, ?, ?)`,
-        )
-        .run(run.id, node.id, iteration, params.summary, JSON.stringify(params.payload ?? {}), params.branchId ?? null, now, now);
-      const stepsUsed = run.steps_used + 1;
-      if (successor === undefined) {
-        // 后继 id 悬空（校验漏网或数据损坏）：判 run 失败，不静默当隐式 end
-        this.db
-          .prepare(`UPDATE runs SET status = 'failed', steps_used = ?, last_activity = ?, finished_at = ? WHERE id = ?`)
-          .run(stepsUsed, now, now, run.id);
-      } else if (successor === null) {
-        // 隐式 end（无后继）：run 终结
-        this.db
-          .prepare(`UPDATE runs SET current_node = ?, status = 'completed', steps_used = ?, last_activity = ?, finished_at = ? WHERE id = ?`)
-          .run(successorId, stepsUsed, now, now, run.id);
-      } else if (successor.type === 'end') {
-        this.db
-          .prepare(`UPDATE runs SET current_node = ?, status = 'completed', steps_used = ?, last_activity = ?, finished_at = ? WHERE id = ?`)
-          .run(successor.id, stepsUsed, now, now, run.id);
-      } else {
-        this.db
-          .prepare(`UPDATE runs SET current_node = ?, steps_used = ?, last_activity = ? WHERE id = ?`)
-          .run(successor.id, stepsUsed, now, run.id);
-      }
-      return stepsUsed;
-    })();
+    const plan: AdvanceOutcome =
+      successorId === null
+        ? { kind: 'advance', targetId: null, limitRows: [] }
+        : this.resolveAdvance(run, snapshot, successorId);
+    this.advanceTransaction(run, snapshot, plan, {
+      nodeId: node.id,
+      status: 'completed',
+      summary: params.summary,
+      payload: JSON.stringify(params.payload ?? {}),
+      branchId: params.branchId ?? null,
+    }, now);
+    return this.resultForPlan(run.id, snapshot, plan);
+  }
 
-    if (successor === undefined) {
-      return this.finishedResult(run.id, 'fail', `后继节点 ${successorId} 在快照里不存在，run 判失败。`);
+  /** 干不下去了（§7.8）：落 blocked 轨迹，三级出口 onLimitExceeded → default 分支 → run 判失败。不做自动重试 */
+  reportBlocked(params: ReportBlockedParams, mcpSessionId?: string): StepOpResult {
+    const run = this.resolveRun(params, mcpSessionId);
+    if (run === null) {
+      return selfHeal(
+        params.childToken !== undefined
+          ? '这个 childToken 没有对应的 run（可能已过期或写错）。'
+          : '没有找到你正在进行的 run，没法上报阻塞。',
+        '调 start_run 开始一个流程；如果你只是想看当前进度，调 get_current_step。',
+      );
     }
-    if (successor === null) {
-      return this.finishedResult(run.id, 'success', '节点没有后继，按隐式 end 收尾。');
+    if (run.status !== 'running') {
+      return this.resultForRun(run, 'report_blocked');
     }
-    if (successor.type === 'end') {
-      return this.finishedResult(run.id, successor.outcome);
+    if (params.reason === undefined || params.reason.trim() === '') {
+      return selfHeal(
+        'report_blocked 必须带 reason：一句话说清干不下去的原因，给人看的。',
+        `重新调 report_blocked，带上 reason。当前节点是 ${run.current_node}。`,
+        this.currentRef(run),
+      );
     }
-    return this.stepResult(run.id);
+    const snapshot = this.snapshotOf(run);
+    const maxSteps = this.maxStepsOf(snapshot);
+    if (run.steps_used >= maxSteps) {
+      this.failRun(run);
+      return this.finishedResult(run.id, 'fail', `已超出全局步数上限（${maxSteps} 步），run 判失败。`);
+    }
+    const node = run.current_node !== null ? findNode(snapshot, run.current_node) : undefined;
+    if (node === undefined) {
+      return selfHeal(
+        `快照里找不到节点 ${run.current_node}（run ${run.id} 的数据异常）。`,
+        '这是服务端数据问题，请把这条错误原样反馈给用户。',
+        null,
+      );
+    }
+    if (params.nodeId !== undefined && params.nodeId !== run.current_node) {
+      return selfHeal(
+        `节点不匹配：你上报的是 ${params.nodeId}，但当前这一步是 ${run.current_node}（可能是上下文压缩后记串了）。`,
+        `对当前节点 ${run.current_node} 重新调 report_blocked；不确定的话先调 get_current_step() 取回最新状态。`,
+        this.currentRef(run),
+      );
+    }
+
+    const defaultTo = node.branches?.find((b) => b.condition === '*')?.to;
+    const exitId = node.onLimitExceeded ?? defaultTo;
+    const now = new Date().toISOString();
+    const blockedRow = {
+      nodeId: node.id,
+      status: 'blocked' as const,
+      summary: params.reason,
+      payload: '{}',
+      branchId: null,
+    };
+    if (exitId === undefined) {
+      const reason = `节点 ${node.id} 上报阻塞且没有任何出口（无 onLimitExceeded、无 default 分支），run 判失败。`;
+      this.advanceTransaction(run, snapshot, { kind: 'fail', reason }, blockedRow, now);
+      return this.finishedResult(run.id, 'fail', `节点 ${node.id} 上报阻塞：${params.reason}。没有可用出口，run 判失败。`);
+    }
+    const plan = this.resolveAdvance(run, snapshot, exitId);
+    this.advanceTransaction(run, snapshot, plan, blockedRow, now);
+    return this.resultForPlan(run.id, snapshot, plan);
   }
 
   // ---- 内部 ----
@@ -384,9 +444,10 @@ export class ExecutionEngine {
     const parts = expr.split('.');
     const [nodeId, payloadSeg, ...path] = parts;
     if (payloadSeg !== 'payload' || nodeId === undefined || path.length === 0) return undefined;
+    // 只取 completed：blocked / limit_exceeded 轨迹不带产物，不能遮蔽此前真实执行的结果
     const row = this.db
       .prepare(
-        'SELECT payload FROM node_executions WHERE run_id = ? AND node_id = ? ORDER BY iteration DESC, id DESC LIMIT 1',
+        "SELECT payload FROM node_executions WHERE run_id = ? AND node_id = ? AND status = 'completed' ORDER BY iteration DESC, id DESC LIMIT 1",
       )
       .get(runId, nodeId) as { payload: string } | undefined;
     if (row === undefined) return undefined;
@@ -446,6 +507,127 @@ export class ExecutionEngine {
 
   private runById(runId: string): RunRow | null {
     return this.runBy('id = ?', runId);
+  }
+
+  /** 解析最终推进目标（§4.5）：目标撞 iterationLimit 时不执行它，落 limit_exceeded 轨迹并改走 onLimitExceeded；
+   *  无逃生出口判失败。校验器已保证逃生边可达终点，逃生链成环只是防御性兜底。 */
+  private resolveAdvance(run: RunRow, snapshot: FlowSnapshot, successorId: string): AdvanceOutcome {
+    const limitRows: LimitRow[] = [];
+    const seen = new Set<string>();
+    let targetId: string | null = successorId;
+    while (typeof targetId === 'string') {
+      const target = findNode(snapshot, targetId);
+      if (target === undefined) return { kind: 'dangling', nodeId: targetId };
+      if (
+        target.type !== 'end' &&
+        target.iterationLimit !== undefined &&
+        this.execCount(run.id, target.id) >= target.iterationLimit
+      ) {
+        if (target.onLimitExceeded === undefined) {
+          return {
+            kind: 'fail',
+            reason: `节点 ${target.id} 已到迭代上限（${target.iterationLimit} 次）且没有配 onLimitExceeded 逃生出口，run 判失败。`,
+          };
+        }
+        if (seen.has(target.id)) {
+          return { kind: 'fail', reason: `节点 ${target.id} 撞迭代上限后逃生链成环，run 判失败。` };
+        }
+        seen.add(target.id);
+        limitRows.push({ nodeId: target.id, iteration: this.execCount(run.id, target.id) + 1, limit: target.iterationLimit });
+        targetId = target.onLimitExceeded;
+        continue;
+      }
+      return { kind: 'advance', targetId, limitRows };
+    }
+    return { kind: 'advance', targetId: null, limitRows };
+  }
+
+  /** 单事务推进：落本步轨迹（completed / blocked）+ 迭代逃生轨迹 + 更新 run 指针/状态，任何一步失败整体回滚 */
+  private advanceTransaction(
+    run: RunRow,
+    snapshot: FlowSnapshot,
+    plan: AdvanceOutcome,
+    first: { nodeId: string; status: 'completed' | 'blocked'; summary: string; payload: string; branchId: string | null },
+    now: string,
+  ): void {
+    this.db.transaction((): void => {
+      const insert = this.db.prepare(
+        `INSERT INTO node_executions (run_id, node_id, iteration, status, summary, payload, branch_id, started_at, finished_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      );
+      insert.run(run.id, first.nodeId, this.execCount(run.id, first.nodeId) + 1, first.status, first.summary, first.payload, first.branchId, now, now);
+      const limitRows = plan.kind === 'advance' ? plan.limitRows : [];
+      for (const row of limitRows) {
+        insert.run(run.id, row.nodeId, row.iteration, 'limit_exceeded', `撞迭代上限（${row.limit} 次），未执行该节点，按 onLimitExceeded 逃生`, '{}', null, now, now);
+      }
+      const stepsUsed = run.steps_used + 1 + limitRows.length;
+      if (plan.kind === 'fail' || plan.kind === 'dangling') {
+        this.db
+          .prepare(`UPDATE runs SET status = 'failed', steps_used = ?, last_activity = ?, finished_at = ? WHERE id = ?`)
+          .run(stepsUsed, now, now, run.id);
+        return;
+      }
+      if (plan.targetId === null) {
+        // 隐式 end（无后继）：run 终结
+        this.db
+          .prepare(`UPDATE runs SET current_node = NULL, status = 'completed', steps_used = ?, last_activity = ?, finished_at = ? WHERE id = ?`)
+          .run(stepsUsed, now, now, run.id);
+        return;
+      }
+      const target = findNode(snapshot, plan.targetId);
+      if (target !== undefined && target.type === 'end') {
+        this.db
+          .prepare(`UPDATE runs SET current_node = ?, status = 'completed', steps_used = ?, last_activity = ?, finished_at = ? WHERE id = ?`)
+          .run(target.id, stepsUsed, now, now, run.id);
+      } else {
+        this.db
+          .prepare(`UPDATE runs SET current_node = ?, steps_used = ?, last_activity = ? WHERE id = ?`)
+          .run(plan.targetId, stepsUsed, now, run.id);
+      }
+    })();
+  }
+
+  /** 推进事务提交后的应答：失败/悬空/隐式 end/显式 end/下一步，与 complete_step / report_blocked 共用 */
+  private resultForPlan(runId: string, snapshot: FlowSnapshot, plan: AdvanceOutcome): StepOpResult {
+    if (plan.kind === 'fail') return this.finishedResult(runId, 'fail', plan.reason);
+    if (plan.kind === 'dangling') {
+      return this.finishedResult(runId, 'fail', `后继节点 ${plan.nodeId} 在快照里不存在，run 判失败。`);
+    }
+    // 逃生说明：Agent 刚交完一步就看到跳变，必须解释为什么
+    const escapeNote =
+      plan.limitRows.length > 0
+        ? `迭代逃生：${plan.limitRows.map((r) => `${r.nodeId} 撞迭代上限（${r.limit} 次）未执行，改走 onLimitExceeded。`).join('')}`
+        : undefined;
+    if (plan.targetId === null) {
+      return this.finishedResult(runId, 'success', escapeNote ?? '节点没有后继，按隐式 end 收尾。');
+    }
+    const target = findNode(snapshot, plan.targetId);
+    if (target !== undefined && target.type === 'end') {
+      return this.finishedResult(runId, target.outcome, escapeNote);
+    }
+    const step = this.stepResult(runId);
+    return escapeNote !== undefined && 'step' in step ? { ...step, note: escapeNote } : step;
+  }
+
+  /** 该节点在本次 run 里的轨迹条数（completed / blocked / limit_exceeded 都算占了一次迭代） */
+  private execCount(runId: string, nodeId: string): number {
+    return (
+      this.db.prepare('SELECT COUNT(*) AS c FROM node_executions WHERE run_id = ? AND node_id = ?').get(runId, nodeId) as {
+        c: number;
+      }
+    ).c;
+  }
+
+  /** run 级防绕圈（§4.5）：默认 200 步，撞上判 run 失败 */
+  private maxStepsOf(snapshot: FlowSnapshot): number {
+    return snapshot.flows[snapshot.rootFlowId]!.maxSteps ?? 200;
+  }
+
+  private failRun(run: RunRow): void {
+    const now = new Date().toISOString();
+    this.db
+      .prepare(`UPDATE runs SET status = 'failed', last_activity = ?, finished_at = ? WHERE id = ?`)
+      .run(now, now, run.id);
   }
 
   private snapshotOf(run: RunRow): FlowSnapshot {
