@@ -6,16 +6,20 @@ import { serveStatic } from '@hono/node-server/serve-static';
 import type { ServerType } from '@hono/node-server';
 import fs from 'node:fs';
 import path from 'node:path';
+import type Database from 'better-sqlite3';
 import type { Flow } from '../core/types.js';
 import type { FlowStore } from '../core/flowStore.js';
 import type { ExecutionEngine } from '../core/engine.js';
 import { createMcpApp } from './mcp.js';
+import { listRuns, getRunDetail } from '../core/runQuery.js';
 
 export interface ServerDeps {
   store: FlowStore;
   token: string;
   /** 执行引擎（MCP 端点用；Phase 2 起必传） */
   engine?: ExecutionEngine;
+  /** 监控只读查询用（阶段 4 起传入；不传则 /api/runs 不注册） */
+  db?: Database.Database;
 }
 
 export function createApp(deps: ServerDeps): Hono {
@@ -58,6 +62,16 @@ export function createApp(deps: ServerDeps): Hono {
     const deleted = deps.store.delete(c.req.param('id'));
     return deleted ? c.json({ ok: true }) : c.json({ error: 'flow not found' }, 404);
   });
+
+  // 监控只读查询（阶段 4）：run 列表 + 详情（含完整执行轨迹）
+  const db = deps.db;
+  if (db !== undefined) {
+    app.get('/api/runs', (c) => c.json(listRuns(db)));
+    app.get('/api/runs/:id', (c) => {
+      const run = getRunDetail(db, c.req.param('id'));
+      return run === undefined ? c.json({ error: 'run not found' }, 404) : c.json(run);
+    });
+  }
 
   // 静态面板（Vite 构建产物）；root 需相对 cwd，dist-web 不存在时仅 API 可用
   const webDir = resolveWebDir();

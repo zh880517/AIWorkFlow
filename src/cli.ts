@@ -24,7 +24,7 @@ if (argv[0] === 'hook') {
   const db = openDb();
   const store = new FlowStore(db);
   const engine = new ExecutionEngine({ db, resolveFlow: (name) => store.resolve(name) });
-  const app = createApp({ store, token, engine });
+  const app = createApp({ store, token, engine, db });
   startServer(app, port);
 
   console.log(`aiworkflow 服务已启动（仅本机）：`);

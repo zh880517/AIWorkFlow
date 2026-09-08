@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { openMemoryDb } from '../src/core/db.js';
 import { FlowStore } from '../src/core/flowStore.js';
+import { ExecutionEngine } from '../src/core/engine.js';
 import { createApp } from '../src/server/http.js';
 import type { Flow } from '../src/core/types.js';
 
@@ -153,5 +154,58 @@ describe('面板 API', () => {
     expect(put.status).toBe(200);
     const got = await app.request(`/api/flows/f_ui?k=${TOKEN}`);
     expect(await got.json()).toEqual(flow);
+  });
+});
+
+describe('监控只读 API（/api/runs，阶段 4）', () => {
+  function makeAppWithRuns(): { app: ReturnType<typeof createApp>; store: FlowStore; engine: ExecutionEngine } {
+    const db = openMemoryDb();
+    const store = new FlowStore(db, path.join(tmpHome, `flows-${Math.random().toString(36).slice(2)}`));
+    const engine = new ExecutionEngine({ db, resolveFlow: (n) => store.resolve(n) });
+    return { app: createApp({ store, token: TOKEN, engine, db }), store, engine };
+  }
+
+  it('run 列表与详情：引擎真实推进后可查，字段齐全', async () => {
+    const { app, store, engine } = makeAppWithRuns();
+    expect(store.save(linearFlow('f_runs')).ok).toBe(true);
+    const start = engine.startRun({ flowName: '直线图', cwd: 'D:/work/demo', projectName: 'demo' });
+    if (!('step' in start)) throw new Error('start 失败');
+    engine.completeStep({ runId: start.runId, summary: '完成', payload: { ok: 1 } });
+
+    const list = await app.request(`/api/runs?k=${TOKEN}`);
+    expect(list.status).toBe(200);
+    const items = (await list.json()) as Array<Record<string, unknown>>;
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      id: start.runId,
+      flowId: 'f_runs',
+      flowName: '直线图',
+      status: 'completed',
+      stepsUsed: 1,
+      cwd: 'D:/work/demo',
+      projectName: 'demo',
+    });
+
+    const detail = await app.request(`/api/runs/${start.runId}?k=${TOKEN}`);
+    expect(detail.status).toBe(200);
+    const d = (await detail.json()) as {
+      snapshotHash: string;
+      executions: Array<Record<string, unknown>>;
+    };
+    expect(d.snapshotHash).toMatch(/^[0-9a-f]{16}$/);
+    expect(d.executions).toHaveLength(1);
+    expect(d.executions[0]).toMatchObject({
+      nodeId: 'n1',
+      iteration: 1,
+      status: 'completed',
+      summary: '完成',
+      payload: { ok: 1 },
+    });
+  });
+
+  it('鉴权同 /api/*：无 token 401；run 不存在 404', async () => {
+    const { app } = makeAppWithRuns();
+    expect((await app.request('/api/runs')).status).toBe(401);
+    expect((await app.request(`/api/runs/run_missing?k=${TOKEN}`)).status).toBe(404);
   });
 });
