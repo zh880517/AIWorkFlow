@@ -1,21 +1,19 @@
-// run 详情的只读画布（§9.2）：快照图渲染 + 节点着色（已过/正在跑脉动/失败/未走到）
-// + 走过的路径高亮（未走的分支虚线）+ 迭代次数角标。刻意不复用编辑器的 FlowCanvas——
-// 那套带着出口编辑/连线交互的复杂度，监控只需要看。
-import { useCallback, useMemo, useState } from 'react';
+// run 详情的只读画布（§9.2）：复用编辑器的正常节点卡（FlowNodeCard，含出口/条件完整视觉），
+// 运行状态作为附加层——外圈状态环（已过/正在跑脉动/失败）+ ×N 迭代角标 + 路径高亮（走过实线、未走虚线）。
+// 只读：出口、条件、连线都不可编辑；但节点可以拖动摆放（位置只存内存，不回写图）。
+import { useMemo, useState } from 'react';
 import {
   Background,
   BackgroundVariant,
   Controls,
-  Handle,
-  Position,
   ReactFlow,
-  type Edge,
-  type Node,
   type NodeProps,
-  type OnNodesChange,
 } from '@xyflow/react';
-import type { Flow, FlowNode } from '../../core/types.js';
+import type { Flow } from '../../core/types.js';
 import type { RunExecutionItem } from '../api.js';
+import { flowToRf, normalizeOutlets, nodeTitle, type FlowRFNode } from '../dsl.js';
+import { FlowNodeCard } from './FlowNodeCard.js';
+import { NodeActionsContext, type NodeActions } from './nodeActions.js';
 
 export interface RunFlowCanvasProps {
   flow: Flow;
@@ -23,16 +21,15 @@ export interface RunFlowCanvasProps {
   currentNode: string | null;
   /** run 是否仍在进行（进行中才有"正在跑"脉动） */
   running: boolean;
-  selectedNodeId: string | null;
   onNodeClick: (nodeId: string | null) => void;
 }
 
+/** 叠加在 FlowNodeCard 之上的运行状态（FlowNodeCard 只认 flowNode/isEntry，多余字段它不看） */
 interface RunNodeData extends Record<string, unknown> {
-  label: string;
-  type: string;
-  state: 'current' | 'failed' | 'done' | 'pending';
-  count: number;
-  outcomeText?: string;
+  flowNode: FlowRFNode['data']['flowNode'];
+  isEntry: boolean;
+  runState: 'current' | 'failed' | 'done' | 'pending';
+  runCount: number;
 }
 
 interface Stats {
@@ -40,18 +37,14 @@ interface Stats {
   bad: boolean; // blocked / limit_exceeded 出现在该节点上
 }
 
-function computeStats(flow: Flow, executions: RunExecutionItem[]): Map<string, Stats> {
-  const byId = new Map(flow.nodes.map((n) => [n.id, n]));
+function computeStats(executions: RunExecutionItem[]): Map<string, Stats> {
   const stats = new Map<string, Stats>();
-  const bump = (id: string, bad: boolean): void => {
-    const cur = stats.get(id) ?? { count: 0, bad: false };
+  for (const e of executions) {
+    const cur = stats.get(e.nodeId) ?? { count: 0, bad: false };
     cur.count += 1;
-    if (bad) cur.bad = true;
-    stats.set(id, cur);
-  };
-  for (const e of executions) bump(e.nodeId, e.status !== 'completed');
-  // 终点节点没有执行轨迹，从 current_node / 最后一次转移补一个"到过"
-  void byId;
+    if (e.status !== 'completed') cur.bad = true;
+    stats.set(e.nodeId, cur);
+  }
   return stats;
 }
 
@@ -75,144 +68,102 @@ function computeTaken(flow: Flow, executions: RunExecutionItem[], currentNode: s
   return taken;
 }
 
-/** 手写图（无 _ui 布局）的兜底排版：从 entry 按依赖深度分列 */
-function autoLayout(flow: Flow): Map<string, { x: number; y: number }> {
-  const depth = new Map<string, number>();
-  const queue: Array<{ id: string; d: number }> = [{ id: flow.entry, d: 0 }];
-  const byId = new Map(flow.nodes.map((n) => [n.id, n]));
-  while (queue.length > 0) {
-    const { id, d } = queue.shift()!;
-    if (depth.has(id)) continue;
-    depth.set(id, d);
-    const node = byId.get(id);
-    if (node === undefined) continue;
-    const nexts = [...(node.branches ?? []).map((b) => b.to), ...(node.next !== undefined ? [node.next] : []), ...(node.onLimitExceeded !== undefined ? [node.onLimitExceeded] : [])];
-    for (const to of nexts) queue.push({ id: to, d: d + 1 });
-  }
-  const perDepth = new Map<number, number>();
-  const pos = new Map<string, { x: number; y: number }>();
-  for (const node of flow.nodes) {
-    const d = depth.get(node.id) ?? 0;
-    const idx = perDepth.get(d) ?? 0;
-    perDepth.set(d, idx + 1);
-    pos.set(node.id, { x: 40 + d * 300, y: 40 + idx * 170 });
-  }
-  return pos;
-}
-
-type RunNodeType = Node<RunNodeData, 'run'>;
-
-function RunNode({ data }: NodeProps<RunNodeType>) {
+function RunFlowNodeCard(props: NodeProps<FlowRFNode>) {
+  const data = props.data as RunNodeData;
   return (
-    <div className={`run-node state-${data.state}${data.count > 1 ? ' multi' : ''}`}>
-      {/* 边的锚点：React Flow 的边挂在 Handle 上，自定义节点不渲染 Handle 边就消失 */}
-      <Handle type="target" position={Position.Left} className="run-handle" isConnectable={false} />
-      <span className="run-node-type">{data.type}</span>
-      <span className="run-node-label">{data.label}</span>
-      {data.outcomeText !== undefined && <span className="run-node-outcome">{data.outcomeText}</span>}
-      {data.count > 1 && <span className="run-node-count" title={`执行了 ${data.count} 次`}>×{data.count}</span>}
-      <Handle type="source" position={Position.Right} className="run-handle" isConnectable={false} />
+    <div className={`run-wrap state-${data.runState}`}>
+      <FlowNodeCard {...props} />
+      {data.runCount > 1 && (
+        <span className="run-node-count" title={`执行了 ${data.runCount} 次`}>
+          ×{data.runCount}
+        </span>
+      )}
     </div>
   );
 }
 
-const nodeTypes = { run: RunNode };
+const nodeTypes = { flow: RunFlowNodeCard };
 
-export function RunFlowCanvas({ flow, executions, currentNode, running, selectedNodeId, onNodeClick }: RunFlowCanvasProps) {
-  // 受控模式坑（同编辑器 FlowCanvas）：每次重渲染重建节点对象会丢实测尺寸，
-  // 必须把 onNodesChange 的 dimensions 回灌进 node.measured，否则边（依赖两端 measured）不渲染
-  const [measured, setMeasured] = useState<Record<string, { width: number; height: number }>>({});
-  const onNodesChange: OnNodesChange = useCallback((changes) => {
-    setMeasured((cur) => {
-      let next: Record<string, { width: number; height: number }> | null = null;
-      for (const c of changes) {
-        if (c.type === 'dimensions' && c.dimensions != null) {
-          next ??= { ...cur };
-          next[c.id] = c.dimensions;
-        }
-      }
-      return next ?? cur;
-    });
-  }, []);
+export function RunFlowCanvas({ flow, executions, currentNode, running, onNodeClick }: RunFlowCanvasProps) {
+  // 拖动位置单独持久（run 状态刷新/重挂画布后节点仍停在用户摆的位置）
+  const [dragPos, setDragPos] = useState<Record<string, { x: number; y: number }>>({});
+
+  const normalized = useMemo(() => normalizeOutlets(flow), [flow]);
+  const base = useMemo(() => flowToRf(normalized), [normalized]);
 
   const { nodes, edges } = useMemo(() => {
-    const stats = computeStats(flow, executions);
+    const stats = computeStats(executions);
     const taken = computeTaken(flow, executions, currentNode);
-    const layout: Map<string, { x: number; y: number }> =
-      flow._ui?.positions !== undefined ? new Map(Object.entries(flow._ui.positions)) : autoLayout(flow);
-    const nodes: RunNodeType[] = flow.nodes.map((n: FlowNode) => {
+    const nodes = base.nodes.map((n) => {
       const s = stats.get(n.id);
-      const state: RunNodeData['state'] =
+      const state: RunNodeData['runState'] =
         running && n.id === currentNode
           ? 'current'
           : s !== undefined && s.bad
             ? 'failed'
-            : s !== undefined
+            : s !== undefined || n.id === currentNode // 已终结但停在终点也算到过
               ? 'done'
-              : n.id === currentNode // 已终结但停在终点
-                ? 'done'
-                : 'pending';
-      const data: RunNodeData = {
-        label: n.title?.trim() !== '' && n.title !== undefined ? n.title : n.id,
-        type: n.type,
-        state,
-        count: s?.count ?? 0,
-        ...(n.type === 'end' ? { outcomeText: n.outcome === 'fail' ? '✕ fail' : '✓ ok' } : {}),
-      };
+              : 'pending';
       return {
-        id: n.id,
-        type: 'run' as const,
-        position: layout.get(n.id) ?? { x: 0, y: 0 },
-        data,
-        selected: n.id === selectedNodeId,
-        measured: measured[n.id],
+        ...n,
+        position: dragPos[n.id] ?? n.position,
+        data: { ...n.data, runState: state, runCount: s?.count ?? 0 } as FlowRFNode['data'],
       };
     });
-    const edges: Edge[] = [];
-    for (const n of flow.nodes) {
-      const outs: Array<{ id: string; to: string; label: string | undefined }> =
-        n.branches !== undefined && n.branches.length > 0
-          ? n.branches.map((b) => ({ id: `${n.id}~${b.id}`, to: b.to, label: b.condition === '*' ? '默认' : b.condition }))
-          : n.next !== undefined
-            ? [{ id: `${n.id}~next`, to: n.next, label: undefined }]
-            : [];
-      if (n.onLimitExceeded !== undefined) {
-        outs.push({ id: `${n.id}~escape`, to: n.onLimitExceeded, label: '超限逃生' });
-      }
-      for (const o of outs) {
-        const isTaken = taken.has(`${n.id}->${o.to}`);
-        edges.push({
-          id: o.id,
-          source: n.id,
-          target: o.to,
-          label: o.label,
-          className: isTaken ? 'run-edge taken' : 'run-edge untaken',
-          deletable: false,
-        });
-      }
-    }
+    const edges = base.edges.map((e) => {
+      const isTaken = taken.has(`${e.source}->${e.target}`);
+      return {
+        ...e,
+        className: isTaken ? 'run-edge taken' : 'run-edge untaken',
+        label: e.data?.kind === 'escape' ? '超限逃生' : undefined,
+        deletable: false,
+        focusable: false,
+      };
+    });
     return { nodes, edges };
-  }, [flow, executions, currentNode, running, selectedNodeId, measured]);
+  }, [base, dragPos, executions, currentNode, running, flow]);
+
+  // run 状态变化才重挂画布。刻意用完全非受控（defaultNodes/defaultEdges、不传 onNodesChange）：
+  // 受控模式下若不把变更应用回 nodes 数组，React Flow 的内部测量（measured/handleBounds）
+  // 永远完不成，边会静默不渲染——测量竞态时好时坏，非受控是官方保证测量的路径。
+  const viewKey = `${currentNode ?? '-'}:${running}:${executions.length}:${executions.at(-1)?.id ?? 0}`;
+
+  // 只读动作集：出口增删/排序/条件编辑全部禁用，titleOf 供出口行显示"→ 目标名"
+  const readOnlyActions: NodeActions = useMemo(
+    () => ({
+      addOutlet: () => null,
+      removeOutlet: () => {},
+      moveOutlet: () => {},
+      setOutletCondition: () => {},
+      titleOf: (id) => nodeTitle(normalized, id),
+      readOnly: true,
+    }),
+    [normalized],
+  );
 
   return (
     <div className="canvas-wrap">
-    <ReactFlow
-      nodes={nodes}
-      edges={edges}
-      nodeTypes={nodeTypes}
-      colorMode="dark"
-      fitView
-      nodesDraggable={false}
-      nodesConnectable={false}
-      elementsSelectable
-      onNodesChange={onNodesChange}
-      onNodeClick={(_, node) => onNodeClick(node.id)}
-      onPaneClick={() => onNodeClick(null)}
-      proOptions={{ hideAttribution: true }}
-    >
-      <Background variant={BackgroundVariant.Dots} gap={22} size={1} color="#262626" />
-      <Controls showInteractive={false} position="bottom-right" />
-    </ReactFlow>
+      <NodeActionsContext.Provider value={readOnlyActions}>
+        <ReactFlow
+          key={viewKey}
+          defaultNodes={nodes}
+          defaultEdges={edges}
+          nodeTypes={nodeTypes}
+          colorMode="dark"
+          fitView
+          nodesConnectable={false}
+          edgesReconnectable={false}
+          deleteKeyCode={null}
+          elementsSelectable
+          onNodeDragStop={(_, node) => setDragPos((cur) => ({ ...cur, [node.id]: node.position }))}
+          onNodeClick={(_, node) => onNodeClick(node.id)}
+          onPaneClick={() => onNodeClick(null)}
+          proOptions={{ hideAttribution: true }}
+        >
+          <Background variant={BackgroundVariant.Dots} gap={22} size={1} color="#262626" />
+          <Controls showInteractive={false} position="bottom-right" />
+        </ReactFlow>
+      </NodeActionsContext.Provider>
     </div>
   );
 }

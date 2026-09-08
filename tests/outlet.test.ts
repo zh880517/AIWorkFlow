@@ -397,3 +397,32 @@ describe('一出口一线 / 一入口多线（落线自动替换旧连线）', (
     expect(connect(flowWithOutlets(), 'n2', 'n1', 'o1')).toBeNull();
   });
 });
+
+  it('normalizeOutlets：手写/API 图（分支无 outlet、无 *、无 next）不把普通分支错当默认兜底', () => {
+    // MCP/HTTP API 建的图长这样：分支全部没有 outlet 字段
+    const apiFlow: Flow = {
+      id: 'f_api',
+      name: 'API 图',
+      entry: 'n1',
+      nodes: [
+        {
+          id: 'n1',
+          type: 'prompt',
+          instruction: 'x',
+          branches: [
+            { id: 'b_pass', condition: '全部通过', to: 'n2' },
+            { id: 'b_fail', condition: '有失败', to: 'n3' },
+          ],
+        },
+        { id: 'n2', type: 'end', outcome: 'success' },
+        { id: 'n3', type: 'end', outcome: 'fail' },
+      ],
+    };
+    const f = normalizeOutlets(apiFlow);
+    const n1 = n1Of(f);
+    // 两个普通分支各得独立出口，默认出口无兜底（显示"未连接"）
+    expect(n1.branches?.every((b) => b.outlet !== undefined)).toBe(true);
+    expect(n1.outlets?.map((o) => o.condition)).toEqual(['有失败', '全部通过']); // 第一遍迁移先给了 b_fail，后处理补 b_pass
+    // 幂等
+    expect(normalizeOutlets(f)).toEqual(f);
+  });

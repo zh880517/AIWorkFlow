@@ -442,6 +442,16 @@ export function normalizeOutlets(flow: Flow): Flow {
         starred.outlet = undefined;
       }
     }
+    // 手写 / API 建的图分支没有 outlet 归属，不能把第一个普通分支错当默认兜底展示——
+    // 只有 * 兜底分支或 next（无条件后继）才有资格留在默认出口，其余的各分配独立出口
+    if (starred === undefined && node.next === undefined) {
+      for (const b of branches) {
+        if (b.outlet !== undefined) continue;
+        const id = nextOutletId(node);
+        b.outlet = id;
+        node.outlets = [...(node.outlets ?? []), { id, condition: b.condition }];
+      }
+    }
   }
   return next;
 }

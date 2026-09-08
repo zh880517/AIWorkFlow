@@ -111,7 +111,6 @@ export function RunDetailView({ id, navigate }: RunDetailViewProps) {
               executions={detail.executions}
               currentNode={detail.currentNode}
               running={running}
-              selectedNodeId={selectedNodeId}
               onNodeClick={(nodeId) => {
                 setSelectedNodeId(nodeId);
                 setSelectedExecId(null);

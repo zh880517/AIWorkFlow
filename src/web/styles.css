@@ -1083,66 +1083,41 @@ code {
   overflow-y: auto;
 }
 
-/* 只读画布的自定义节点 */
-.run-node {
-  background: #171717;
-  border: 1px solid #262626;
-  border-radius: 8px;
-  padding: 8px 12px;
-  min-width: 130px;
-  max-width: 220px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
+/* 只读画布：正常节点卡（FlowNodeCard）+ 运行状态叠加层（外圈状态环 + ×N 角标） */
+.run-wrap {
   position: relative;
-  font-size: 12px;
 }
-.run-node-type {
-  color: #737373;
-  font-size: 10px;
-  font-family: Consolas, monospace;
-  flex: none;
-}
-.run-node-label {
-  color: #e5e5e5;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.run-node-outcome {
-  font-size: 10px;
-  color: #a3a3a3;
-  flex: none;
-}
-.run-node.state-pending {
+.run-wrap.state-pending {
   opacity: 0.45;
 }
-.run-node.state-done {
-  border-color: #4ade8055;
+.run-wrap.state-done .flow-node {
+  box-shadow: 0 0 0 1px #4ade8066;
 }
-.run-node.state-done .run-node-outcome {
-  color: #4ade80;
+.run-wrap.state-failed .flow-node {
+  box-shadow: 0 0 0 2px #f8717199;
 }
-.run-node.state-failed {
-  border-color: #f8717188;
+.run-wrap.state-current .flow-node {
+  animation: run-ring 1.6s ease-in-out infinite;
 }
-.run-node.state-failed .run-node-label {
-  color: #f87171;
+@keyframes run-ring {
+  0%,
+  100% {
+    box-shadow: 0 0 0 2px #38bdf8cc;
+  }
+  50% {
+    box-shadow: 0 0 0 2px #38bdf833;
+  }
 }
-.run-node.state-current {
-  border-color: #38bdf8;
-  animation: run-pulse 1.6s ease-in-out infinite;
-}
-.run-node.state-current .run-node-label {
-  color: #38bdf8;
-}
-.run-node.multi {
-  border-width: 1px;
+@media (prefers-reduced-motion: reduce) {
+  .run-wrap.state-current .flow-node {
+    animation: none;
+    box-shadow: 0 0 0 2px #38bdf8;
+  }
 }
 .run-node-count {
   position: absolute;
-  top: -8px;
-  right: -8px;
+  top: -9px;
+  right: -9px;
   background: #262626;
   border: 1px solid #404040;
   color: #fde047;
@@ -1150,11 +1125,7 @@ code {
   border-radius: 8px;
   padding: 0 5px;
   font-family: Consolas, monospace;
-}
-@media (prefers-reduced-motion: reduce) {
-  .run-node.state-current {
-    animation: none;
-  }
+  z-index: 1;
 }
 
 /* 路径高亮：走过的实线亮，没走的虚线暗 */
@@ -1174,12 +1145,3 @@ code {
   stroke: #38bdf8;
 }
 
-/* 节点锚点：小到不抢戏，但必须存在（边挂载点） */
-.run-handle {
-  width: 5px;
-  height: 5px;
-  background: #404040;
-  border: none;
-  min-width: 0;
-  min-height: 0;
-}
