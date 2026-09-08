@@ -95,17 +95,17 @@ tests/       # core 层单测 + 端到端 API 测试
 
 **验收**：✅（2026-09-08）129 测试全绿；真实 HTTP MCP 服务上 11 项断言全过——回退环两轮失败且环内插值用最新 payload、第三次进"跑测试"撞 iterationLimit 落 limit_exceeded 轨迹并经 onLimitExceeded 终结为 fail（note 解释逃生）、report_blocked 无出口判失败且 note 带原因、全过分支正常终结、终结后再提交返回终结态。
 
-## 阶段 4 — 监控面板（React Flow 只读渲染 + SSE）
+## 阶段 4 — 监控面板（React Flow 只读渲染 + SSE）✅
 
 | 任务 | 状态 |
 |---|---|
-| 面板脚手架（Vite + React + React Flow） | ⬜ |
-| run 列表：按 cwd 分组分栏（进行中/已完成/失败/停滞） | ⬜ |
-| run 详情：快照图渲染、节点着色、路径高亮、迭代次序列表 | ⬜ |
-| SSE：run_started / step_completed / gate_pending / child_spawned / run_finished | ⬜ |
-| 停滞检测：15 分钟标黄、24 小时标 stale | ⬜ |
+| 面板脚手架（Vite + React + React Flow） | ✅（阶段 8 编辑器时已就位） |
+| run 列表：按 cwd 分组分栏（进行中/已完成/失败/停滞） | ✅（completed 按终点 outcome 分入已完成/失败栏；outcome 落库 db v3，旧数据读取时从快照终点推导） |
+| run 详情：快照图渲染、节点着色、路径高亮、迭代次序列表 | ✅（`#/runs/:id`；只读画布 RunFlowCanvas：已过/正在跑脉动/失败/未走对着色、走过实线未走虚线、×N 迭代角标、逃生边；侧栏逐次列出每次执行含分支选择与 payload） |
+| SSE：run_started / step_completed / gate_pending / child_spawned / run_finished | ✅（`/api/events`；引擎 onEvent 回调 → 事件总线 → streamSSE，事件当"该刷新了"信号，面板重拉；gate_pending/child_spawned 留待阶段 5/6 产生事件时验证通道已就绪） |
+| 停滞检测：15 分钟标黄、24 小时标 stale | ✅（15 分钟 UI 标黄"停滞?"；sweepStale 在启动与列表查询时幂等落库标 stale） |
 
-**验收**：浏览器里看到阶段 2、3 的执行轨迹，环的多次迭代在侧栏逐次列出。
+**验收**：✅（2026-09-08，143 测试 + 真实服务实测 + 浏览器 GUI 验证）SSE 实测收到 hello → run_started → step_completed(completed/blocked) → run_finished(fail) 全序列；浏览器验证：列表页 cwd 分组×4 栏、15 分钟标黄角标、SSE 新 run 实时出现；详情页 9 步环回退 run 轨迹逐次列出（含第 4 次超限逃生），画布 5 节点着色（跑测试节点红、×4 角标）、走过 4 边高亮（含逃生边）、未走分支虚线。修过两个真 bug：自定义节点缺 Handle 边不渲染、受控模式需回灌 measured。
 
 ## 阶段 5 — gate 节点 + 双通道回答
 

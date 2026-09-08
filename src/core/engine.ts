@@ -106,6 +106,12 @@ export interface ReportBlockedParams extends RunRef {
   nodeId?: string;
 }
 
+/** 引擎事件（§9.3 SSE 的数据源）。core 层只回调不落地传输——HTTP/SSE 由 server 层接线 */
+export type EngineEvent =
+  | { type: 'run_started'; runId: string; flowId: string; at: string }
+  | { type: 'step_completed'; runId: string; nodeId: string; status: 'completed' | 'blocked' | 'limit_exceeded'; at: string }
+  | { type: 'run_finished'; runId: string; outcome: 'success' | 'fail'; at: string };
+
 /** 迭代上限逃生时落的一条"未执行"轨迹 */
 interface LimitRow {
   nodeId: string;
@@ -133,15 +139,19 @@ export interface EngineDeps {
   db: Database.Database;
   /** 按图 id 或展示名解析（start_run 的 flowName） */
   resolveFlow(flowName: string): Flow | undefined;
+  /** 引擎事件回调（SSE 数据源，§9.3）；不传则丢弃 */
+  onEvent?: (event: EngineEvent) => void;
 }
 
 export class ExecutionEngine {
   private readonly db: Database.Database;
   private readonly resolveFlow: (name: string) => Flow | undefined;
+  private readonly emit: (event: EngineEvent) => void;
 
   constructor(deps: EngineDeps) {
     this.db = deps.db;
     this.resolveFlow = deps.resolveFlow;
+    this.emit = deps.onEvent ?? (() => {});
   }
 
   /** 建 run（含 copy-on-run 快照），返回纪律文本 + 第一步 */
@@ -181,6 +191,7 @@ export class ExecutionEngine {
          VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, 0, ?, ?)`,
       )
       .run(runId, runId, flow.id, hash, flow.entry, flow.entry, params.cwd ?? null, params.projectName ?? null, params.hostSession ?? null, params.mcpSessionId ?? null, now, now);
+    this.emit({ type: 'run_started', runId, flowId: flow.id, at: now });
 
     return this.stepResult(runId);
   }
@@ -542,7 +553,8 @@ export class ExecutionEngine {
     return { kind: 'advance', targetId: null, limitRows };
   }
 
-  /** 单事务推进：落本步轨迹（completed / blocked）+ 迭代逃生轨迹 + 更新 run 指针/状态，任何一步失败整体回滚 */
+  /** 单事务推进：落本步轨迹（completed / blocked）+ 迭代逃生轨迹 + 更新 run 指针/状态，任何一步失败整体回滚。
+   *  事件在事务提交后才发（事务内只收集），回滚不会产生假事件。 */
   private advanceTransaction(
     run: RunRow,
     snapshot: FlowSnapshot,
@@ -550,6 +562,7 @@ export class ExecutionEngine {
     first: { nodeId: string; status: 'completed' | 'blocked'; summary: string; payload: string; branchId: string | null },
     now: string,
   ): void {
+    const events: EngineEvent[] = [{ type: 'step_completed', runId: run.id, nodeId: first.nodeId, status: first.status, at: now }];
     this.db.transaction((): void => {
       const insert = this.db.prepare(
         `INSERT INTO node_executions (run_id, node_id, iteration, status, summary, payload, branch_id, started_at, finished_at)
@@ -559,32 +572,37 @@ export class ExecutionEngine {
       const limitRows = plan.kind === 'advance' ? plan.limitRows : [];
       for (const row of limitRows) {
         insert.run(run.id, row.nodeId, row.iteration, 'limit_exceeded', `撞迭代上限（${row.limit} 次），未执行该节点，按 onLimitExceeded 逃生`, '{}', null, now, now);
+        events.push({ type: 'step_completed', runId: run.id, nodeId: row.nodeId, status: 'limit_exceeded', at: now });
       }
       const stepsUsed = run.steps_used + 1 + limitRows.length;
       if (plan.kind === 'fail' || plan.kind === 'dangling') {
         this.db
-          .prepare(`UPDATE runs SET status = 'failed', steps_used = ?, last_activity = ?, finished_at = ? WHERE id = ?`)
+          .prepare(`UPDATE runs SET status = 'failed', outcome = 'fail', steps_used = ?, last_activity = ?, finished_at = ? WHERE id = ?`)
           .run(stepsUsed, now, now, run.id);
+        events.push({ type: 'run_finished', runId: run.id, outcome: 'fail', at: now });
         return;
       }
       if (plan.targetId === null) {
         // 隐式 end（无后继）：run 终结
         this.db
-          .prepare(`UPDATE runs SET current_node = NULL, status = 'completed', steps_used = ?, last_activity = ?, finished_at = ? WHERE id = ?`)
+          .prepare(`UPDATE runs SET current_node = NULL, status = 'completed', outcome = 'success', steps_used = ?, last_activity = ?, finished_at = ? WHERE id = ?`)
           .run(stepsUsed, now, now, run.id);
+        events.push({ type: 'run_finished', runId: run.id, outcome: 'success', at: now });
         return;
       }
       const target = findNode(snapshot, plan.targetId);
       if (target !== undefined && target.type === 'end') {
         this.db
-          .prepare(`UPDATE runs SET current_node = ?, status = 'completed', steps_used = ?, last_activity = ?, finished_at = ? WHERE id = ?`)
-          .run(target.id, stepsUsed, now, now, run.id);
+          .prepare(`UPDATE runs SET current_node = ?, status = 'completed', outcome = ?, steps_used = ?, last_activity = ?, finished_at = ? WHERE id = ?`)
+          .run(target.id, target.outcome, stepsUsed, now, now, run.id);
+        events.push({ type: 'run_finished', runId: run.id, outcome: target.outcome, at: now });
       } else {
         this.db
           .prepare(`UPDATE runs SET current_node = ?, steps_used = ?, last_activity = ? WHERE id = ?`)
           .run(plan.targetId, stepsUsed, now, run.id);
       }
     })();
+    for (const e of events) this.emit(e);
   }
 
   /** 推进事务提交后的应答：失败/悬空/隐式 end/显式 end/下一步，与 complete_step / report_blocked 共用 */
@@ -626,8 +644,9 @@ export class ExecutionEngine {
   private failRun(run: RunRow): void {
     const now = new Date().toISOString();
     this.db
-      .prepare(`UPDATE runs SET status = 'failed', last_activity = ?, finished_at = ? WHERE id = ?`)
+      .prepare(`UPDATE runs SET status = 'failed', outcome = 'fail', last_activity = ?, finished_at = ? WHERE id = ?`)
       .run(now, now, run.id);
+    this.emit({ type: 'run_finished', runId: run.id, outcome: 'fail', at: now });
   }
 
   private snapshotOf(run: RunRow): FlowSnapshot {

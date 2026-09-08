@@ -6,6 +6,7 @@ import { openMemoryDb } from '../src/core/db.js';
 import { FlowStore } from '../src/core/flowStore.js';
 import { ExecutionEngine } from '../src/core/engine.js';
 import { createApp } from '../src/server/http.js';
+import { createEventBus } from '../src/server/events.js';
 import type { Flow } from '../src/core/types.js';
 
 let tmpHome: string;
@@ -207,5 +208,78 @@ describe('监控只读 API（/api/runs，阶段 4）', () => {
     const { app } = makeAppWithRuns();
     expect((await app.request('/api/runs')).status).toBe(401);
     expect((await app.request(`/api/runs/run_missing?k=${TOKEN}`)).status).toBe(404);
+  });
+});
+
+describe('SSE 与停滞清扫（阶段 4）', () => {
+  function makeAppWithBus(): { app: ReturnType<typeof createApp>; store: FlowStore; engine: ExecutionEngine; db: import('better-sqlite3').Database } {
+    const db = openMemoryDb();
+    const store = new FlowStore(db, path.join(tmpHome, `flows-${Math.random().toString(36).slice(2)}`));
+    const bus = createEventBus();
+    const engine = new ExecutionEngine({ db, resolveFlow: (n) => store.resolve(n), onEvent: bus.broadcast });
+    return { app: createApp({ store, token: TOKEN, engine, db, events: bus }), store, engine, db };
+  }
+
+  it('/api/events：hello 握手 + 引擎动作实时推送 + 鉴权', async () => {
+    const { app, store, engine } = makeAppWithBus();
+    expect(store.save(linearFlow('f_sse')).ok).toBe(true);
+    expect((await app.request('/api/events')).status).toBe(401);
+
+    const res = await app.request(`/api/events?k=${TOKEN}`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/event-stream');
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    const readUntil = async (needle: string): Promise<void> => {
+      const deadline = Date.now() + 2000;
+      while (!buf.includes(needle)) {
+        if (Date.now() > deadline) throw new Error(`SSE 2 秒内没等到「${needle}」，已收到：${buf}`);
+        const { value } = await Promise.race([
+          reader.read(),
+          new Promise<never>((_, rej) => setTimeout(() => rej(new Error('SSE read timeout')), 1900)),
+        ]);
+        buf += decoder.decode(value, { stream: true });
+      }
+    };
+    try {
+      await readUntil('event: hello');
+      const start = engine.startRun({ flowName: '直线图' });
+      if (!('step' in start)) throw new Error('start 失败');
+      await readUntil('run_started');
+      expect(buf).toContain(start.runId);
+    } finally {
+      await reader.cancel();
+    }
+  });
+
+  it('24 小时无活动的活跃 run 被列表请求自动标 stale', async () => {
+    const { app, store, engine, db } = makeAppWithBus();
+    expect(store.save(linearFlow('f_stale')).ok).toBe(true);
+    const a = engine.startRun({ flowName: '直线图' });
+    if (!('step' in a)) throw new Error('start 失败');
+    const b = engine.startRun({ flowName: '直线图' });
+    if (!('step' in b)) throw new Error('start 失败');
+    // 把 a 的 last_activity 拨回 25 小时前
+    const old = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
+    db.prepare('UPDATE runs SET last_activity = ? WHERE id = ?').run(old, a.runId);
+
+    const list = (await (await app.request(`/api/runs?k=${TOKEN}`)).json()) as Array<{ id: string; status: string }>;
+    const byId = Object.fromEntries(list.map((r) => [r.id, r.status]));
+    expect(byId[a.runId]).toBe('stale');
+    expect(byId[b.runId]).toBe('running');
+  });
+
+  it('run 详情附带快照图（copy-on-run 那份）', async () => {
+    const { app, store, engine } = makeAppWithBus();
+    expect(store.save(linearFlow('f_snap')).ok).toBe(true);
+    const start = engine.startRun({ flowName: '直线图' });
+    if (!('step' in start)) throw new Error('start 失败');
+    const d = (await (await app.request(`/api/runs/${start.runId}?k=${TOKEN}`)).json()) as {
+      snapshot: { rootFlowId: string; flows: Record<string, { id: string }> } | null;
+    };
+    expect(d.snapshot).not.toBeNull();
+    expect(d.snapshot!.rootFlowId).toBe('f_snap');
+    expect(d.snapshot!.flows['f_snap'].id).toBe('f_snap');
   });
 });

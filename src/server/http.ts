@@ -4,6 +4,7 @@ import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import type { ServerType } from '@hono/node-server';
+import { streamSSE } from 'hono/streaming';
 import fs from 'node:fs';
 import path from 'node:path';
 import type Database from 'better-sqlite3';
@@ -12,7 +13,8 @@ import type { FlowStore } from '../core/flowStore.js';
 import type { ExecutionEngine } from '../core/engine.js';
 import { createMcpApp } from './mcp.js';
 import { createMcpBuildApp } from './mcpBuild.js';
-import { listRuns, getRunDetail } from '../core/runQuery.js';
+import { listRuns, getRunDetail, sweepStale } from '../core/runQuery.js';
+import type { EventBus } from './events.js';
 
 export interface ServerDeps {
   store: FlowStore;
@@ -21,6 +23,8 @@ export interface ServerDeps {
   engine?: ExecutionEngine;
   /** 监控只读查询用（阶段 4 起传入；不传则 /api/runs 不注册） */
   db?: Database.Database;
+  /** SSE 事件总线（阶段 4；不传则 /api/events 不注册） */
+  events?: EventBus;
 }
 
 export function createApp(deps: ServerDeps): Hono {
@@ -67,14 +71,46 @@ export function createApp(deps: ServerDeps): Hono {
     return deleted ? c.json({ ok: true }) : c.json({ error: 'flow not found' }, 404);
   });
 
-  // 监控只读查询（阶段 4）：run 列表 + 详情（含完整执行轨迹）
+  // 监控只读查询（阶段 4）：run 列表 + 详情（含快照图与完整执行轨迹）。
+  // 列表前顺带扫一次 24h 停滞（幂等 UPDATE，§9.2），15 分钟标黄由 UI 算。
   const db = deps.db;
   if (db !== undefined) {
-    app.get('/api/runs', (c) => c.json(listRuns(db)));
+    app.get('/api/runs', (c) => {
+      sweepStale(db);
+      return c.json(listRuns(db));
+    });
     app.get('/api/runs/:id', (c) => {
       const run = getRunDetail(db, c.req.param('id'));
       return run === undefined ? c.json({ error: 'run not found' }, 404) : c.json(run);
     });
+  }
+
+  // SSE 实时通道（§9.3）：事件即"该刷新了"的信号，面板收到后重拉 /api/runs
+  if (deps.events !== undefined) {
+    const bus = deps.events;
+    app.get('/api/events', (c) =>
+      streamSSE(c, async (stream) => {
+        await stream.writeSSE({ event: 'hello', data: JSON.stringify({ at: new Date().toISOString() }) });
+        let closed = false;
+        const unsubscribe = bus.subscribe((e) => {
+          if (closed) return;
+          void stream.writeSSE({ event: e.type, data: JSON.stringify(e) }).catch(() => {
+            closed = true;
+          });
+        });
+        stream.onAbort(() => {
+          closed = true;
+          unsubscribe();
+        });
+        let seq = 0;
+        while (!closed) {
+          await stream.sleep(15000);
+          if (closed) break;
+          await stream.writeSSE({ event: 'ping', data: String(seq++) });
+        }
+        unsubscribe();
+      }),
+    );
   }
 
   // 静态面板（Vite 构建产物）；root 需相对 cwd，dist-web 不存在时仅 API 可用

@@ -11,6 +11,7 @@ import {
   type StepResult,
   type RunFinishedResult,
   type SelfHealError,
+  type EngineEvent,
 } from '../src/core/engine.js';
 import type { Flow } from '../src/core/types.js';
 
@@ -177,14 +178,17 @@ function blockedNoExitFlow(): Flow {
   };
 }
 
-function makeEngine(flows: Flow[]): { engine: ExecutionEngine; store: FlowStore } {
+function makeEngine(flows: Flow[], onEvent?: (event: EngineEvent) => void): { engine: ExecutionEngine; store: FlowStore } {
   const db = openMemoryDb();
   const store = new FlowStore(db, path.join(tmpHome, `flows-${Math.random().toString(36).slice(2)}`));
   for (const f of flows) {
     const r = store.save(f);
     if (!r.ok) throw new Error(`fixture 校验失败：${JSON.stringify(r.errors)}`);
   }
-  return { engine: new ExecutionEngine({ db, resolveFlow: (n) => store.resolve(n) }), store };
+  return {
+    engine: new ExecutionEngine({ db, resolveFlow: (n) => store.resolve(n), ...(onEvent !== undefined ? { onEvent } : {}) }),
+    store,
+  };
 }
 
 const isStep = (r: unknown): r is StepResult =>
@@ -756,5 +760,49 @@ describe('report_blocked（§7.8）', () => {
     const res = engine.reportBlocked({ runId: start.runId, reason: '还想报' });
     expect(isFinished(res)).toBe(true);
     if (isFinished(res)) expect(res.note).toContain('已经结束');
+  });
+});
+
+describe('引擎事件（§9.3 SSE 数据源）', () => {
+  it('直线完成：run_started → step_completed → run_finished(success)，顺序正确', () => {
+    const events: EngineEvent[] = [];
+    const { engine } = makeEngine([linearFlow()], (e) => events.push(e));
+    const start = engine.startRun({ flowName: '直线图' });
+    if (!isStep(start)) throw new Error('start 失败');
+    engine.completeStep({ runId: start.runId, summary: '完成' });
+    expect(events.map((e) => e.type)).toEqual(['run_started', 'step_completed', 'run_finished']);
+    expect(events[0]).toMatchObject({ type: 'run_started', runId: start.runId, flowId: 'f_linear' });
+    expect(events[1]).toMatchObject({ type: 'step_completed', nodeId: 'n1', status: 'completed' });
+    expect(events[2]).toMatchObject({ type: 'run_finished', outcome: 'success' });
+  });
+
+  it('撞上限逃生：limit_exceeded 事件先于 run_finished(fail)', () => {
+    const events: EngineEvent[] = [];
+    const { engine } = makeEngine([retryFlow(true)], (e) => events.push(e));
+    const start = engine.startRun({ flowName: '测试回退环' });
+    if (!isStep(start)) throw new Error('start 失败');
+    engine.completeStep({ runId: start.runId, summary: '改一' });
+    engine.completeStep({ runId: start.runId, nodeId: 'n_test', summary: '失败', branchId: 'b_fail' });
+    engine.completeStep({ runId: start.runId, summary: '改二' });
+    engine.completeStep({ runId: start.runId, nodeId: 'n_test', summary: '又失败', branchId: 'b_fail' });
+    engine.completeStep({ runId: start.runId, summary: '改三' });
+    const types = events.map((e) => (e.type === 'step_completed' ? `step:${e.status}` : e.type));
+    expect(types).toContain('step:limit_exceeded');
+    const limitIdx = types.indexOf('step:limit_exceeded');
+    const finishIdx = types.lastIndexOf('run_finished');
+    expect(finishIdx).toBeGreaterThan(limitIdx);
+    const finished = events[finishIdx] as Extract<EngineEvent, { type: 'run_finished' }>;
+    expect(finished.outcome).toBe('fail');
+  });
+
+  it('report_blocked 发 step_completed(blocked)；无出口紧接着 run_finished(fail)', () => {
+    const events: EngineEvent[] = [];
+    const { engine } = makeEngine([blockedNoExitFlow()], (e) => events.push(e));
+    const start = engine.startRun({ flowName: '无出口阻塞图' });
+    if (!isStep(start)) throw new Error('start 失败');
+    engine.reportBlocked({ runId: start.runId, reason: '缺依赖' });
+    expect(events.map((e) => e.type)).toEqual(['run_started', 'step_completed', 'run_finished']);
+    expect(events[1]).toMatchObject({ status: 'blocked' });
+    expect(events[2]).toMatchObject({ outcome: 'fail' });
   });
 });

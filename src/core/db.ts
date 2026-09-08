@@ -86,6 +86,10 @@ const MIGRATIONS: string[] = [
   ALTER TABLE runs ADD COLUMN host_session TEXT;
   CREATE INDEX IF NOT EXISTS idx_runs_host_session ON runs(host_session);
   `,
+  // v3：阶段 4 监控——run 终结时落 outcome（success/fail），列表分栏（已完成/失败）直接可判
+  `
+  ALTER TABLE runs ADD COLUMN outcome TEXT;
+  `,
 ];
 
 function migrate(db: Database.Database): void {

@@ -3,7 +3,9 @@ import crypto from 'node:crypto';
 import { openDb } from './core/db.js';
 import { FlowStore } from './core/flowStore.js';
 import { ExecutionEngine } from './core/engine.js';
+import { sweepStale } from './core/runQuery.js';
 import { createApp, startServer } from './server/http.js';
+import { createEventBus } from './server/events.js';
 import { runHook } from './hook.js';
 
 const argv = process.argv.slice(2);
@@ -22,9 +24,11 @@ if (argv[0] === 'hook') {
   const token = process.env.AIWORKFLOW_TOKEN ?? crypto.randomBytes(12).toString('hex');
 
   const db = openDb();
+  sweepStale(db); // 启动即清扫 24h 停滞（§9.2）
   const store = new FlowStore(db);
-  const engine = new ExecutionEngine({ db, resolveFlow: (name) => store.resolve(name) });
-  const app = createApp({ store, token, engine, db });
+  const bus = createEventBus();
+  const engine = new ExecutionEngine({ db, resolveFlow: (name) => store.resolve(name), onEvent: bus.broadcast });
+  const app = createApp({ store, token, engine, db, events: bus });
   startServer(app, port);
 
   console.log(`aiworkflow 服务已启动（仅本机）：`);

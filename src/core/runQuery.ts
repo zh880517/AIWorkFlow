@@ -1,6 +1,8 @@
-// run 只读查询：监控面板的数据源（设计文档 §9）。SQLite 是唯一事实源，这里只读不写。
-// 面板侧的分组（按 cwd）、停滞判定（15 分钟 / 24 小时）在 UI 层做，这里给原始事实。
+// run 只读查询：监控面板的数据源（设计文档 §9）。SQLite 是唯一事实源。
+// 面板侧的分组（按 cwd）、15 分钟标黄在 UI 层做；24 小时标 stale 按 §9.2 由 sweepStale 落库。
 import type Database from 'better-sqlite3';
+import { loadSnapshot } from './snapshot.js';
+import type { FlowSnapshot } from './types.js';
 
 export interface RunListItem {
   id: string;
@@ -9,6 +11,8 @@ export interface RunListItem {
   flowId: string;
   flowName: string | null;
   status: string;
+  /** 终结时落库（v3 起）；completed 且为 null 的旧数据在读取时从快照终点推导 */
+  outcome: 'success' | 'fail' | null;
   currentNode: string | null;
   cwd: string | null;
   projectName: string | null;
@@ -33,6 +37,8 @@ export interface RunExecutionItem {
 
 export interface RunDetail extends RunListItem {
   snapshotHash: string;
+  /** run 实际执行的那份快照图（copy-on-run，§5.2）；详情渲染用它而不是当前图 */
+  snapshot: FlowSnapshot | null;
   /** 按 id 升序 = 发生顺序 */
   executions: RunExecutionItem[];
 }
@@ -46,6 +52,7 @@ interface RunRowJoined {
   flow_snapshot_hash: string;
   current_node: string | null;
   status: string;
+  outcome: 'success' | 'fail' | null;
   cwd: string | null;
   project_name: string | null;
   steps_used: number;
@@ -61,12 +68,14 @@ export function listRuns(db: Database.Database, limit = 200): RunListItem[] {
   const rows = db
     .prepare(`${LIST_SQL} ORDER BY r.created_at DESC, r.rowid DESC LIMIT ?`)
     .all(limit) as RunRowJoined[];
+  for (const row of rows) backfillOutcome(db, row);
   return rows.map(toListItem);
 }
 
 export function getRunDetail(db: Database.Database, runId: string): RunDetail | undefined {
   const row = db.prepare(`${LIST_SQL} WHERE r.id = ?`).get(runId) as RunRowJoined | undefined;
   if (row === undefined) return undefined;
+  backfillOutcome(db, row);
   const executions = db
     .prepare(
       'SELECT id, node_id, iteration, status, summary, payload, branch_id, started_at, finished_at FROM node_executions WHERE run_id = ? ORDER BY id',
@@ -85,6 +94,7 @@ export function getRunDetail(db: Database.Database, runId: string): RunDetail | 
   return {
     ...toListItem(row),
     snapshotHash: row.flow_snapshot_hash,
+    snapshot: loadSnapshot(db, row.flow_snapshot_hash) ?? null,
     executions: executions.map((e) => ({
       id: e.id,
       nodeId: e.node_id,
@@ -99,6 +109,31 @@ export function getRunDetail(db: Database.Database, runId: string): RunDetail | 
   };
 }
 
+/** 24 小时无活动的活跃 run 自动标 stale（§9.2 停滞检测的落库半边；15 分钟标黄在 UI 算）。
+ *  服务启动时与 /api/runs 列表查询前各扫一次，幂等。 */
+export function sweepStale(db: Database.Database, now = new Date()): number {
+  const cutoff = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
+  const info = db
+    .prepare(
+      `UPDATE runs SET status = 'stale', finished_at = ?
+       WHERE status IN ('running', 'waiting_gate', 'waiting_children') AND last_activity < ?`,
+    )
+    .run(now.toISOString(), cutoff);
+  return info.changes;
+}
+
+/** 旧数据（v3 前完成的 run）没有 outcome，从快照终点推导；只影响读取，不回写 */
+function backfillOutcome(db: Database.Database, row: RunRowJoined): void {
+  if (row.status !== 'completed' || row.outcome !== null) return;
+  if (row.current_node === null) {
+    row.outcome = 'success'; // 隐式 end
+    return;
+  }
+  const snapshot = loadSnapshot(db, row.flow_snapshot_hash);
+  const end = snapshot?.flows[snapshot.rootFlowId]?.nodes.find((n) => n.id === row.current_node);
+  row.outcome = end?.type === 'end' ? end.outcome : null;
+}
+
 function toListItem(row: RunRowJoined): RunListItem {
   return {
     id: row.id,
@@ -107,6 +142,7 @@ function toListItem(row: RunRowJoined): RunListItem {
     flowId: row.flow_id,
     flowName: row.flow_name,
     status: row.status,
+    outcome: row.outcome,
     currentNode: row.current_node,
     cwd: row.cwd,
     projectName: row.project_name,

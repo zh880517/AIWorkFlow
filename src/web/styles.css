@@ -785,3 +785,401 @@ code {
   padding: 1px 4px;
   border-radius: 4px;
 }
+
+/* ===== 监控（阶段 4）：run 列表 / 详情轨迹 / 只读画布节点 ===== */
+
+.runs-page {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+.run-error {
+  border: 1px solid #f87171;
+  color: #f87171;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+.run-group {
+  border: 1px solid #262626;
+  border-radius: 10px;
+  background: #171717;
+  overflow: hidden;
+}
+.run-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid #262626;
+}
+.run-group-name {
+  color: #fafafa;
+  font-size: 14px;
+  font-weight: 600;
+}
+.run-group-cwd {
+  color: #737373;
+  font-size: 12px;
+}
+.run-cols {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1px;
+  background: #262626;
+}
+.run-col {
+  background: #0a0a0a;
+  min-height: 120px;
+  display: flex;
+  flex-direction: column;
+}
+.run-col-head {
+  padding: 8px 12px;
+  font-size: 12px;
+  color: #a3a3a3;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.run-col-count {
+  background: #262626;
+  color: #e5e5e5;
+  border-radius: 8px;
+  padding: 0 7px;
+  font-size: 11px;
+}
+.run-col-body {
+  padding: 4px 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.run-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+  background: #171717;
+  border: 1px solid #262626;
+  border-radius: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+.run-card:hover {
+  border-color: #404040;
+  background: #1d1d1d;
+}
+.run-card-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.run-card-title {
+  color: #e5e5e5;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.run-card-meta {
+  color: #737373;
+  font-size: 11px;
+}
+.run-card-warn {
+  color: #fde047;
+  font-size: 11px;
+  border: 1px solid #facc15;
+  border-radius: 6px;
+  padding: 0 5px;
+  white-space: nowrap;
+}
+.run-card-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+.run-card-dot.dot-active {
+  background: #38bdf8;
+  animation: run-pulse 1.6s ease-in-out infinite;
+}
+.run-card-dot.dot-active.stalled {
+  background: #facc15;
+  animation: none;
+}
+.run-card-dot.dot-done {
+  background: #4ade80;
+}
+.run-card-dot.dot-failed {
+  background: #f87171;
+}
+.run-card-dot.dot-stale {
+  background: #a3a3a3;
+}
+@keyframes run-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .run-card-dot.dot-active {
+    animation: none;
+  }
+}
+
+/* 详情顶栏状态 chip 与轨迹状态 chip */
+.run-chip {
+  border-radius: 6px;
+  padding: 1px 8px;
+  font-size: 12px;
+  border: 1px solid #262626;
+  color: #e5e5e5;
+}
+.run-chip.chip-active {
+  color: #38bdf8;
+  border-color: #38bdf866;
+}
+.run-chip.chip-ok {
+  color: #4ade80;
+  border-color: #4ade8066;
+}
+.run-chip.chip-fail {
+  color: #f87171;
+  border-color: #f8717166;
+}
+.run-chip.chip-stale {
+  color: #a3a3a3;
+}
+.exec-chip {
+  border-radius: 5px;
+  padding: 0 5px;
+  font-size: 10px;
+  font-style: normal;
+  margin-left: 6px;
+}
+.exec-chip.ok {
+  color: #4ade80;
+  border: 1px solid #4ade8055;
+}
+.exec-chip.bad {
+  color: #f87171;
+  border: 1px solid #f8717155;
+}
+.exec-chip.warn {
+  color: #fde047;
+  border: 1px solid #facc1555;
+}
+
+/* 详情右侧轨迹面板 */
+.run-trace-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.run-trace-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.run-trace-title {
+  color: #fafafa;
+  font-size: 14px;
+  font-weight: 600;
+}
+.run-trace-meta {
+  color: #737373;
+  font-size: 12px;
+}
+.run-trace-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+  flex: 1;
+}
+.run-trace-item {
+  display: flex;
+  gap: 8px;
+  background: #171717;
+  border: 1px solid #262626;
+  border-left: 2px solid #404040;
+  border-radius: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+.run-trace-item:hover {
+  border-color: #404040;
+}
+.run-trace-item.sel {
+  border-color: #38bdf866;
+  border-left-color: #38bdf8;
+}
+.run-trace-seq {
+  color: #737373;
+  font-size: 11px;
+  font-family: Consolas, monospace;
+  min-width: 18px;
+  padding-top: 2px;
+}
+.run-trace-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.run-trace-node {
+  color: #e5e5e5;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+}
+.run-trace-iter {
+  color: #737373;
+  font-style: normal;
+  font-size: 11px;
+  margin-left: 5px;
+  font-family: Consolas, monospace;
+}
+.run-trace-summary {
+  color: #a3a3a3;
+  font-size: 12px;
+}
+.run-trace-sub {
+  color: #737373;
+  font-size: 11px;
+}
+.run-payload {
+  border-top: 1px solid #262626;
+  padding-top: 8px;
+}
+.run-payload-head {
+  color: #a3a3a3;
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+.run-payload pre {
+  margin: 0;
+  background: #0a0a0a;
+  border: 1px solid #262626;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-family: Consolas, monospace;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+/* 只读画布的自定义节点 */
+.run-node {
+  background: #171717;
+  border: 1px solid #262626;
+  border-radius: 8px;
+  padding: 8px 12px;
+  min-width: 130px;
+  max-width: 220px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  position: relative;
+  font-size: 12px;
+}
+.run-node-type {
+  color: #737373;
+  font-size: 10px;
+  font-family: Consolas, monospace;
+  flex: none;
+}
+.run-node-label {
+  color: #e5e5e5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.run-node-outcome {
+  font-size: 10px;
+  color: #a3a3a3;
+  flex: none;
+}
+.run-node.state-pending {
+  opacity: 0.45;
+}
+.run-node.state-done {
+  border-color: #4ade8055;
+}
+.run-node.state-done .run-node-outcome {
+  color: #4ade80;
+}
+.run-node.state-failed {
+  border-color: #f8717188;
+}
+.run-node.state-failed .run-node-label {
+  color: #f87171;
+}
+.run-node.state-current {
+  border-color: #38bdf8;
+  animation: run-pulse 1.6s ease-in-out infinite;
+}
+.run-node.state-current .run-node-label {
+  color: #38bdf8;
+}
+.run-node.multi {
+  border-width: 1px;
+}
+.run-node-count {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  background: #262626;
+  border: 1px solid #404040;
+  color: #fde047;
+  font-size: 10px;
+  border-radius: 8px;
+  padding: 0 5px;
+  font-family: Consolas, monospace;
+}
+@media (prefers-reduced-motion: reduce) {
+  .run-node.state-current {
+    animation: none;
+  }
+}
+
+/* 路径高亮：走过的实线亮，没走的虚线暗 */
+.react-flow__edge.run-edge.untaken path {
+  stroke: #404040;
+  stroke-dasharray: 5 4;
+}
+.react-flow__edge.run-edge.taken path {
+  stroke: #4ade80aa;
+  stroke-width: 2;
+}
+.react-flow__edge.run-edge .react-flow__edge-text {
+  font-size: 10px;
+  fill: #737373;
+}
+.react-flow__edge.run-edge.selected path {
+  stroke: #38bdf8;
+}
+
+/* 节点锚点：小到不抢戏，但必须存在（边挂载点） */
+.run-handle {
+  width: 5px;
+  height: 5px;
+  background: #404040;
+  border: none;
+  min-width: 0;
+  min-height: 0;
+}

@@ -48,3 +48,68 @@ export const saveFlow = (flow: Flow): Promise<SaveOk | SaveRejected> =>
 
 export const deleteFlow = (id: string): Promise<{ ok: true }> =>
   req<{ ok: true }>(`/flows/${encodeURIComponent(id)}`, { method: 'DELETE' });
+
+// ---- 监控（阶段 4）----
+
+export interface RunListItem {
+  id: string;
+  parentRunId: string | null;
+  rootRunId: string;
+  flowId: string;
+  flowName: string | null;
+  status: string;
+  outcome: 'success' | 'fail' | null;
+  currentNode: string | null;
+  cwd: string | null;
+  projectName: string | null;
+  stepsUsed: number;
+  createdAt: string;
+  lastActivity: string | null;
+  finishedAt: string | null;
+}
+
+export interface RunExecutionItem {
+  id: number;
+  nodeId: string;
+  iteration: number;
+  status: string;
+  summary: string | null;
+  payload: unknown;
+  branchId: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
+export interface FlowSnapshotView {
+  rootFlowId: string;
+  flows: Record<string, Flow>;
+}
+
+export interface RunDetail extends RunListItem {
+  snapshotHash: string;
+  snapshot: FlowSnapshotView | null;
+  executions: RunExecutionItem[];
+}
+
+export const listRuns = (): Promise<RunListItem[]> => req<RunListItem[]>('/runs');
+
+export const getRunDetail = (id: string): Promise<RunDetail> =>
+  req<RunDetail>(`/runs/${encodeURIComponent(id)}`);
+
+/**
+ * SSE 订阅（§9.3）：事件只当"该刷新了"的信号用，收到任意事件即回调。
+ * EventSource 自带断线重连；返回关闭函数。
+ */
+export function openRunEvents(onSignal: () => void): () => void {
+  const es = new EventSource(`/api/events?k=${encodeURIComponent(token)}`);
+  const handler = (): void => onSignal();
+  for (const t of ['hello', 'run_started', 'step_completed', 'run_finished']) {
+    es.addEventListener(t, handler);
+  }
+  return () => {
+    for (const t of ['hello', 'run_started', 'step_completed', 'run_finished']) {
+      es.removeEventListener(t, handler);
+    }
+    es.close();
+  };
+}
