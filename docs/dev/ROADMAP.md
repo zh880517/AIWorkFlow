@@ -105,7 +105,9 @@ tests/       # core 层单测 + 端到端 API 测试
 | SSE：run_started / step_completed / gate_pending / child_spawned / run_finished | ✅（`/api/events`；引擎 onEvent 回调 → 事件总线 → streamSSE，事件当"该刷新了"信号，面板重拉；gate_pending/child_spawned 留待阶段 5/6 产生事件时验证通道已就绪） |
 | 停滞检测：15 分钟标黄、24 小时标 stale | ✅（15 分钟 UI 标黄"停滞?"；sweepStale 在启动与列表查询时幂等落库标 stale） |
 
-**验收**：✅（2026-09-08，143 测试 + 真实服务实测 + 浏览器 GUI 验证）SSE 实测收到 hello → run_started → step_completed(completed/blocked) → run_finished(fail) 全序列；浏览器验证：列表页 cwd 分组×4 栏、15 分钟标黄角标、SSE 新 run 实时出现；详情页 9 步环回退 run 轨迹逐次列出（含第 4 次超限逃生），画布 5 节点着色（跑测试节点红、×4 角标）、走过 4 边高亮（含逃生边）、未走分支虚线。修过两个真 bug：自定义节点缺 Handle 边不渲染、受控模式需回灌 measured。
+**验收**：✅（2026-09-08，144 测试 + 真实服务实测 + 浏览器 GUI 验证）SSE 实测收到 hello → run_started → step_completed(completed/blocked) → run_finished(fail) 全序列；浏览器验证：列表页 cwd 分组×4 栏、15 分钟标黄角标、SSE 新 run 实时出现；详情页 9 步环回退 run 轨迹逐次列出（含第 4 次超限逃生），画布 5 节点着色（跑测试节点红、×4 角标）、走过 4 边高亮（含逃生边）、未走分支虚线。修过两个真 bug：自定义节点缺 Handle 边不渲染、受控模式需回灌 measured。
+
+**2026-09-08 修正（commit 580984a，应用户要求）**：详情画布改用**编辑器同款节点卡**（FlowNodeCard 含出口/条件完整视觉），运行状态作为外圈叠加层（状态环/脉动/×N 角标），只读但**节点可拖动摆放**（位置存内存）。顺带修掉一个波及预览页的真 bug：normalizeOutlets 把 API/手写图的第一个普通分支错当默认兜底显示。画布改完全非受控（defaultNodes + key 重挂）消除边渲染竞态。**环境注意**：IAB 长时间使用的标签页会进入"div 照画、SVG 边不渲染"的降级态（编辑器预览页同样复现），换新标签页即恢复——排查 React Flow 边消失先换标签页再怀疑代码。
 
 ## 阶段 5 — gate 节点 + 双通道回答
 
