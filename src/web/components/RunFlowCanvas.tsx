@@ -9,7 +9,7 @@ import {
   ReactFlow,
   type NodeProps,
 } from '@xyflow/react';
-import type { Flow } from '../../core/types.js';
+import type { Flow, FlowNode } from '../../core/types.js';
 import type { RunExecutionItem } from '../api.js';
 import { flowToRf, normalizeOutlets, nodeTitle, type FlowRFNode } from '../dsl.js';
 import { FlowNodeCard } from './FlowNodeCard.js';
@@ -48,23 +48,32 @@ function computeStats(executions: RunExecutionItem[]): Map<string, Stats> {
   return stats;
 }
 
-/** 走过的边集合（from->to）。转移证据：branchId → branch.to；无分支 → next；limit_exceeded → onLimitExceeded */
-function computeTaken(flow: Flow, executions: RunExecutionItem[], currentNode: string | null): Set<string> {
+/** 一条轨迹隐含的转移目标 */
+function transitionOf(node: FlowNode | undefined, e: RunExecutionItem): string | undefined {
+  if (node === undefined) return undefined;
+  if (e.status === 'limit_exceeded') return node.onLimitExceeded;
+  if (e.branchId !== null) return node.branches?.find((b) => b.id === e.branchId)?.to;
+  return node.next;
+}
+
+/** 走过的边及次数（from->to → N）。转移证据：branchId → branch.to；无分支 → next；limit_exceeded → onLimitExceeded */
+function computeTaken(flow: Flow, executions: RunExecutionItem[], currentNode: string | null): Map<string, number> {
   const byId = new Map(flow.nodes.map((n) => [n.id, n]));
-  const taken = new Set<string>();
+  const taken = new Map<string, number>();
   const record = (from: string, to: string | undefined): void => {
-    if (to !== undefined) taken.add(`${from}->${to}`);
+    if (to === undefined) return;
+    const key = `${from}->${to}`;
+    taken.set(key, (taken.get(key) ?? 0) + 1);
   };
   for (const e of executions) {
-    const node = byId.get(e.nodeId);
-    if (node === undefined) continue;
-    if (e.status === 'limit_exceeded') record(e.nodeId, node.onLimitExceeded);
-    else if (e.branchId !== null) record(e.nodeId, node.branches?.find((b) => b.id === e.branchId)?.to);
-    else record(e.nodeId, node.next);
+    record(e.nodeId, transitionOf(byId.get(e.nodeId), e));
   }
-  // 进行中的 run：最后一步的落点就是 current_node，这条转移已经发生
+  // 兜底：最后一步若推不出转移目标（如 blocked 无出口），落点只能来自 current_node；
+  // 推得出时不补记，否则逃生等转移会被算两次
   const last = executions.at(-1);
-  if (last !== undefined && currentNode !== null) record(last.nodeId, currentNode);
+  if (last !== undefined && currentNode !== null && transitionOf(byId.get(last.nodeId), last) === undefined) {
+    record(last.nodeId, currentNode);
+  }
   return taken;
 }
 
@@ -111,11 +120,15 @@ export function RunFlowCanvas({ flow, executions, currentNode, running, onNodeCl
       };
     });
     const edges = base.edges.map((e) => {
-      const isTaken = taken.has(`${e.source}->${e.target}`);
+      const count = taken.get(`${e.source}->${e.target}`) ?? 0;
+      const isTaken = count > 0;
+      const baseLabel = e.data?.kind === 'escape' ? '超限逃生' : undefined;
       return {
         ...e,
         className: isTaken ? 'run-edge taken' : 'run-edge untaken',
-        label: e.data?.kind === 'escape' ? '超限逃生' : undefined,
+        // 走过 >1 次的边标次数（环绕几圈在边上可见）；逃生边保留说明文字
+        label: count > 1 ? (baseLabel !== undefined ? `${baseLabel} ×${count}` : `×${count}`) : baseLabel,
+        animated: isTaken,
         deletable: false,
         focusable: false,
       };

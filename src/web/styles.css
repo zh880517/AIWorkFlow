@@ -1097,21 +1097,29 @@ code {
   box-shadow: 0 0 0 2px #f8717199;
 }
 .run-wrap.state-current .flow-node {
-  animation: run-ring 1.6s ease-in-out infinite;
+  animation: run-ring 1.4s ease-in-out infinite;
 }
 @keyframes run-ring {
   0%,
   100% {
-    box-shadow: 0 0 0 2px #38bdf8cc;
+    box-shadow:
+      0 0 0 3px #38bdf8,
+      0 0 22px 2px #38bdf855;
   }
   50% {
-    box-shadow: 0 0 0 2px #38bdf833;
+    box-shadow:
+      0 0 0 3px #38bdf844,
+      0 0 8px 0px #38bdf822;
   }
 }
 @media (prefers-reduced-motion: reduce) {
   .run-wrap.state-current .flow-node {
     animation: none;
-    box-shadow: 0 0 0 2px #38bdf8;
+    box-shadow: 0 0 0 3px #38bdf8;
+  }
+  /* React Flow animated 边的流动动画也关掉（走过状态仍由颜色表达） */
+  .react-flow__edge.animated path {
+    animation: none !important;
   }
 }
 .run-node-count {
@@ -1128,7 +1136,7 @@ code {
   z-index: 1;
 }
 
-/* 路径高亮：走过的实线亮，没走的虚线暗 */
+/* 路径高亮：走过的实线亮 + 流动动画（React Flow animated），没走的虚线暗 */
 .react-flow__edge.run-edge.untaken path {
   stroke: #404040;
   stroke-dasharray: 5 4;
@@ -1136,6 +1144,11 @@ code {
 .react-flow__edge.run-edge.taken path {
   stroke: #4ade80aa;
   stroke-width: 2;
+}
+.react-flow__edge.run-edge.taken .react-flow__edge-text {
+  font-size: 10px;
+  font-weight: 600;
+  fill: #4ade80;
 }
 .react-flow__edge.run-edge .react-flow__edge-text {
   font-size: 10px;
