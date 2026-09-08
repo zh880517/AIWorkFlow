@@ -103,7 +103,8 @@ tests/       # core 层单测 + 端到端 API 测试
 | run 列表：按 cwd 分组分栏（进行中/已完成/失败/停滞） | ✅（completed 按终点 outcome 分入已完成/失败栏；outcome 落库 db v3，旧数据读取时从快照终点推导） |
 | run 详情：快照图渲染、节点着色、路径高亮、迭代次序列表 | ✅（`#/runs/:id`；只读画布 RunFlowCanvas：已过/正在跑脉动/失败/未走对着色、走过实线未走虚线、×N 迭代角标、逃生边；侧栏逐次列出每次执行含分支选择与 payload） |
 | SSE：run_started / step_completed / gate_pending / child_spawned / run_finished | ✅（`/api/events`；引擎 onEvent 回调 → 事件总线 → streamSSE，事件当"该刷新了"信号，面板重拉；gate_pending/child_spawned 留待阶段 5/6 产生事件时验证通道已就绪） |
-| 停滞检测：15 分钟标黄、24 小时标 stale | ✅（15 分钟 UI 标黄"停滞?"；sweepStale 在启动与列表查询时幂等落库标 stale） |
+| 停滞检测 | ❌（2026-09-08 用户决定移除：AI 执行中长时间暂停是常态，不按超时判异常；曾实现 15 分钟标黄 + 24h sweepStale 后撤销，设计文档 §9.2 已记） |
+| 列表分页与排序（2026-09-08 用户补充） | ✅（每目录默认显示最近活动的 10 条，可切换按最近活动/开始时间排序，可展开全部） |
 
 **验收**：✅（2026-09-08，144 测试 + 真实服务实测 + 浏览器 GUI 验证）SSE 实测收到 hello → run_started → step_completed(completed/blocked) → run_finished(fail) 全序列；浏览器验证：列表页 cwd 分组×4 栏、15 分钟标黄角标、SSE 新 run 实时出现；详情页 9 步环回退 run 轨迹逐次列出（含第 4 次超限逃生），画布 5 节点着色（跑测试节点红、×4 角标）、走过 4 边高亮（含逃生边）、未走分支虚线。修过两个真 bug：自定义节点缺 Handle 边不渲染、受控模式需回灌 measured。
 

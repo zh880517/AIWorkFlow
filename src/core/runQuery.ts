@@ -1,5 +1,6 @@
 // run 只读查询：监控面板的数据源（设计文档 §9）。SQLite 是唯一事实源。
-// 面板侧的分组（按 cwd）、15 分钟标黄在 UI 层做；24 小时标 stale 按 §9.2 由 sweepStale 落库。
+// 分组（按 cwd）与排序在 UI 层做。原 §9.2 停滞检测（15 分钟标黄 / 24 小时标 stale）
+// 已按用户决定移除（2026-09-08）：AI 执行中长时间暂停是常态，不按超时判异常。
 import type Database from 'better-sqlite3';
 import { loadSnapshot } from './snapshot.js';
 import type { FlowSnapshot } from './types.js';
@@ -107,19 +108,6 @@ export function getRunDetail(db: Database.Database, runId: string): RunDetail | 
       finishedAt: e.finished_at,
     })),
   };
-}
-
-/** 24 小时无活动的活跃 run 自动标 stale（§9.2 停滞检测的落库半边；15 分钟标黄在 UI 算）。
- *  服务启动时与 /api/runs 列表查询前各扫一次，幂等。 */
-export function sweepStale(db: Database.Database, now = new Date()): number {
-  const cutoff = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
-  const info = db
-    .prepare(
-      `UPDATE runs SET status = 'stale', finished_at = ?
-       WHERE status IN ('running', 'waiting_gate', 'waiting_children') AND last_activity < ?`,
-    )
-    .run(now.toISOString(), cutoff);
-  return info.changes;
 }
 
 /** 旧数据（v3 前完成的 run）没有 outcome，从快照终点推导；只影响读取，不回写 */

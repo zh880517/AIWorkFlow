@@ -253,23 +253,6 @@ describe('SSE 与停滞清扫（阶段 4）', () => {
     }
   });
 
-  it('24 小时无活动的活跃 run 被列表请求自动标 stale', async () => {
-    const { app, store, engine, db } = makeAppWithBus();
-    expect(store.save(linearFlow('f_stale')).ok).toBe(true);
-    const a = engine.startRun({ flowName: '直线图' });
-    if (!('step' in a)) throw new Error('start 失败');
-    const b = engine.startRun({ flowName: '直线图' });
-    if (!('step' in b)) throw new Error('start 失败');
-    // 把 a 的 last_activity 拨回 25 小时前
-    const old = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
-    db.prepare('UPDATE runs SET last_activity = ? WHERE id = ?').run(old, a.runId);
-
-    const list = (await (await app.request(`/api/runs?k=${TOKEN}`)).json()) as Array<{ id: string; status: string }>;
-    const byId = Object.fromEntries(list.map((r) => [r.id, r.status]));
-    expect(byId[a.runId]).toBe('stale');
-    expect(byId[b.runId]).toBe('running');
-  });
-
   it('run 详情附带快照图（copy-on-run 那份）', async () => {
     const { app, store, engine } = makeAppWithBus();
     expect(store.save(linearFlow('f_snap')).ok).toBe(true);

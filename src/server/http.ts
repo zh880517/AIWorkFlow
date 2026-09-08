@@ -13,7 +13,7 @@ import type { FlowStore } from '../core/flowStore.js';
 import type { ExecutionEngine } from '../core/engine.js';
 import { createMcpApp } from './mcp.js';
 import { createMcpBuildApp } from './mcpBuild.js';
-import { listRuns, getRunDetail, sweepStale } from '../core/runQuery.js';
+import { listRuns, getRunDetail } from '../core/runQuery.js';
 import type { EventBus } from './events.js';
 
 export interface ServerDeps {
@@ -71,14 +71,10 @@ export function createApp(deps: ServerDeps): Hono {
     return deleted ? c.json({ ok: true }) : c.json({ error: 'flow not found' }, 404);
   });
 
-  // 监控只读查询（阶段 4）：run 列表 + 详情（含快照图与完整执行轨迹）。
-  // 列表前顺带扫一次 24h 停滞（幂等 UPDATE，§9.2），15 分钟标黄由 UI 算。
+  // 监控只读查询（阶段 4）：run 列表 + 详情（含快照图与完整执行轨迹）
   const db = deps.db;
   if (db !== undefined) {
-    app.get('/api/runs', (c) => {
-      sweepStale(db);
-      return c.json(listRuns(db));
-    });
+    app.get('/api/runs', (c) => c.json(listRuns(db)));
     app.get('/api/runs/:id', (c) => {
       const run = getRunDetail(db, c.req.param('id'));
       return run === undefined ? c.json({ error: 'run not found' }, 404) : c.json(run);

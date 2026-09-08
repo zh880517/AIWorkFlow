@@ -824,7 +824,7 @@ code {
 }
 .run-cols {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 1px;
   background: #262626;
 }
@@ -890,14 +890,6 @@ code {
   color: #737373;
   font-size: 11px;
 }
-.run-card-warn {
-  color: #fde047;
-  font-size: 11px;
-  border: 1px solid #facc15;
-  border-radius: 6px;
-  padding: 0 5px;
-  white-space: nowrap;
-}
 .run-card-dot {
   width: 8px;
   height: 8px;
@@ -908,18 +900,11 @@ code {
   background: #38bdf8;
   animation: run-pulse 1.6s ease-in-out infinite;
 }
-.run-card-dot.dot-active.stalled {
-  background: #facc15;
-  animation: none;
-}
 .run-card-dot.dot-done {
   background: #4ade80;
 }
 .run-card-dot.dot-failed {
   background: #f87171;
-}
-.run-card-dot.dot-stale {
-  background: #a3a3a3;
 }
 @keyframes run-pulse {
   0%,
@@ -1158,3 +1143,48 @@ code {
   stroke: #38bdf8;
 }
 
+
+/* 排序切换器（监控页头部）与组尾展开按钮 */
+.seg {
+  display: inline-flex;
+  border: 1px solid #262626;
+  border-radius: 8px;
+  overflow: hidden;
+  margin-left: auto;
+}
+.seg-btn {
+  background: #171717;
+  color: #a3a3a3;
+  border: none;
+  padding: 5px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.seg-btn + .seg-btn {
+  border-left: 1px solid #262626;
+}
+.seg-btn.on {
+  background: #262626;
+  color: #fafafa;
+}
+.run-group-total {
+  color: #737373;
+  font-size: 12px;
+  margin-left: auto;
+}
+.run-group-more {
+  width: 100%;
+  background: none;
+  border: none;
+  border-top: 1px solid #262626;
+  color: #737373;
+  font-size: 12px;
+  padding: 8px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.run-group-more:hover {
+  color: #e5e5e5;
+  background: #1d1d1d;
+}
