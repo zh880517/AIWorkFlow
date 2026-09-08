@@ -34,10 +34,10 @@ tests/       # core 层单测 + 端到端 API 测试
 
 - [ ] P0-1 Claude Code 的 HTTP MCP 客户端是否携带 `Mcp-Session-Id`；同会话是否稳定；重连是否更换
 - [ ] P0-2 子 Agent（Task 调用）是否复用父会话的同一 `Mcp-Session-Id`
-- [ ] P0-3 Codex 是否具备子 Agent 派发/并行能力
+- [x] P0-3 Codex 是否具备子 Agent 派发/并行能力 → **是**（2026-09-08 用户实机确认：Claude CLI 与 Codex CLI 都支持子 Agent 并行；fan-out 无需降级，文档 §10.3 / §12.5 已同步更新）
 
 方法：临时在 MCP 端点打请求日志，宿主里跑最小流程观察。结论记入本文件，验证代码删除。
-影响：P0-2 若为否，`childToken` 机制仍保留（幂等无害）；P0-3 若为否，文档 12.5 已有降级预案（subagent 在 Codex 上串行）。
+影响：P0-2 若为否，`childToken` 机制仍保留（幂等无害）；P0-3 已确认为支持并行，无需降级。
 
 ## 阶段 1 — SQLite 层 + 图 DSL 校验 + 快照机制 ✅
 

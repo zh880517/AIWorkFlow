@@ -378,7 +378,7 @@ Skill 只管入场：列出可用流程、确认用哪个、调 `start_run`。�
 
 1. Claude Code / Codex 的 HTTP MCP 客户端是否遵循 `Mcp-Session-Id`？同一会话是否稳定？重连是否更换？
 2. 子 Agent 的调用是否复用父会话的同一 `Mcp-Session-Id`？（设计假设为"是"，因此需要 `childToken`）
-3. Codex 是否具备子 Agent 派发能力、能否并行？**若不能，`subagent` 节点与 fan-out 在 Codex 上需降级为串行或不可用。** 这是当前最大的未知项。
+3. ~~Codex 是否具备子 Agent 派发能力、能否并行？~~ **已确认（2026-09-08，用户实机确认）：Claude CLI 与 Codex CLI 都支持子 Agent 并行。** `subagent` 节点与 fan-out 在两个宿主上都可用，原"不能并行则降级串行"的预案不再需要。
 
 ## 11. v1 范围外
 
@@ -395,7 +395,7 @@ Skill 只管入场：列出可用流程、确认用哪个、调 `start_run`。�
 2. **"Agent 看不到图"是默认行为，不是安全边界。** Agent 有文件工具，可直接读 `~/.aiworkflow/flows/*.json`。该机制挡住的是"顺手读图"这一真实且高频的失效模式，而非有意为之的行为。
 3. **分支判断非确定性。** 条件是自然语言、由 Agent 判断。同样输入可能选不同分支。
 4. **图无法随项目共享。** 见 5.1。
-5. **Codex 侧并行能力未知。** 见第 10 节第 3 项。
+5. **Codex 并行能力。** 已确认 Claude CLI 与 Codex CLI 都支持子 Agent 并行（2026-09-08，见第 10 节第 3 项），fan-out 无需按宿主降级。
 
 ## 13. 建议实现顺序
 
