@@ -11,6 +11,7 @@ import type { Flow } from '../core/types.js';
 import type { FlowStore } from '../core/flowStore.js';
 import type { ExecutionEngine } from '../core/engine.js';
 import { createMcpApp } from './mcp.js';
+import { createMcpBuildApp } from './mcpBuild.js';
 import { listRuns, getRunDetail } from '../core/runQuery.js';
 
 export interface ServerDeps {
@@ -25,10 +26,13 @@ export interface ServerDeps {
 export function createApp(deps: ServerDeps): Hono {
   const app = new Hono();
 
-  // MCP 端点（Streamable HTTP，token 鉴权在 mcp.ts 内）
+  // MCP 执行端点（Streamable HTTP，token 鉴权在 mcp.ts 内）
   if (deps.engine !== undefined) {
     app.route('/', createMcpApp({ engine: deps.engine, store: deps.store, token: deps.token }));
   }
+
+  // MCP 建图端点：与执行端点分开（给建图的 AI 用，工具集只有建图五件套）
+  app.route('/', createMcpBuildApp({ store: deps.store, token: deps.token }));
 
   // token 鉴权：查询参数 k 或 Bearer 头（面板静态资源本身不含数据，只拦 API）
   app.use('/api/*', async (c, next) => {

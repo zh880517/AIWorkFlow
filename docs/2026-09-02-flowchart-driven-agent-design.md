@@ -177,6 +177,8 @@ run 定位顺序：**childToken → runId → hostSession（hook 注入的 `"<ho
 
 **建图类**：`list_flows`、`get_flow`、`create_flow`、`update_flow`、`validate_flow`
 
+**建图类挂在独立端点 `/mcp-build`（与执行端点 `/mcp` 分开，2026-09-08 决定）**：两套工具集互不可见——执行的 Agent 不被建图工具污染注意力，建图的 AI 也只拿到建图五件套。宿主里注册为两个 MCP server（建议名 `aiworkflow` 与 `aiworkflow-build`）。执行端的 `list_flows` 保留（薄 Skill 的入场链路依赖它），两端各有一份不冲突。
+
 **建图类不做任何模式隔离，run 期间也可自由调用。** 运行时快照已保证 `update_flow` 不会打乱正在跑的 run；而阻止 `get_flow` 读图既拦不住有意为之的人（Agent 有文件工具），也与"引导而非约束"的定位矛盾。
 
 ### 6.2 单步返回结构

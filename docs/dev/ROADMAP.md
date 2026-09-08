@@ -162,10 +162,10 @@ tests/       # core 层单测 + 端到端 API 测试
 
 | 任务 | 状态 |
 |---|---|
-| list_flows / get_flow / create_flow / update_flow / validate_flow | ⬜ |
-| install 命令：检测宿主（Claude Code Skill 目录 / Codex prompts+AGENTS.md） | ⬜ |
+| list_flows / get_flow / create_flow / update_flow / validate_flow | ✅（2026-09-08 应用户要求提前实现，挂独立端点 `/mcp-build`，与执行端点 `/mcp` 工具集互不可见；create/update 幂等指引、validate 干跑不落库、硬拒不落库，137 测试 + 真实服务实测） |
+| install 命令：检测宿主（Claude Code Skill 目录 / Codex prompts+AGENTS.md + hook 配置） | ⬜ |
 
-**验收**：AI 能自己建图；install 能装到两个宿主。
+**验收**：建图五件套 ✅（SDK 客户端建图/改图/干跑/坏图自愈全链路实测）；install 待做。
 
 ## 通用规约
 

@@ -28,7 +28,8 @@ if (argv[0] === 'hook') {
   startServer(app, port);
 
   console.log(`aiworkflow 服务已启动（仅本机）：`);
-  console.log(`  面板:  http://127.0.0.1:${port}/?k=${token}`);
-  console.log(`  MCP:   http://127.0.0.1:${port}/mcp?k=${token}`);
-  console.log(`  API:   http://127.0.0.1:${port}/api/flows?k=${token}`);
+  console.log(`  面板:    http://127.0.0.1:${port}/?k=${token}`);
+  console.log(`  MCP:     http://127.0.0.1:${port}/mcp?k=${token}`);
+  console.log(`  建图MCP: http://127.0.0.1:${port}/mcp-build?k=${token}`);
+  console.log(`  API:     http://127.0.0.1:${port}/api/flows?k=${token}`);
 }
