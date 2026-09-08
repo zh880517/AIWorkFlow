@@ -5,7 +5,6 @@ import { LibraryView } from './views/LibraryView.js';
 import { EditorView } from './views/EditorView.js';
 import { PreviewView } from './views/PreviewView.js';
 import { RunsView } from './views/RunsView.js';
-import { RunDetailView } from './views/RunDetailView.js';
 
 /**
  * 页面结构（hash 路由，本地面板不引路由库）：
@@ -43,11 +42,7 @@ export function App() {
     return <PreviewView id={decodeSeg(second)} navigate={navigate} />;
   }
   if (root === 'runs') {
-    return second !== undefined ? (
-      <RunDetailView id={decodeSeg(second)} navigate={navigate} />
-    ) : (
-      <RunsView navigate={navigate} />
-    );
+    return <RunsView navigate={navigate} runId={second !== undefined ? decodeSeg(second) : null} />;
   }
   return (
     <div className="app notice-page">

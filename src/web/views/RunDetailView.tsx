@@ -55,11 +55,11 @@ export function RunDetailView({ id, navigate }: RunDetailViewProps) {
 
   if (err !== null) {
     return (
-      <div className="app notice-page">
+      <div className="run-detail notice-page">
         <p>
           加载失败：{err}{' '}
           <button className="btn" onClick={() => navigate('/runs')}>
-            回监控列表
+            回任务列表
           </button>
         </p>
       </div>
@@ -67,7 +67,7 @@ export function RunDetailView({ id, navigate }: RunDetailViewProps) {
   }
   if (detail === null) {
     return (
-      <div className="app notice-page">
+      <div className="run-detail notice-page">
         <p>加载中…</p>
       </div>
     );
@@ -91,9 +91,9 @@ export function RunDetailView({ id, navigate }: RunDetailViewProps) {
   const statusChip = `run-chip chip-${running ? 'active' : detail.status === 'stale' ? 'stale' : detail.outcome === 'fail' || detail.status === 'failed' ? 'fail' : 'ok'}`;
 
   return (
-    <div className="app">
-      <header className="topbar">
-        <button className="btn icon" title="回监控列表" onClick={() => navigate('/runs')}>
+    <div className="run-detail">
+      <header className="run-detail-head">
+        <button className="btn icon" title="回任务列表" onClick={() => navigate('/runs')}>
           ←
         </button>
         <span className="topbar-title">{detail.flowName ?? detail.flowId}</span>
