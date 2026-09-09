@@ -24,12 +24,19 @@ const EXEC_STATUS: Record<string, { text: string; cls: string }> = {
   limit_exceeded: { text: '超限逃生', cls: 'warn' },
 };
 
-/** run 详情（§9.2）：快照图渲染 + 节点着色 + 路径高亮 + 右侧迭代次序列表（环的每一圈逐次列出） */
+const isSelfHeal = (r: unknown): r is { error: true; what: string; guidance: string } =>
+  typeof r === 'object' && r !== null && 'error' in r;
+
+/** run 详情（§9.2）：快照图渲染 + 节点着色 + 路径高亮 + 右侧迭代次序列表（环的每一圈逐次列出）。
+ *  卡点（§7.6）：挂在 waiting_gate 时右栏顶部显示点选卡片（source: panel）。 */
 export function RunDetailView({ id, navigate }: RunDetailViewProps) {
   const [detail, setDetail] = useState<api.RunDetail | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedExecId, setSelectedExecId] = useState<number | null>(null);
+  const [gateNote, setGateNote] = useState('');
+  const [gateBusy, setGateBusy] = useState(false);
+  const [gateErr, setGateErr] = useState<string | null>(null);
 
   const load = useCallback(() => {
     api
@@ -46,12 +53,34 @@ export function RunDetailView({ id, navigate }: RunDetailViewProps) {
     setErr(null);
     setSelectedNodeId(null);
     setSelectedExecId(null);
+    setGateNote('');
+    setGateErr(null);
     load();
     const off = api.openRunEvents(load); // SSE：该刷新了就重拉详情
     return () => {
       off();
     };
   }, [load]);
+
+  const submitGate = useCallback(
+    (optionId: string) => {
+      setGateBusy(true);
+      api
+        .answerGate(id, optionId, gateNote.trim() === '' ? undefined : gateNote)
+        .then((r) => {
+          if (isSelfHeal(r)) {
+            setGateErr(`${r.what} ${r.guidance}`);
+          } else {
+            setGateErr(null);
+            setGateNote('');
+            load();
+          }
+        })
+        .catch((e: Error) => setGateErr(e.message))
+        .finally(() => setGateBusy(false));
+    },
+    [id, gateNote, load],
+  );
 
   if (err !== null) {
     return (
@@ -123,6 +152,37 @@ export function RunDetailView({ id, navigate }: RunDetailViewProps) {
           )}
         </div>
         <aside className="right-panel run-trace-panel">
+          {detail.pendingGate !== null && (
+            <div className="gate-card">
+              <div className="gate-card-head">
+                <span className="run-chip chip-active">等人工确认</span>
+                <span className="gate-card-q">{detail.pendingGate.question}</span>
+              </div>
+              <div className="gate-card-sub">
+                卡点 {nodeTitle(detail.pendingGate.nodeId)} 在等人的答复 · 点一个选项放行
+              </div>
+              <textarea
+                className="gate-note"
+                placeholder="备注（可选，会记进轨迹）"
+                value={gateNote}
+                onChange={(e) => setGateNote(e.target.value)}
+                disabled={gateBusy}
+              />
+              <div className="gate-options">
+                {detail.pendingGate.options.map((o) => (
+                  <button
+                    key={o.id}
+                    className="gate-opt"
+                    disabled={gateBusy}
+                    onClick={() => submitGate(o.id)}
+                  >
+                    {o.label}
+                  </button>
+                ))}
+              </div>
+              {gateErr !== null && <div className="gate-err">{gateErr}</div>}
+            </div>
+          )}
           <div className="run-trace-head">
             <span className="run-trace-title">执行轨迹</span>
             {selectedNodeId !== null && (

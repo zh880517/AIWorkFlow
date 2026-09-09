@@ -80,6 +80,25 @@ export interface RunExecutionItem {
   finishedAt: string | null;
 }
 
+/** 卡点决策；未决时 optionId/decidedAt/source 为 null */
+export interface GateDecisionItem {
+  id: number;
+  nodeId: string;
+  question: string | null;
+  optionId: string | null;
+  note: string | null;
+  source: string | null;
+  decidedAt: string | null;
+}
+
+/** 当前挂起的卡点（面板点选用） */
+export interface PendingGate {
+  gateId: number;
+  nodeId: string;
+  question: string;
+  options: Array<{ id: string; label: string }>;
+}
+
 export interface FlowSnapshotView {
   rootFlowId: string;
   flows: Record<string, Flow>;
@@ -89,12 +108,25 @@ export interface RunDetail extends RunListItem {
   snapshotHash: string;
   snapshot: FlowSnapshotView | null;
   executions: RunExecutionItem[];
+  gates: GateDecisionItem[];
+  pendingGate: PendingGate | null;
 }
 
 export const listRuns = (): Promise<RunListItem[]> => req<RunListItem[]>('/runs');
 
 export const getRunDetail = (id: string): Promise<RunDetail> =>
   req<RunDetail>(`/runs/${encodeURIComponent(id)}`);
+
+/** 卡点放行（§7.6 面板通道）：返回引擎结果，SelfHealError（error:true）也走 200，由视图展示 */
+export const answerGate = (
+  runId: string,
+  optionId: string,
+  note?: string,
+): Promise<unknown> =>
+  req<unknown>(`/runs/${encodeURIComponent(runId)}/gate`, {
+    method: 'POST',
+    body: JSON.stringify({ optionId, note }),
+  });
 
 /**
  * SSE 订阅（§9.3）：事件只当"该刷新了"的信号用，收到任意事件即回调。
@@ -103,11 +135,12 @@ export const getRunDetail = (id: string): Promise<RunDetail> =>
 export function openRunEvents(onSignal: () => void): () => void {
   const es = new EventSource(`/api/events?k=${encodeURIComponent(token)}`);
   const handler = (): void => onSignal();
-  for (const t of ['hello', 'run_started', 'step_completed', 'run_finished']) {
+  const types = ['hello', 'run_started', 'step_completed', 'gate_pending', 'run_finished'];
+  for (const t of types) {
     es.addEventListener(t, handler);
   }
   return () => {
-    for (const t of ['hello', 'run_started', 'step_completed', 'run_finished']) {
+    for (const t of types) {
       es.removeEventListener(t, handler);
     }
     es.close();

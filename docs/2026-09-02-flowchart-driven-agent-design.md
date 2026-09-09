@@ -285,6 +285,14 @@ run 定位顺序：**childToken → runId → hostSession（hook 注入的 `"<ho
 
 两者都必须记录 `source`，否则事后回看轨迹无法分辨该卡点是在什么场景下放过的。
 
+实现落点（阶段 5 实测后补记）：
+
+- 下发给 Agent 的 gate 步只带 `gateId / question / options`，**不带 `branches`**——选项即出口，出口由人工选择，分支条件对 Agent 是噪音。
+- `gateId` 即 pending `gate_decisions` 行 id（数字串）；pending 期 `source` 置占位值 `pending`，放行时更新为 `panel` / `chat`。
+- 放行时除更新决策行外，还落一条 `node_executions`（`completed`，payload 含 optionId / optionLabel / note / source）：后续节点可用 `{{gateId节点.payload.optionId}}` 插值，面板轨迹也天然能看到"谁在什么场景放的行"。
+- 选项按分支的 `outlet`（其次分支 id 同名）对应出口；**选项未连线时决策保留、run 判失败**（校验器存图时以警告档 `W_GATE_OPTION_UNWIRED` 提醒）；无任何分支与 `next` 的裸卡点记录决策即隐式收尾。
+- `await_gate` 是 400ms 粒度的 DB 轮询（上限 60 秒），不依赖进程内事件——与"事件只是刷新信号"的定位一致。
+
 ### 7.7 崩溃与孤儿 run
 
 服务端重启后，库中 `status=running` 的 run 均为孤儿。**不自动清理**：标 `stale`，面板列出，用户可恢复（状态全在 SQLite，直接 `get_current_step` 即可续）或手动废弃。

@@ -177,6 +177,13 @@ function validateNode(node: FlowNode, byId: Map<string, FlowNode>, err: ErrFn, w
             err('E_TYPE_FIELD', `gate 节点 "${id}" 的 option "${opt.id}" 缺少 label`, id);
           }
         }
+        // 选项没连出口：人工选中它时 run 只能判失败（决策仍会记录），存图时先警告
+        for (const opt of node.options) {
+          const wired = (node.branches ?? []).some((b) => b.outlet === opt.id || b.id === opt.id);
+          if (!wired) {
+            warn('W_GATE_OPTION_UNWIRED', `卡点选项「${opt.label}」（${opt.id}）没有连线，人工选中它时 run 将判失败`, id);
+          }
+        }
       }
       break;
     }

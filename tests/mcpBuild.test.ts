@@ -79,7 +79,7 @@ describe('建图 MCP 端点（/mcp-build）', () => {
       try {
         const { tools: execTools } = await exec.listTools();
         const names = execTools.map((t) => t.name).sort();
-        expect(names).toEqual(['complete_step', 'get_current_step', 'list_flows', 'report_blocked', 'start_run']);
+        expect(names).toEqual(['answer_gate', 'await_gate', 'complete_step', 'get_current_step', 'list_flows', 'report_blocked', 'start_run']);
         for (const t of ['create_flow', 'update_flow', 'validate_flow', 'get_flow']) {
           expect(names).not.toContain(t);
         }

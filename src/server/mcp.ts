@@ -142,6 +142,42 @@ function buildMcpServer(deps: McpDeps, sessionId: () => string | undefined): Mcp
       text(deps.engine.reportBlocked({ ...args, hostSession: hostSessionOf(_host, _sid) }, sessionId())),
   );
 
+  server.registerTool(
+    'await_gate',
+    {
+      title: '等待人工卡点',
+      description:
+        '当前步骤是人工卡点（gate）时，长轮询等用户答复（面板点选或你在聊天里问到的答复）。每轮最多 60 秒，到点返回"仍在等待"就再调一次。用户当场答复了就别等，直接调 answer_gate 代填。',
+      inputSchema: {
+        gateId: z.string().optional().describe('卡点 id（gate 步骤下发里的 gateId；省略则按当前 run 的挂起卡点）'),
+        runId: z.string().optional().describe('run id（可省略，按 MCP 会话自动定位）'),
+        childToken: z.string().optional().describe('子 Agent 专用的身份令牌'),
+        ...injectedIdentity,
+      },
+    },
+    async ({ _host, _sid, ...args }) =>
+      text(await deps.engine.awaitGate({ ...args, hostSession: hostSessionOf(_host, _sid) }, sessionId())),
+  );
+
+  server.registerTool(
+    'answer_gate',
+    {
+      title: '代填卡点答复',
+      description:
+        '用户在聊天里答复了人工卡点（gate）的问题时，代填他的选择。面板点选会记 source: panel，这里记 source: chat，事后回看轨迹可分辨该卡点是在哪个场景放行的。',
+      inputSchema: {
+        gateId: z.string().optional().describe('卡点 id（gate 步骤下发里的 gateId；省略则按当前 run 的挂起卡点）'),
+        optionId: z.string().describe('选中的选项 id（从 gate 步骤下发的 options 里选）'),
+        note: z.string().optional().describe('用户的原话或补充说明，给人看的'),
+        runId: z.string().optional().describe('run id（可省略，按 MCP 会话自动定位）'),
+        childToken: z.string().optional().describe('子 Agent 专用的身份令牌'),
+        ...injectedIdentity,
+      },
+    },
+    async ({ _host, _sid, ...args }) =>
+      text(deps.engine.answerGate({ ...args, hostSession: hostSessionOf(_host, _sid) }, 'chat', sessionId())),
+  );
+
   return server;
 }
 

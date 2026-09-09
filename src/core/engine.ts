@@ -1,18 +1,18 @@
 // 执行引擎（设计文档 §7）。Phase 2-3 范围：串行推进 prompt / tool / end，
 // 分支求值边界（§7.3）、环与迭代上限（§4.5 iterationLimit / maxSteps）、report_blocked（§7.8）；
-// gate / subagent / join 在阶段 5-6。
+// 阶段 5：gate 卡点挂起与双通道放行（§7.6）；subagent / join 在阶段 6。
 // 三条铁律（§6.2 / §6.3 / §7.2）：
 // - 单事务推进：校验、落 node_executions、定位后继、更新 run 一个事务内完成，中途失败不推进
 // - 降噪下发：branches 剥离 to、progress 不含总数；每个响应复述 runId + nodeId
 // - 自愈式报错：所有拒绝路径返回三段式（错在哪 + 正确姿势 + 当前这一步）
 import crypto from 'node:crypto';
 import type Database from 'better-sqlite3';
-import type { Flow, FlowNode, FlowSnapshot, NodeType } from './types.js';
+import type { Flow, FlowNode, FlowSnapshot, GateNode, NodeType } from './types.js';
 import { buildSnapshot, loadSnapshot, persistSnapshot } from './snapshot.js';
 import { validateFlow } from './validate.js';
 
-/** Phase 2 支持串行推进的节点类型；其余类型在 start_run 时整体拒绝 */
-const SUPPORTED_TYPES: ReadonlySet<NodeType> = new Set(['prompt', 'tool', 'end']);
+/** 支持推进的节点类型（阶段 5 起含 gate）；subagent / join 在 start_run 时整体拒绝 */
+const SUPPORTED_TYPES: ReadonlySet<NodeType> = new Set(['prompt', 'tool', 'end', 'gate']);
 
 /** 服务端下发的循环纪律文本（§6.4：不进 Skill 文件，跟服务端版本走） */
 export const DISCIPLINE_TEXT = [
@@ -20,6 +20,7 @@ export const DISCIPLINE_TEXT = [
   '硬的一条：每步做完必须调 complete_step，否则链条断在你这里。',
   '完全放开的：执行某一步时你想多读文件、多跑命令、多查一点，随意，只要最后把结果回报。',
   '不确定自己在哪：调 get_current_step()，它幂等，随时可调。',
+  '遇到人工卡点（gate）：把问题原样转达用户，调 await_gate(gateId) 等答复（每轮 60 秒，到点就再调一次）；用户当场答复了就调 answer_gate 代填。',
   '干不下去（缺依赖、没权限、分支全不满足且没有默认出口）：调 report_blocked(reason) 如实上报，别硬编。',
 ].join('\n');
 
@@ -39,6 +40,10 @@ export interface StepView {
   /** 分支只含 id + condition，刻意剥离 to（§4.3 降噪） */
   branches?: StepBranch[];
   outcome?: 'success' | 'fail';
+  /** gate 专有（§6.2）：gateId 由此处取得，用于 await_gate / answer_gate */
+  gateId?: string;
+  question?: string;
+  options?: Array<{ id: string; label: string }>;
 }
 
 export interface StepResult {
@@ -106,10 +111,24 @@ export interface ReportBlockedParams extends RunRef {
   nodeId?: string;
 }
 
+/** answer_gate（§7.6）：代填用户在聊天中的答复（source: chat）；面板点选走 HTTP 端点（source: panel） */
+export interface AnswerGateParams extends RunRef {
+  /** 卡点 id（gate 步骤下发里的 gateId）；省略则按 run 定位当前挂起卡点 */
+  gateId?: string;
+  optionId: string;
+  note?: string;
+}
+
+/** await_gate（§7.6）：长轮询等人工答复，上限 60 秒，到点返回"仍在等待，请再调一次" */
+export interface AwaitGateParams extends RunRef {
+  gateId?: string;
+}
+
 /** 引擎事件（§9.3 SSE 的数据源）。core 层只回调不落地传输——HTTP/SSE 由 server 层接线 */
 export type EngineEvent =
   | { type: 'run_started'; runId: string; flowId: string; at: string }
   | { type: 'step_completed'; runId: string; nodeId: string; status: 'completed' | 'blocked' | 'limit_exceeded'; at: string }
+  | { type: 'gate_pending'; runId: string; nodeId: string; gateId: string; question: string; at: string }
   | { type: 'run_finished'; runId: string; outcome: 'success' | 'fail'; at: string };
 
 /** 迭代上限逃生时落的一条"未执行"轨迹 */
@@ -133,6 +152,18 @@ interface RunRow {
   current_node: string | null;
   status: string;
   steps_used: number;
+}
+
+/** gate_decisions 行；pending 时 option_id/decided_at 为 NULL、source 为占位 'pending' */
+interface GateDecisionRow {
+  id: number;
+  run_id: string;
+  node_id: string;
+  question: string | null;
+  option_id: string | null;
+  note: string | null;
+  source: string;
+  decided_at: string | null;
 }
 
 export interface EngineDeps {
@@ -176,7 +207,7 @@ export class ExecutionEngine {
       const list = unsupported.map((n) => `${n.type}（${n.title ?? n.id}）`).join('、');
       return selfHeal(
         `流程「${flow.name}」包含当前版本尚未支持的节点类型：${list}。`,
-        '换一张只含 prompt / tool / end 的流程，或在面板里删掉这些节点。gate / subagent / join 将在后续版本支持。',
+        '换一张只含 prompt / tool / gate / end 的流程，或在面板里删掉这些节点。subagent / join 将在后续版本支持。',
       );
     }
 
@@ -192,6 +223,13 @@ export class ExecutionEngine {
       )
       .run(runId, runId, flow.id, hash, flow.entry, flow.entry, params.cwd ?? null, params.projectName ?? null, params.hostSession ?? null, params.mcpSessionId ?? null, now, now);
     this.emit({ type: 'run_started', runId, flowId: flow.id, at: now });
+
+    // 入口即卡点：start 后直接挂起等人工（§7.6）
+    const entryNode = flow.nodes.find((n) => n.id === flow.entry);
+    if (entryNode !== undefined && entryNode.type === 'gate') {
+      const gateId = this.enterGate(runId, entryNode, now);
+      this.emit({ type: 'gate_pending', runId, nodeId: entryNode.id, gateId: String(gateId), question: entryNode.question, at: now });
+    }
 
     return this.stepResult(runId);
   }
@@ -219,6 +257,13 @@ export class ExecutionEngine {
           ? '这个 childToken 没有对应的 run（可能已过期或写错）。'
           : '没有找到你正在进行的 run，没法提交结果。',
         '调 start_run 开始一个流程；如果你只是想看当前进度，调 get_current_step。',
+      );
+    }
+    if (run.status === 'waiting_gate') {
+      return selfHeal(
+        'run 正挂在人工卡点上等确认，complete_step 推不动它。',
+        '调 await_gate(gateId) 等用户答复（每轮 60 秒）；用户已在聊天里答复就调 answer_gate(gateId, optionId) 代填。gateId 和选项见下面这一步。',
+        this.currentRef(run),
       );
     }
     if (run.status !== 'running') {
@@ -303,6 +348,13 @@ export class ExecutionEngine {
         '调 start_run 开始一个流程；如果你只是想看当前进度，调 get_current_step。',
       );
     }
+    if (run.status === 'waiting_gate') {
+      return selfHeal(
+        'run 正挂在人工卡点上等确认，这不是阻塞，不需要 report_blocked。',
+        '调 await_gate(gateId) 等用户答复；用户已在聊天里答复就调 answer_gate(gateId, optionId) 代填。',
+        this.currentRef(run),
+      );
+    }
     if (run.status !== 'running') {
       return this.resultForRun(run, 'report_blocked');
     }
@@ -355,6 +407,167 @@ export class ExecutionEngine {
     return this.resultForPlan(run.id, snapshot, plan);
   }
 
+  /** 卡点放行（§7.6）：面板点选（source: panel）或 Agent 代填聊天答复（source: chat）。
+   *  决策记 gate_decisions（含来源），并落一条 completed 轨迹（payload 带选项与来源）供插值与回看。 */
+  answerGate(params: AnswerGateParams, source: 'panel' | 'chat', mcpSessionId?: string): StepOpResult {
+    // 定位挂起卡点：gateId 直查；省略则按 run ref 找当前挂起点
+    let run: RunRow | null = null;
+    let row: GateDecisionRow | null = params.gateId !== undefined ? this.pendingGateById(params.gateId) : null;
+    if (row !== null) run = this.runById(row.run_id);
+    if (row === null && params.gateId !== undefined) {
+      const decided = this.gateRowById(params.gateId);
+      if (decided !== undefined) {
+        const r = this.runById(decided.run_id);
+        return selfHeal(
+          `卡点 ${params.gateId} 已经被答复过了（不能重复作答）。`,
+          '调 get_current_step() 看当前进展；如果流程又走到新的卡点，用新下发的 gateId 作答。',
+          r !== null ? this.currentOf(r) : null,
+        );
+      }
+      return selfHeal(
+        `gateId 无效：「${params.gateId}」不对应任何卡点。`,
+        'gateId 从 gate 步骤的下发内容里取；也可以省略 gateId，按当前 run 的挂起卡点作答。',
+        null,
+      );
+    }
+    if (row === null) {
+      run = this.resolveRun(params, mcpSessionId);
+      if (run === null) {
+        return selfHeal(
+          params.childToken !== undefined
+            ? '这个 childToken 没有对应的 run（可能已过期或写错）。'
+            : '没有找到你正在进行的 run，没有可作答的卡点。',
+          '调 start_run 开始一个流程；不确定在哪就先调 get_current_step。',
+        );
+      }
+      if (run.current_node !== null) row = this.pendingDecisionOf(run.id, run.current_node);
+      if (row === null) {
+        return selfHeal(
+          `run ${run.id} 当前不在人工卡点上（状态 ${run.status}），没有可作答的问题。`,
+          '调 get_current_step() 看当前这一步是什么。',
+          this.currentOf(run),
+        );
+      }
+    }
+    if (run === null || row === null) {
+      return selfHeal('卡点数据异常：找不到所属 run。', '这是服务端数据问题，请把这条错误原样反馈给用户。', null);
+    }
+
+    const snapshot = this.snapshotOf(run);
+    const node = findNode(snapshot, row.node_id);
+    if (node === undefined || node.type !== 'gate') {
+      return selfHeal(
+        `卡点数据异常：快照里 ${row.node_id} 不是 gate 节点（run ${run.id}）。`,
+        '这是服务端数据问题，请把这条错误原样反馈给用户。',
+        null,
+      );
+    }
+    const option = node.options.find((o) => o.id === params.optionId);
+    if (option === undefined) {
+      const valid = node.options.map((o) => `${o.id}（${o.label}）`).join('、');
+      return selfHeal(
+        `optionId 无效：你给的是「${params.optionId ?? '（缺失）'}」。卡点 ${node.id} 的问题是「${node.question}」，合法选项：${valid}。`,
+        '重新调 answer_gate，optionId 从上面列表里选；或把问题原样转给用户再等答复。',
+        { runId: run.id, step: this.buildStepView(run, node) },
+      );
+    }
+
+    const maxSteps = this.maxStepsOf(snapshot);
+    if (run.steps_used >= maxSteps) {
+      const now = new Date().toISOString();
+      this.db.transaction((): void => {
+        this.decideGateRow(row.id, option.id, params.note ?? null, source, now);
+        this.db
+          .prepare(`UPDATE runs SET status = 'failed', outcome = 'fail', last_activity = ?, finished_at = ? WHERE id = ?`)
+          .run(now, now, run.id);
+      })();
+      this.emit({ type: 'run_finished', runId: run.id, outcome: 'fail', at: now });
+      return this.finishedResult(run.id, 'fail', `已超出全局步数上限（${maxSteps} 步），答复已记录但 run 判失败。`);
+    }
+
+    // 出口解析：选项 → 出口连线（outlet 匹配，兜底分支 id 同名）；没连线的选项记录决策后判失败（校验器存图时会警告）
+    const branches = node.branches ?? [];
+    const matched = branches.find((b) => b.outlet === option.id) ?? branches.find((b) => b.id === option.id);
+    let successorId: string | null;
+    let branchId: string | null = matched?.id ?? null;
+    if (matched !== undefined) {
+      successorId = matched.to;
+    } else if (branches.length === 0 && node.next !== undefined) {
+      successorId = node.next;
+    } else if (branches.length === 0) {
+      successorId = null; // 裸卡点：记录决策即隐式收尾
+    } else {
+      successorId = null;
+    }
+
+    const now = new Date().toISOString();
+    const gateRow = {
+      nodeId: node.id,
+      status: 'completed' as const,
+      summary: `人工确认：${option.label}（${source === 'panel' ? '面板点选' : '聊天代填'}）`,
+      payload: JSON.stringify({ optionId: option.id, optionLabel: option.label, note: params.note ?? null, source }),
+      branchId,
+    };
+    if (branches.length > 0 && matched === undefined) {
+      const reason = `卡点 ${node.id} 的选项「${option.label}」（${option.id}）没有连线，决策已记录但无法推进，run 判失败。`;
+      this.advanceTransaction(run, snapshot, { kind: 'fail', reason }, gateRow, now, {
+        decisionId: row.id,
+        optionId: option.id,
+        note: params.note ?? null,
+        source,
+      });
+      return this.finishedResult(run.id, 'fail', `人工选了「${option.label}」，但该选项在图上没有连线，run 判失败。请把选项连上出口后重新 start_run。`);
+    }
+    const plan: AdvanceOutcome =
+      successorId === null
+        ? { kind: 'advance', targetId: null, limitRows: [] }
+        : this.resolveAdvance(run, snapshot, successorId);
+    this.advanceTransaction(run, snapshot, plan, gateRow, now, {
+      decisionId: row.id,
+      optionId: option.id,
+      note: params.note ?? null,
+      source,
+    });
+    return this.resultForPlan(run.id, snapshot, plan);
+  }
+
+  /** 长轮询等卡点答复（§7.6）：上限默认 60 秒，到点返回"仍在等待，请再调一次"；已答复（或已不在卡点）返回当前状态 */
+  async awaitGate(params: AwaitGateParams, mcpSessionId?: string, timeoutMs = 60_000): Promise<StepOpResult> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      let row: GateDecisionRow | null = params.gateId !== undefined ? this.pendingGateById(params.gateId) : null;
+      let run: RunRow | null = row !== null ? this.runById(row.run_id) : this.resolveRun(params, mcpSessionId);
+      if (row !== null && run === null) {
+        return selfHeal(`卡点 ${row.id} 所属的 run 不存在（${row.run_id}），数据异常。`, '这是服务端数据问题，请把这条错误原样反馈给用户。', null);
+      }
+      if (run === null) {
+        return selfHeal(
+          params.childToken !== undefined
+            ? '这个 childToken 没有对应的 run（可能已过期或写错）。'
+            : '没有找到你正在进行的 run，也没有可等待的卡点。',
+          '先调 start_run 开始流程，或 get_current_step 确认状态。',
+        );
+      }
+      if (row === null && run.status === 'waiting_gate' && run.current_node !== null) {
+        row = this.pendingDecisionOf(run.id, run.current_node);
+      }
+      if (row === null) {
+        // 不在卡点上：多半是刚被放行（含 gateId 已答完），返回已推进的当前状态
+        return this.resultForRun(run, 'await_gate');
+      }
+      if (Date.now() >= deadline) {
+        const step = this.stepResult(run.id);
+        return 'step' in step
+          ? {
+              ...step,
+              note: `仍在等待人工确认（等待了 ${Math.round(timeoutMs / 1000)} 秒到点）。请再调一次 await_gate 继续等；用户若已在本对话答复，调 answer_gate(gateId, optionId) 代填。`,
+            }
+          : step;
+      }
+      await sleep(Math.min(400, Math.max(1, deadline - Date.now())));
+    }
+  }
+
   // ---- 内部 ----
 
   private resultForRun(run: RunRow, via: string): StepOpResult {
@@ -391,12 +604,16 @@ export class ExecutionEngine {
         null,
       );
     }
-    return {
+    const result: StepResult = {
       runId: run.id,
       step: this.buildStepView(run, node),
       discipline: DISCIPLINE_TEXT,
       progress: { completed: this.completedCount(run.id) },
     };
+    if (node.type === 'gate') {
+      result.note = '人工卡点：run 已挂起等确认。把问题转达用户后调 await_gate(gateId) 等待（每轮 60 秒）；用户已在聊天里答复就调 answer_gate(gateId, optionId) 代填。';
+    }
+    return result;
   }
 
   private finishedResult(runId: string, outcome: 'success' | 'fail', note?: string): RunFinishedResult {
@@ -422,7 +639,14 @@ export class ExecutionEngine {
       nodeId: node.id,
       kind: node.type,
       title: node.title?.trim() !== '' && node.title !== undefined ? node.title : node.id,
-      instruction: this.render(node.instruction ?? '', run.id),
+      instruction: this.render(
+        node.instruction?.trim() !== '' && node.instruction !== undefined
+          ? node.instruction
+          : node.type === 'gate'
+            ? '人工卡点：把问题原样转达用户，等他答复。'
+            : '',
+        run.id,
+      ),
     };
     if (node.type === 'tool') {
       view.tool = {
@@ -430,7 +654,8 @@ export class ExecutionEngine {
         params: renderParams(node.params ?? {}, (text) => this.render(text, run.id)),
       };
     }
-    if ((node.branches ?? []).length > 0) {
+    // gate 不下发 branches：选项即出口（options），人工选择，Agent 无需分支条件（降噪）
+    if ((node.branches ?? []).length > 0 && node.type !== 'gate') {
       view.branches = node.branches!.map((b) => ({
         id: b.id,
         condition: b.condition === '*' ? '默认：其他分支都不满足时走这条' : b.condition,
@@ -438,6 +663,12 @@ export class ExecutionEngine {
     }
     if (node.type === 'end') {
       view.outcome = node.outcome;
+    }
+    if (node.type === 'gate') {
+      const pending = this.pendingDecisionOf(run.id, node.id);
+      if (pending !== null) view.gateId = String(pending.id);
+      view.question = node.question;
+      view.options = node.options.map((o) => ({ id: o.id, label: o.label }));
     }
     return view;
   }
@@ -520,6 +751,72 @@ export class ExecutionEngine {
     return this.runBy('id = ?', runId);
   }
 
+  // ---- 卡点（§7.6）----
+
+  /** gateId → 未决（pending）决策行；不是数字、不存在或已决都返回 null */
+  private pendingGateById(gateId: string): GateDecisionRow | null {
+    const id = Number.parseInt(gateId, 10);
+    if (!Number.isInteger(id) || id <= 0) return null;
+    return (
+      (this.db.prepare('SELECT * FROM gate_decisions WHERE id = ? AND decided_at IS NULL').get(id) as
+        | GateDecisionRow
+        | undefined) ?? null
+    );
+  }
+
+  /** gateId → 决策行（不论已决与否） */
+  private gateRowById(gateId: string): { run_id: string } | undefined {
+    const id = Number.parseInt(gateId, 10);
+    if (!Number.isInteger(id) || id <= 0) return undefined;
+    return this.db.prepare('SELECT run_id FROM gate_decisions WHERE id = ?').get(id) as { run_id: string } | undefined;
+  }
+
+  /** run + 节点 → 最近一条未决决策行 */
+  private pendingDecisionOf(runId: string, nodeId: string): GateDecisionRow | null {
+    return (
+      (this.db
+        .prepare(
+          'SELECT * FROM gate_decisions WHERE run_id = ? AND node_id = ? AND decided_at IS NULL ORDER BY id DESC LIMIT 1',
+        )
+        .get(runId, nodeId) as GateDecisionRow | undefined) ?? null
+    );
+  }
+
+  /** 写 pending 决策行（在事务内调用）；source 先占位 'pending'，放行时更新为真实通道 */
+  private insertPendingGate(runId: string, node: GateNode): number {
+    const info = this.db
+      .prepare(
+        "INSERT INTO gate_decisions (run_id, node_id, question, option_id, note, source, decided_at) VALUES (?, ?, ?, NULL, NULL, 'pending', NULL)",
+      )
+      .run(runId, node.id, node.question);
+    return Number(info.lastInsertRowid);
+  }
+
+  /** run 直接落在卡点上（入口即 gate）：挂起 + 写 pending，独立事务 */
+  private enterGate(runId: string, node: GateNode, now: string): number {
+    return this.db.transaction((): number => {
+      this.db
+        .prepare(`UPDATE runs SET status = 'waiting_gate', last_activity = ? WHERE id = ?`)
+        .run(now, runId);
+      return this.insertPendingGate(runId, node);
+    })();
+  }
+
+  /** 放行：决策行落选项、备注、来源与时间（在事务内调用） */
+  private decideGateRow(decisionId: number, optionId: string, note: string | null, source: 'panel' | 'chat', now: string): void {
+    this.db
+      .prepare('UPDATE gate_decisions SET option_id = ?, note = ?, source = ?, decided_at = ? WHERE id = ?')
+      .run(optionId, note, source, now, decisionId);
+  }
+
+  /** 自愈三段式的 current：终结态给 finished 形态，其余给当前步 */
+  private currentOf(run: RunRow): SelfHealError['current'] {
+    if (run.status === 'completed' || run.status === 'failed' || run.status === 'stale') {
+      return { runId: run.id, finished: true, outcome: this.runOutcome(run) };
+    }
+    return this.currentRef(run);
+  }
+
   /** 解析最终推进目标（§4.5）：目标撞 iterationLimit 时不执行它，落 limit_exceeded 轨迹并改走 onLimitExceeded；
    *  无逃生出口判失败。校验器已保证逃生边可达终点，逃生链成环只是防御性兜底。 */
   private resolveAdvance(run: RunRow, snapshot: FlowSnapshot, successorId: string): AdvanceOutcome {
@@ -553,17 +850,21 @@ export class ExecutionEngine {
     return { kind: 'advance', targetId: null, limitRows };
   }
 
-  /** 单事务推进：落本步轨迹（completed / blocked）+ 迭代逃生轨迹 + 更新 run 指针/状态，任何一步失败整体回滚。
-   *  事件在事务提交后才发（事务内只收集），回滚不会产生假事件。 */
+  /** 单事务推进：落本步轨迹（completed / blocked）+ 迭代逃生轨迹 + 卡点决策更新 + 更新 run 指针/状态，任何一步失败整体回滚。
+   *  目标是 gate 时置 waiting_gate 并写 pending 卡点决策（§7.6）。事件在事务提交后才发（事务内只收集），回滚不会产生假事件。 */
   private advanceTransaction(
     run: RunRow,
     snapshot: FlowSnapshot,
     plan: AdvanceOutcome,
     first: { nodeId: string; status: 'completed' | 'blocked'; summary: string; payload: string; branchId: string | null },
     now: string,
+    gate?: { decisionId: number; optionId: string; note: string | null; source: 'panel' | 'chat' },
   ): void {
     const events: EngineEvent[] = [{ type: 'step_completed', runId: run.id, nodeId: first.nodeId, status: first.status, at: now }];
     this.db.transaction((): void => {
+      if (gate !== undefined) {
+        this.decideGateRow(gate.decisionId, gate.optionId, gate.note, gate.source, now);
+      }
       const insert = this.db.prepare(
         `INSERT INTO node_executions (run_id, node_id, iteration, status, summary, payload, branch_id, started_at, finished_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -596,9 +897,17 @@ export class ExecutionEngine {
           .prepare(`UPDATE runs SET current_node = ?, status = 'completed', outcome = ?, steps_used = ?, last_activity = ?, finished_at = ? WHERE id = ?`)
           .run(target.id, target.outcome, stepsUsed, now, now, run.id);
         events.push({ type: 'run_finished', runId: run.id, outcome: target.outcome, at: now });
-      } else {
+      } else if (target !== undefined && target.type === 'gate') {
+        // 卡点（§7.6）：挂起等人工，写 pending 决策行
         this.db
-          .prepare(`UPDATE runs SET current_node = ?, steps_used = ?, last_activity = ? WHERE id = ?`)
+          .prepare(`UPDATE runs SET current_node = ?, status = 'waiting_gate', steps_used = ?, last_activity = ? WHERE id = ?`)
+          .run(target.id, stepsUsed, now, run.id);
+        const gateId = this.insertPendingGate(run.id, target);
+        events.push({ type: 'gate_pending', runId: run.id, nodeId: target.id, gateId: String(gateId), question: target.question, at: now });
+      } else {
+        // 普通推进：status 显式回 running——从卡点放行出来时 run 还挂着 waiting_gate
+        this.db
+          .prepare(`UPDATE runs SET current_node = ?, status = 'running', steps_used = ?, last_activity = ? WHERE id = ?`)
           .run(plan.targetId, stepsUsed, now, run.id);
       }
     })();
@@ -624,7 +933,10 @@ export class ExecutionEngine {
       return this.finishedResult(runId, target.outcome, escapeNote);
     }
     const step = this.stepResult(runId);
-    return escapeNote !== undefined && 'step' in step ? { ...step, note: escapeNote } : step;
+    if (escapeNote !== undefined && 'step' in step) {
+      return { ...step, note: step.note !== undefined ? `${escapeNote}${step.note}` : escapeNote };
+    }
+    return step;
   }
 
   /** 该节点在本次 run 里的轨迹条数（completed / blocked / limit_exceeded 都算占了一次迭代） */
@@ -679,4 +991,9 @@ function selfHeal(
   current: SelfHealError['current'] = null,
 ): SelfHealError {
   return { error: true, what, guidance, current };
+}
+
+/** await_gate 轮询间隔让出事件循环（better-sqlite3 同步查询本身不阻塞） */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

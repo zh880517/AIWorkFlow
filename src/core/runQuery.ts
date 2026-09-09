@@ -36,12 +36,37 @@ export interface RunExecutionItem {
   finishedAt: string | null;
 }
 
+/** 卡点决策（§5.3 gate_decisions）；未决时 optionId/decidedAt/source 为 null */
+export interface GateDecisionItem {
+  /** 即下发给 Agent 的 gateId */
+  id: number;
+  nodeId: string;
+  question: string | null;
+  optionId: string | null;
+  note: string | null;
+  /** 'panel' | 'chat' | 'pending'（未决占位） */
+  source: string | null;
+  decidedAt: string | null;
+}
+
+/** 当前挂起的卡点（阶段 5 面板点选用）；options 从快照 gate 节点解析 */
+export interface PendingGate {
+  gateId: number;
+  nodeId: string;
+  question: string;
+  options: Array<{ id: string; label: string }>;
+}
+
 export interface RunDetail extends RunListItem {
   snapshotHash: string;
   /** run 实际执行的那份快照图（copy-on-run，§5.2）；详情渲染用它而不是当前图 */
   snapshot: FlowSnapshot | null;
   /** 按 id 升序 = 发生顺序 */
   executions: RunExecutionItem[];
+  /** 全部卡点决策（含未决），按 id 升序 */
+  gates: GateDecisionItem[];
+  /** run 正挂在卡点上等确认时有值 */
+  pendingGate: PendingGate | null;
 }
 
 interface RunRowJoined {
@@ -92,10 +117,37 @@ export function getRunDetail(db: Database.Database, runId: string): RunDetail | 
     started_at: string | null;
     finished_at: string | null;
   }>;
+  const snapshot = loadSnapshot(db, row.flow_snapshot_hash) ?? null;
+  const gateRows = db
+    .prepare('SELECT id, node_id, question, option_id, note, source, decided_at FROM gate_decisions WHERE run_id = ? ORDER BY id')
+    .all(runId) as Array<{
+    id: number;
+    node_id: string;
+    question: string | null;
+    option_id: string | null;
+    note: string | null;
+    source: string;
+    decided_at: string | null;
+  }>;
+  // 面板点选（§7.6）：挂起中的卡点带选项（从快照 gate 节点解析；快照丢失时选项为空仍可展示问题）
+  const pendingRow =
+    row.status === 'waiting_gate' && row.current_node !== null
+      ? gateRows.find((g) => g.node_id === row.current_node && g.decided_at === null)
+      : undefined;
+  let pendingGate: PendingGate | null = null;
+  if (pendingRow !== undefined) {
+    const node = snapshot?.flows[snapshot.rootFlowId]?.nodes.find((n) => n.id === pendingRow.node_id);
+    pendingGate = {
+      gateId: pendingRow.id,
+      nodeId: pendingRow.node_id,
+      question: pendingRow.question ?? '',
+      options: node !== undefined && node.type === 'gate' ? node.options.map((o) => ({ id: o.id, label: o.label })) : [],
+    };
+  }
   return {
     ...toListItem(row),
     snapshotHash: row.flow_snapshot_hash,
-    snapshot: loadSnapshot(db, row.flow_snapshot_hash) ?? null,
+    snapshot,
     executions: executions.map((e) => ({
       id: e.id,
       nodeId: e.node_id,
@@ -107,6 +159,16 @@ export function getRunDetail(db: Database.Database, runId: string): RunDetail | 
       startedAt: e.started_at,
       finishedAt: e.finished_at,
     })),
+    gates: gateRows.map((g) => ({
+      id: g.id,
+      nodeId: g.node_id,
+      question: g.question,
+      optionId: g.option_id,
+      note: g.note,
+      source: g.decided_at === null ? null : g.source,
+      decidedAt: g.decided_at,
+    })),
+    pendingGate,
   };
 }
 

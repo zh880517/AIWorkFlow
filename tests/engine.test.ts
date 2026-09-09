@@ -89,13 +89,76 @@ function gateFlow(): Flow {
     name: '卡点图',
     entry: 'n1',
     nodes: [
+      { id: 'n1', type: 'prompt', instruction: '准备发布', next: 'n_gate' },
       {
-        id: 'n1',
+        id: 'n_gate',
         type: 'gate',
+        title: '发布确认',
         question: '可以发布吗？',
-        options: [{ id: 'opt1', label: '可以' }],
+        options: [
+          { id: 'opt_go', label: '可以发布' },
+          { id: 'opt_stop', label: '先不发布' },
+        ],
+        branches: [
+          { id: 'b_go', condition: '可以发布', to: 'n_ok', outlet: 'opt_go' },
+          { id: 'b_stop', condition: '先不发布', to: 'n_bad', outlet: 'opt_stop' },
+        ],
+      },
+      { id: 'n_ok', type: 'end', outcome: 'success' },
+      { id: 'n_bad', type: 'end', outcome: 'fail' },
+    ],
+  };
+}
+
+/** 入口即卡点（无 branches，走 next） */
+function entryGateFlow(): Flow {
+  return {
+    id: 'f_entry_gate',
+    name: '入口卡点图',
+    entry: 'n_gate',
+    nodes: [
+      {
+        id: 'n_gate',
+        type: 'gate',
+        question: '要开始吗？',
+        options: [{ id: 'opt_yes', label: '开始' }],
         next: 'n2',
       },
+      { id: 'n2', type: 'end', outcome: 'success' },
+    ],
+  };
+}
+
+/** 裸卡点：选项没连任何出口（校验器警告档），决策后判失败 */
+function unwiredGateFlow(): Flow {
+  return {
+    id: 'f_unwired_gate',
+    name: '未连线卡点图',
+    entry: 'n_gate',
+    nodes: [
+      {
+        id: 'n_gate',
+        type: 'gate',
+        question: '选哪条路？',
+        options: [
+          { id: 'opt_a', label: 'A 路' },
+          { id: 'opt_b', label: 'B 路' },
+        ],
+        branches: [{ id: 'b_a', condition: 'A 路', to: 'n_end', outlet: 'opt_a' }],
+      },
+      { id: 'n_end', type: 'end', outcome: 'success' },
+    ],
+  };
+}
+
+/** 未支持类型（subagent / join 在阶段 6） */
+function subagentFlow(): Flow {
+  return {
+    id: 'f_subagent',
+    name: '子代理图',
+    entry: 'n1',
+    nodes: [
+      { id: 'n1', type: 'subagent', extraPrompt: '干活', mode: 'inline', next: 'n2' },
       { id: 'n2', type: 'end', outcome: 'success' },
     ],
   };
@@ -178,7 +241,7 @@ function blockedNoExitFlow(): Flow {
   };
 }
 
-function makeEngine(flows: Flow[], onEvent?: (event: EngineEvent) => void): { engine: ExecutionEngine; store: FlowStore } {
+function makeEngine(flows: Flow[], onEvent?: (event: EngineEvent) => void): { engine: ExecutionEngine; store: FlowStore; db: import('better-sqlite3').Database } {
   const db = openMemoryDb();
   const store = new FlowStore(db, path.join(tmpHome, `flows-${Math.random().toString(36).slice(2)}`));
   for (const f of flows) {
@@ -186,6 +249,7 @@ function makeEngine(flows: Flow[], onEvent?: (event: EngineEvent) => void): { en
     if (!r.ok) throw new Error(`fixture 校验失败：${JSON.stringify(r.errors)}`);
   }
   return {
+    db,
     engine: new ExecutionEngine({ db, resolveFlow: (n) => store.resolve(n), ...(onEvent !== undefined ? { onEvent } : {}) }),
     store,
   };
@@ -235,12 +299,12 @@ describe('start_run', () => {
     expect(r.current).toBeNull();
   });
 
-  it('含 gate 等未支持类型 → start_run 整体拒绝', () => {
-    const { engine } = makeEngine([gateFlow()]);
-    const r = engine.startRun({ flowName: '卡点图' });
+  it('含 subagent 等未支持类型 → start_run 整体拒绝', () => {
+    const { engine } = makeEngine([subagentFlow()]);
+    const r = engine.startRun({ flowName: '子代理图' });
     expect(isErr(r)).toBe(true);
     if (!isErr(r)) return;
-    expect(r.what).toContain('gate');
+    expect(r.what).toContain('subagent');
   });
 
   it('同一张图的 run 互不影响：各自持有快照', () => {
@@ -804,5 +868,255 @@ describe('引擎事件（§9.3 SSE 数据源）', () => {
     expect(events.map((e) => e.type)).toEqual(['run_started', 'step_completed', 'run_finished']);
     expect(events[1]).toMatchObject({ status: 'blocked' });
     expect(events[2]).toMatchObject({ outcome: 'fail' });
+  });
+});
+
+
+// ---- gate 卡点（§7.6，阶段 5）----
+
+describe('gate 卡点（§7.6）', () => {
+  /** 跑到卡点：返回 { runId, gateId } */
+  function toGate(engine: ExecutionEngine): { runId: string; gateId: string } {
+    const start = engine.startRun({ flowName: '卡点图' });
+    if (!isStep(start)) throw new Error('start 失败');
+    const r = engine.completeStep({ runId: start.runId, summary: '准备好了' });
+    if (!isStep(r) || r.step.gateId === undefined) throw new Error(`应推进到 gate：${JSON.stringify(r)}`);
+    return { runId: start.runId, gateId: r.step.gateId };
+  }
+
+  it('推进进 gate：run 挂起 waiting_gate，step 带 gateId/question/options 与等待提示', () => {
+    const { engine, db } = makeEngine([gateFlow()]);
+    const { runId, gateId } = toGate(engine);
+    // 下发形态（§6.2）：gate 专有字段；选项即出口，不下发 branches（降噪）
+    const r = engine.getCurrentStep({ runId });
+    if (!isStep(r)) throw new Error('get 应返回 gate 步');
+    expect(r.step.kind).toBe('gate');
+    expect(r.step.nodeId).toBe('n_gate');
+    expect(r.step.gateId).toBe(gateId);
+    expect(r.step.question).toBe('可以发布吗？');
+    expect(r.step.options).toEqual([
+      { id: 'opt_go', label: '可以发布' },
+      { id: 'opt_stop', label: '先不发布' },
+    ]);
+    expect(r.step.branches).toBeUndefined();
+    expect(r.note).toContain('await_gate');
+    // 库：run 状态 + pending 决策行
+    const run = db.prepare('SELECT status, current_node FROM runs WHERE id = ?').get(runId) as {
+      status: string;
+      current_node: string;
+    };
+    expect(run).toMatchObject({ status: 'waiting_gate', current_node: 'n_gate' });
+    const pending = db
+      .prepare('SELECT node_id, question, option_id, decided_at FROM gate_decisions WHERE run_id = ? AND decided_at IS NULL')
+      .get(runId) as { node_id: string; question: string; option_id: string | null; decided_at: string | null };
+    expect(pending).toMatchObject({ node_id: 'n_gate', question: '可以发布吗？', option_id: null, decided_at: null });
+  });
+
+  it('面板通道放行（source: panel）：按选项 outlet 分支推进，决策与轨迹都记录来源', () => {
+    const { engine, db } = makeEngine([gateFlow()]);
+    const { runId } = toGate(engine);
+    const r = engine.answerGate({ runId, optionId: 'opt_go', note: '用户在面板点的' }, 'panel');
+    if (!isFinished(r)) throw new Error(`应终结：${JSON.stringify(r)}`);
+    expect(r.outcome).toBe('success');
+    const decision = db
+      .prepare('SELECT option_id, note, source, decided_at FROM gate_decisions WHERE run_id = ?')
+      .get(runId) as { option_id: string; note: string; source: string; decided_at: string | null };
+    expect(decision).toMatchObject({ option_id: 'opt_go', note: '用户在面板点的', source: 'panel' });
+    expect(decision.decided_at).not.toBeNull();
+    // 卡点决策也落一条 completed 轨迹（供插值与回看）
+    const exec = db
+      .prepare("SELECT status, summary, payload, branch_id FROM node_executions WHERE run_id = ? AND node_id = 'n_gate'")
+      .get(runId) as { status: string; summary: string; payload: string; branch_id: string };
+    expect(exec.status).toBe('completed');
+    expect(exec.summary).toContain('可以发布');
+    expect(exec.summary).toContain('面板');
+    expect(JSON.parse(exec.payload)).toMatchObject({ optionId: 'opt_go', source: 'panel' });
+    expect(exec.branch_id).toBe('b_go');
+  });
+
+  it('聊天通道代填（source: chat）：沿另一选项推进到 fail 终点', () => {
+    const { engine, db } = makeEngine([gateFlow()]);
+    const { runId } = toGate(engine);
+    const r = engine.answerGate({ runId, optionId: 'opt_stop' }, 'chat');
+    if (!isFinished(r)) throw new Error('应终结');
+    expect(r.outcome).toBe('fail');
+    const decision = db.prepare('SELECT option_id, source FROM gate_decisions WHERE run_id = ?').get(runId) as {
+      option_id: string;
+      source: string;
+    };
+    expect(decision).toMatchObject({ option_id: 'opt_stop', source: 'chat' });
+  });
+
+  it('挂起时 complete_step / report_blocked → 自愈指向 await_gate / answer_gate，不推进', () => {
+    const { engine } = makeEngine([gateFlow()]);
+    const { runId } = toGate(engine);
+    const c = engine.completeStep({ runId, summary: '想硬推' });
+    expect(isErr(c)).toBe(true);
+    if (isErr(c)) {
+      expect(c.guidance).toContain('await_gate');
+      expect(c.guidance).toContain('answer_gate');
+    }
+    const b = engine.reportBlocked({ runId, reason: '等不及了' });
+    expect(isErr(b)).toBe(true);
+    // run 仍在卡点上
+    const cur = engine.getCurrentStep({ runId });
+    expect(isStep(cur) && cur.step.kind === 'gate').toBe(true);
+  });
+
+  it('optionId 非法 → 自愈列出合法选项，不落库不推进', () => {
+    const { engine, db } = makeEngine([gateFlow()]);
+    const { runId } = toGate(engine);
+    const r = engine.answerGate({ runId, optionId: 'opt_没这个' }, 'panel');
+    expect(isErr(r)).toBe(true);
+    if (!isErr(r)) return;
+    expect(r.what).toContain('opt_go');
+    expect(r.what).toContain('opt_stop');
+    const run = db.prepare('SELECT status FROM runs WHERE id = ?').get(runId) as { status: string };
+    expect(run.status).toBe('waiting_gate');
+    const decided = db
+      .prepare('SELECT COUNT(*) AS c FROM gate_decisions WHERE run_id = ? AND decided_at IS NOT NULL')
+      .get(runId) as { c: number };
+    expect(decided.c).toBe(0);
+  });
+
+  it('gateId 已被答复再作答 → 自愈（附当前状态，不重复推进）', () => {
+    const { engine } = makeEngine([gateFlow()]);
+    const { runId, gateId } = toGate(engine);
+    const first = engine.answerGate({ runId, gateId, optionId: 'opt_go' }, 'panel');
+    expect(isFinished(first)).toBe(true);
+    const again = engine.answerGate({ runId, gateId, optionId: 'opt_stop' }, 'chat');
+    expect(isErr(again)).toBe(true);
+    if (!isErr(again)) return;
+    expect(again.what).toContain('已经被答复');
+  });
+
+  it('await_gate：等待中被面板放行 → 醒来返回放行后的终结态', async () => {
+    const { engine } = makeEngine([gateFlow()]);
+    const { runId, gateId } = toGate(engine);
+    const waiting = engine.awaitGate({ runId, gateId }, undefined, 5_000);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const panel = engine.answerGate({ runId, optionId: 'opt_go' }, 'panel');
+    expect(isFinished(panel)).toBe(true);
+    const r = await waiting;
+    if (!isFinished(r)) throw new Error(`应返回终结态：${JSON.stringify(r)}`);
+    expect(r.outcome).toBe('success');
+  });
+
+  it('await_gate 超时 → 返回 gate 步 + "仍在等待"提示，run 仍挂起', async () => {
+    const { engine, db } = makeEngine([gateFlow()]);
+    const { runId, gateId } = toGate(engine);
+    const r = await engine.awaitGate({ runId, gateId }, undefined, 120);
+    if (!isStep(r)) throw new Error('超时应返回 gate 步');
+    expect(r.step.gateId).toBe(gateId);
+    expect(r.note).toContain('仍在等待');
+    const run = db.prepare('SELECT status FROM runs WHERE id = ?').get(runId) as { status: string };
+    expect(run.status).toBe('waiting_gate');
+  });
+
+  it('await_gate：放行后再调 → 直接返回当前状态（幂等，不再等 60 秒）', async () => {
+    const { engine } = makeEngine([gateFlow()]);
+    const { runId, gateId } = toGate(engine);
+    engine.answerGate({ runId, optionId: 'opt_go' }, 'panel');
+    const r = await engine.awaitGate({ runId, gateId }, undefined, 60_000);
+    if (!isFinished(r)) throw new Error('应返回终结态');
+    expect(r.outcome).toBe('success');
+  });
+
+  it('入口即 gate：start_run 直接挂起（waiting_gate + pending）', () => {
+    const { engine, db } = makeEngine([entryGateFlow()]);
+    const r = engine.startRun({ flowName: '入口卡点图' });
+    if (!isStep(r)) throw new Error('start 失败');
+    expect(r.step.kind).toBe('gate');
+    expect(r.step.gateId).toMatch(/^\d+$/);
+    expect(r.note).toContain('await_gate');
+    const run = db.prepare('SELECT status FROM runs WHERE id = ?').get(r.runId) as { status: string };
+    expect(run.status).toBe('waiting_gate');
+    // 无 branches 的卡点：选项即唯一出口，放行走 next
+    const done = engine.answerGate({ runId: r.runId, optionId: 'opt_yes' }, 'chat');
+    if (!isFinished(done)) throw new Error('应终结');
+    expect(done.outcome).toBe('success');
+  });
+
+  it('选项没连线：决策记录在案，run 判失败（note 说明）', () => {
+    const { engine, db } = makeEngine([unwiredGateFlow()]);
+    const start = engine.startRun({ flowName: '未连线卡点图' });
+    if (!isStep(start)) throw new Error('start 失败');
+    const r = engine.answerGate({ runId: start.runId, optionId: 'opt_b' }, 'panel');
+    if (!isFinished(r)) throw new Error('应判失败');
+    expect(r.outcome).toBe('fail');
+    expect(r.note).toContain('没有连线');
+    // 人的决策仍然记录在案（含来源）
+    const decision = db
+      .prepare('SELECT option_id, source, decided_at FROM gate_decisions WHERE run_id = ?')
+      .get(start.runId) as { option_id: string; source: string; decided_at: string | null };
+    expect(decision).toMatchObject({ option_id: 'opt_b', source: 'panel' });
+    expect(decision.decided_at).not.toBeNull();
+  });
+
+  it('裸卡点（无分支无 next）：记录决策即隐式收尾 success', () => {
+    const bare: Flow = {
+      id: 'f_bare_gate',
+      name: '裸卡点图',
+      entry: 'n_gate',
+      nodes: [{ id: 'n_gate', type: 'gate', question: '到头了吗？', options: [{ id: 'opt_yes', label: '到了' }] }],
+    };
+    const { engine } = makeEngine([bare]);
+    const start = engine.startRun({ flowName: '裸卡点图' });
+    if (!isStep(start)) throw new Error('start 失败');
+    const r = engine.answerGate({ runId: start.runId, optionId: 'opt_yes' }, 'chat');
+    if (!isFinished(r)) throw new Error('应隐式收尾');
+    expect(r.outcome).toBe('success');
+  });
+
+  it('卡点放行后继续执行中间节点直到终点（回归：放行要把 status 从 waiting_gate 拨回 running）', () => {
+    const flow: Flow = {
+      id: 'f_gate_mid',
+      name: '卡点后中间节点图',
+      entry: 'n1',
+      nodes: [
+        { id: 'n1', type: 'prompt', instruction: '准备', next: 'n_gate' },
+        {
+          id: 'n_gate',
+          type: 'gate',
+          question: '继续吗？',
+          options: [{ id: 'opt_yes', label: '继续' }],
+          next: 'n_mid',
+        },
+        { id: 'n_mid', type: 'prompt', instruction: '收尾工作', next: 'n_ok' },
+        { id: 'n_ok', type: 'end', outcome: 'success' },
+      ],
+    };
+    const { engine, db } = makeEngine([flow]);
+    const start = engine.startRun({ flowName: '卡点后中间节点图' });
+    if (!isStep(start)) throw new Error('start 失败');
+    engine.completeStep({ runId: start.runId, summary: '准备好了' });
+    const released = engine.answerGate({ runId: start.runId, optionId: 'opt_yes' }, 'panel');
+    if (!isStep(released)) throw new Error(`放行应到中间节点：${JSON.stringify(released)}`);
+    expect(released.step.nodeId).toBe('n_mid');
+    const run = db.prepare('SELECT status FROM runs WHERE id = ?').get(start.runId) as { status: string };
+    expect(run.status).toBe('running'); // 关键：不再是 waiting_gate
+    const done = engine.completeStep({ runId: start.runId, nodeId: 'n_mid', summary: '收尾完成' });
+    if (!isFinished(done)) throw new Error(`应推进到终点：${JSON.stringify(done)}`);
+    expect(done.outcome).toBe('success');
+  });
+
+  it('事件：进 gate 发 gate_pending（带 gateId 与问题），放行发 step_completed + run_finished', () => {
+    const events: EngineEvent[] = [];
+    const { engine } = makeEngine([gateFlow()], (e) => events.push(e));
+    const start = engine.startRun({ flowName: '卡点图' });
+    if (!isStep(start)) throw new Error('start 失败');
+    engine.completeStep({ runId: start.runId, summary: '准备好了' });
+    engine.answerGate({ runId: start.runId, optionId: 'opt_go' }, 'panel');
+    expect(events.map((e) => e.type)).toEqual([
+      'run_started',
+      'step_completed',
+      'gate_pending',
+      'step_completed',
+      'run_finished',
+    ]);
+    const gate = events[2] as Extract<EngineEvent, { type: 'gate_pending' }>;
+    expect(gate.nodeId).toBe('n_gate');
+    expect(gate.question).toBe('可以发布吗？');
+    expect(gate.gateId).toMatch(/^\d+$/);
   });
 });

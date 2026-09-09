@@ -110,15 +110,15 @@ tests/       # core 层单测 + 端到端 API 测试
 
 **2026-09-08 修正（commit 580984a，应用户要求）**：详情画布改用**编辑器同款节点卡**（FlowNodeCard 含出口/条件完整视觉），运行状态作为外圈叠加层（状态环/脉动/×N 角标），只读但**节点可拖动摆放**（位置存内存）。顺带修掉一个波及预览页的真 bug：normalizeOutlets 把 API/手写图的第一个普通分支错当默认兜底显示。画布改完全非受控（defaultNodes + key 重挂）消除边渲染竞态。**环境注意**：IAB 长时间使用的标签页会进入"div 照画、SVG 边不渲染"的降级态（编辑器预览页同样复现），换新标签页即恢复——排查 React Flow 边消失先换标签页再怀疑代码。
 
-## 阶段 5 — gate 节点 + 双通道回答
+## 阶段 5 — gate 节点 + 双通道回答 ✅
 
 | 任务 | 状态 |
 |---|---|
-| gate 挂起（waiting_gate + pending gate_decisions）+ await_gate 长轮询（60s） | ⬜ |
-| 面板点选（source: panel）+ answer_gate 代填（source: chat） | ⬜ |
-| 面板写操作走普通 POST | ⬜ |
+| gate 挂起（waiting_gate + pending gate_decisions）+ await_gate 长轮询（60s） | ✅（进入 gate 即挂起并写 pending 决策行；入口即 gate 同样处理；await_gate 轮询 400ms、60 秒到点返回"仍在等待，请再调一次"，已放行/已不在卡点直接返回当前状态） |
+| 面板点选（source: panel）+ answer_gate 代填（source: chat） | ✅（决策记 gate_decisions 含来源，同时落一条 completed 轨迹（payload 带选项/来源）供插值与回看；gate 步只发 gateId/question/options，不下发 branches——选项即出口，降噪） |
+| 面板写操作走普通 POST | ✅（`POST /api/runs/:id/gate`，token 鉴权同 /api/*；详情 API 带 pendingGate（问题+选项）与 gates 历史；SSE 加 gate_pending 事件） |
 
-**验收**：流程挂起等确认，面板与聊天两条路都能放行，轨迹可分辨来源。
+**验收**：✅（2026-09-09，161 测试 + 真实服务实测 + 浏览器 GUI 验证）引擎 18 条 gate 用例（挂起/双通道/非法选项自愈/重复作答自愈/await 超时与唤醒/入口卡点/未连线选项判失败/裸卡点隐式收尾/事件序列）；MCP 端到端：推进到卡点 → await_gate 挂起 → 面板 HTTP 放行 → await 醒来拿到下一步；面板 GUI：等确认卡片（问题+备注+选项）点选放行，状态切回进行中，轨迹显示"人工确认：发布（面板点选）· 走了「发布」"。实测抓到一个真 bug：放行推进到普通节点时没把 status 从 waiting_gate 拨回 running（run 卡死在挂起态），已修并加回归用例。
 
 ## 阶段 6 — subagent 节点 + join
 

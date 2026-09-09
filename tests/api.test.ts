@@ -204,6 +204,113 @@ describe('监控只读 API（/api/runs，阶段 4）', () => {
     });
   });
 
+  it('卡点放行（阶段 5 §7.6）：详情见 pendingGate → 面板 POST 放行 → 决策记录 source: panel', async () => {
+    const { app, store, engine } = makeAppWithRuns();
+    const gate: Flow = {
+      id: 'f_gate_api',
+      name: '卡点图',
+      entry: 'n1',
+      nodes: [
+        { id: 'n1', type: 'prompt', instruction: '准备', next: 'n_gate' },
+        {
+          id: 'n_gate',
+          type: 'gate',
+          question: '可以发布吗？',
+          options: [
+            { id: 'opt_go', label: '可以' },
+            { id: 'opt_stop', label: '先不' },
+          ],
+          branches: [
+            { id: 'b_go', condition: '可以', to: 'n_ok', outlet: 'opt_go' },
+            { id: 'b_stop', condition: '先不', to: 'n_bad', outlet: 'opt_stop' },
+          ],
+        },
+        { id: 'n_ok', type: 'end', outcome: 'success' },
+        { id: 'n_bad', type: 'end', outcome: 'fail' },
+      ],
+    };
+    expect(store.save(gate).ok).toBe(true);
+    const start = engine.startRun({ flowName: '卡点图' });
+    if (!('step' in start)) throw new Error('start 失败');
+    engine.completeStep({ runId: start.runId, summary: '准备好了' });
+
+    // 详情：挂起中的卡点带问题与选项
+    const d1 = (await (await app.request(`/api/runs/${start.runId}?k=${TOKEN}`)).json()) as {
+      status: string;
+      pendingGate: { nodeId: string; question: string; options: Array<{ id: string }> } | null;
+      gates: Array<{ optionId: string | null; source: string | null }>;
+    };
+    expect(d1.status).toBe('waiting_gate');
+    expect(d1.pendingGate).toMatchObject({ nodeId: 'n_gate', question: '可以发布吗？' });
+    expect(d1.pendingGate!.options.map((o) => o.id)).toEqual(['opt_go', 'opt_stop']);
+    expect(d1.gates).toHaveLength(1);
+    expect(d1.gates[0]).toMatchObject({ optionId: null, source: null });
+
+    // 面板点选放行
+    const post = await app.request(`/api/runs/${start.runId}/gate?k=${TOKEN}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ optionId: 'opt_go', note: '面板点的' }),
+    });
+    expect(post.status).toBe(200);
+    const r = (await post.json()) as { finished: boolean; outcome: string };
+    expect(r.finished).toBe(true);
+    expect(r.outcome).toBe('success');
+
+    // 详情：pendingGate 清空，决策可分辨来源
+    const d2 = (await (await app.request(`/api/runs/${start.runId}?k=${TOKEN}`)).json()) as {
+      status: string;
+      pendingGate: unknown;
+      gates: Array<{ optionId: string; source: string; note: string | null }>;
+    };
+    expect(d2.status).toBe('completed');
+    expect(d2.pendingGate).toBeNull();
+    expect(d2.gates[0]).toMatchObject({ optionId: 'opt_go', source: 'panel', note: '面板点的' });
+  });
+
+  it('POST gate 非法选项 → 200 + 三段式自愈，run 不动；缺 optionId → 400 拒绝', async () => {
+    const { app, store, engine } = makeAppWithRuns();
+    const gate: Flow = {
+      id: 'f_gate_bad',
+      name: '卡点图2',
+      entry: 'n_gate',
+      nodes: [
+        {
+          id: 'n_gate',
+          type: 'gate',
+          question: '走哪条？',
+          options: [{ id: 'opt_a', label: 'A' }],
+          next: 'n_ok',
+        },
+        { id: 'n_ok', type: 'end', outcome: 'success' },
+      ],
+    };
+    expect(store.save(gate).ok).toBe(true);
+    const start = engine.startRun({ flowName: '卡点图2' });
+    if (!('step' in start)) throw new Error('start 失败');
+
+    const bad = await app.request(`/api/runs/${start.runId}/gate?k=${TOKEN}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ optionId: 'opt_没这个' }),
+    });
+    expect(bad.status).toBe(200);
+    const heal = (await bad.json()) as { error: boolean; what: string; guidance: string };
+    expect(heal.error).toBe(true);
+    expect(heal.what).toContain('opt_a');
+
+    const missing = await app.request(`/api/runs/${start.runId}/gate?k=${TOKEN}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    expect(missing.status).toBe(400);
+
+    // run 仍挂起
+    const d = (await (await app.request(`/api/runs/${start.runId}?k=${TOKEN}`)).json()) as { status: string };
+    expect(d.status).toBe('waiting_gate');
+  });
+
   it('鉴权同 /api/*：无 token 401；run 不存在 404', async () => {
     const { app } = makeAppWithRuns();
     expect((await app.request('/api/runs')).status).toBe(401);

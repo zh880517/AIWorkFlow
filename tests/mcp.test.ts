@@ -19,6 +19,7 @@ let tmpHome: string;
 let server: Server;
 let port: number;
 let store: FlowStore;
+let engine: ExecutionEngine;
 
 beforeAll(async () => {
   tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'aiworkflow-mcp-'));
@@ -37,7 +38,7 @@ beforeAll(async () => {
   };
   const r = store.save(linear);
   if (!r.ok) throw new Error(`fixture 校验失败：${JSON.stringify(r.errors)}`);
-  const engine = new ExecutionEngine({ db, resolveFlow: (n) => store.resolve(n) });
+  engine = new ExecutionEngine({ db, resolveFlow: (n) => store.resolve(n) });
   const app = createApp({ store, token: TOKEN, engine });
   server = startServer(app, 0) as unknown as Server;
   await new Promise<void>((resolve) => server.once('listening', resolve));
@@ -65,12 +66,20 @@ function payloadOf(result: unknown): any {
 }
 
 describe('MCP Streamable HTTP 端点', () => {
-  it('initialize 成功，工具清单含 5 个执行类工具', async () => {
+  it('initialize 成功，工具清单含 7 个执行类工具', async () => {
     const client = await connect();
     try {
       const { tools } = await client.listTools();
       const names = tools.map((t) => t.name).sort();
-      expect(names).toEqual(['complete_step', 'get_current_step', 'list_flows', 'report_blocked', 'start_run']);
+      expect(names).toEqual([
+        'answer_gate',
+        'await_gate',
+        'complete_step',
+        'get_current_step',
+        'list_flows',
+        'report_blocked',
+        'start_run',
+      ]);
     } finally {
       await client.close();
     }
@@ -191,6 +200,86 @@ describe('MCP Streamable HTTP 端点', () => {
       expect(res.finished).toBe(true);
       expect(res.outcome).toBe('fail');
       expect(res.note).toContain('缺依赖');
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('gate 全链路（双通道）：MCP 推进到卡点 → 面板放行 → await_gate 醒来拿到终结态', async () => {
+    const gate: Flow = {
+      id: 'f_gate_mcp',
+      name: '卡点图',
+      entry: 'n1',
+      nodes: [
+        { id: 'n1', type: 'prompt', instruction: '准备发布', next: 'n_gate' },
+        {
+          id: 'n_gate',
+          type: 'gate',
+          question: '可以发布吗？',
+          options: [
+            { id: 'opt_go', label: '可以发布' },
+            { id: 'opt_stop', label: '先不发布' },
+          ],
+          branches: [
+            { id: 'b_go', condition: '可以发布', to: 'n_ok', outlet: 'opt_go' },
+            { id: 'b_stop', condition: '先不发布', to: 'n_bad', outlet: 'opt_stop' },
+          ],
+        },
+        { id: 'n_ok', type: 'end', outcome: 'success' },
+        { id: 'n_bad', type: 'end', outcome: 'fail' },
+      ],
+    };
+    expect(store.save(gate).ok).toBe(true);
+    const client = await connect();
+    try {
+      const start = payloadOf(await client.callTool({ name: 'start_run', arguments: { flowName: '卡点图' } }));
+      const gateStep = payloadOf(
+        await client.callTool({ name: 'complete_step', arguments: { summary: '准备好了' } }),
+      );
+      expect(gateStep.step.kind).toBe('gate');
+      expect(gateStep.step.question).toBe('可以发布吗？');
+      expect(gateStep.step.options.map((o: { id: string }) => o.id)).toEqual(['opt_go', 'opt_stop']);
+      expect(gateStep.step.gateId).toMatch(/^\d+$/);
+      expect(gateStep.step.branches).toBeUndefined(); // 降噪：选项即出口，不下发 branches
+
+      // await_gate 挂起期间，"面板用户"放行（source: panel）
+      const awaiting = client.callTool({
+        name: 'await_gate',
+        arguments: { gateId: gateStep.step.gateId },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      const panel = engine.answerGate({ runId: start.runId, optionId: 'opt_go', note: '面板点的' }, 'panel');
+      expect(panel.finished).toBe(true);
+
+      const woke = payloadOf(await awaiting);
+      expect(woke.finished).toBe(true);
+      expect(woke.outcome).toBe('success');
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('answer_gate 经 MCP 代填（source: chat）→ 沿选项推进到 fail 终点', async () => {
+    const client = await connect();
+    try {
+      const start = payloadOf(await client.callTool({ name: 'start_run', arguments: { flowName: '卡点图' } }));
+      await client.callTool({ name: 'complete_step', arguments: { summary: '准备好了' } });
+      const cur = payloadOf(await client.callTool({ name: 'get_current_step', arguments: {} }));
+      const answered = payloadOf(
+        await client.callTool({
+          name: 'answer_gate',
+          arguments: { gateId: cur.step.gateId, optionId: 'opt_stop', note: '用户说再等等' },
+        }),
+      );
+      expect(answered.finished).toBe(true);
+      expect(answered.outcome).toBe('fail');
+      // 再答一次 → 三段式自愈
+      const again = payloadOf(
+        await client.callTool({ name: 'answer_gate', arguments: { gateId: cur.step.gateId, optionId: 'opt_go' } }),
+      );
+      expect(again.error).toBe(true);
+      expect(again.what).toContain('已经被答复');
+      expect(start.runId).toMatch(/^run_/);
     } finally {
       await client.close();
     }

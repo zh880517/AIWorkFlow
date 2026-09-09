@@ -71,7 +71,7 @@ export function createApp(deps: ServerDeps): Hono {
     return deleted ? c.json({ ok: true }) : c.json({ error: 'flow not found' }, 404);
   });
 
-  // 监控只读查询（阶段 4）：run 列表 + 详情（含快照图与完整执行轨迹）
+  // 监控查询（阶段 4）：run 列表 + 详情（含快照图与完整执行轨迹）
   const db = deps.db;
   if (db !== undefined) {
     app.get('/api/runs', (c) => c.json(listRuns(db)));
@@ -79,6 +79,23 @@ export function createApp(deps: ServerDeps): Hono {
       const run = getRunDetail(db, c.req.param('id'));
       return run === undefined ? c.json({ error: 'run not found' }, 404) : c.json(run);
     });
+    // 卡点放行（阶段 5，§7.6）：面板点选，source: panel；写操作走普通 POST
+    if (deps.engine !== undefined) {
+      const engine = deps.engine;
+      app.post('/api/runs/:id/gate', async (c) => {
+        const body = await c.req
+          .json<{ optionId?: string; note?: string }>()
+          .catch((): { optionId?: string; note?: string } => ({}));
+        if (body.optionId === undefined || body.optionId.trim() === '') {
+          return c.json(
+            { error: true, what: 'optionId 必填：要点哪个选项。', guidance: '从 pendingGate.options 里选一个。', current: null },
+            400,
+          );
+        }
+        // 引擎结果原样回给面板：SelfHealError（error:true）也走 200，前端展示 what/guidance
+        return c.json(engine.answerGate({ runId: c.req.param('id'), optionId: body.optionId, note: body.note }, 'panel'));
+      });
+    }
   }
 
   // SSE 实时通道（§9.3）：事件即"该刷新了"的信号，面板收到后重拉 /api/runs

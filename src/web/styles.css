@@ -1030,6 +1030,76 @@ code {
   flex-direction: column;
   gap: 8px;
 }
+
+/* 卡点等确认卡片（§7.6 面板通道）：挂在 waiting_gate 时显示在轨迹上方 */
+.gate-card {
+  background: #171717;
+  border: 1px solid #38bdf866;
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.gate-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.gate-card-q {
+  color: #fafafa;
+  font-size: 14px;
+  font-weight: 600;
+}
+.gate-card-sub {
+  color: #737373;
+  font-size: 12px;
+}
+.gate-note {
+  width: 100%;
+  box-sizing: border-box;
+  background: #0a0a0a;
+  border: 1px solid #262626;
+  border-radius: 8px;
+  color: #d4d4d4;
+  font: inherit;
+  font-size: 12px;
+  padding: 8px 10px;
+  resize: vertical;
+  min-height: 32px;
+}
+.gate-note:focus {
+  outline: none;
+  border-color: #38bdf8;
+}
+.gate-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.gate-opt {
+  background: #0a0a0a;
+  border: 1px solid #38bdf8;
+  color: #38bdf8;
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.gate-opt:hover:not(:disabled) {
+  background: #38bdf8;
+  color: #0a0a0a;
+}
+.gate-opt:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+.gate-err {
+  color: #f87171;
+  font-size: 12px;
+}
 .run-trace-head {
   display: flex;
   align-items: center;
