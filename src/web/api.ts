@@ -114,6 +114,15 @@ export interface RunDetail extends RunListItem {
 
 export const listRuns = (): Promise<RunListItem[]> => req<RunListItem[]>('/runs');
 
+/** 插值提示（阶段 8）：该图历史 run 学到的各节点 payload 字段名；无监控数据时静默为空 */
+export async function getPayloadFields(id: string): Promise<Record<string, string[]>> {
+  try {
+    return await req<Record<string, string[]>>(`/flows/${encodeURIComponent(id)}/payload-fields`);
+  } catch {
+    return {};
+  }
+}
+
 export const getRunDetail = (id: string): Promise<RunDetail> =>
   req<RunDetail>(`/runs/${encodeURIComponent(id)}`);
 

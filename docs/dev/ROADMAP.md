@@ -153,7 +153,7 @@ tests/       # core 层单测 + 端到端 API 测试
 | 六种节点自定义渲染（颜色/图标）+ 右侧按 type 的字段表单 | ✅ |
 | 保存时两档校验（复用 Phase 1 校验器，硬拒阻止保存；面板实时校验 + 问题定位跳转） | ✅ |
 | 预览模式（只读渲染 + 单步下发视图，含 branches 剥离 `to` 的降噪形态） | ✅ |
-| `{{` 插值提示：前序节点 id + 历史 run 学到的 payload 字段名 | ⬜（依赖阶段 2 的 run 数据） |
+| `{{` 插值提示：前序节点 id + 历史 run 学到的 payload 字段名 | ✅（2026-09-09 补齐：`GET /api/flows/:id/payload-fields` 从该图历史 run 的 completed payload 学字段；属性面板指令/子代理提示/汇总指令字段下方可折叠"插值提示"，点 chip 在光标处插入 `{{节点.payload.字段}}`，未跑过的图显示占位说明） |
 
 **验收**：✅ 不写 JSON 建出含双分支的测试图并保存成功（服务端数据、列表加载回显均验证通过）。
 
@@ -166,7 +166,7 @@ tests/       # core 层单测 + 端到端 API 测试
 | 任务 | 状态 |
 |---|---|
 | list_flows / get_flow / create_flow / update_flow / validate_flow | ✅（2026-09-08 应用户要求提前实现，挂独立端点 `/mcp-build`，与执行端点 `/mcp` 工具集互不可见；create/update 幂等指引、validate 干跑不落库、硬拒不落库，137 测试 + 真实服务实测） |
-| install 命令：检测宿主（Claude Code Skill 目录 / Codex prompts+AGENTS.md + hook 配置） | ⬜ |
+| install 命令：检测宿主（Claude Code Skill 目录 / Codex prompts+AGENTS.md + hook 配置） | ✅（2026-09-09：`aiworkflow install [claude-code\|codex]`，省略则自动检测 ~/.claude、~/.codex；Claude Code 写 Skill + settings.json hooks 段，Codex 写 prompts/aiworkflow.md + AGENTS.md 标记片段 + hooks.json；幂等（matcher 条目整体替换、标记片段区间替换、用户其他配置原样），非法 JSON 跳过并提示不覆盖；结束打印 MCP 手动注册指引——token 每次启动生成，固定 token 用 AIWORKFLOW_TOKEN。单测 4 条 + 假 HOME 冒烟） |
 
 **验收**：建图五件套 ✅（SDK 客户端建图/改图/干跑/坏图自愈全链路实测）；install 待做。
 
@@ -176,3 +176,9 @@ tests/       # core 层单测 + 端到端 API 测试
 - 面板一律用 React Flow，不自研画布；服务端不引第二个 HTTP 框架。
 - 所有写入先 SQLite 后派生文件（JSON/缓存），永不只写 JSON。
 - 阶段 0 探针代码不留仓库，结论写在本文件。
+
+## 终态（2026-09-09）
+
+**全部开发阶段（0–9）完成**：184 测试全绿；引擎六种节点类型全支持（prompt/tool/gate/subagent/join/end），监控面板（工作区侧栏 → 任务列表 → 详情）、建图 MCP（独立端点）、宿主身份 hook、install 命令齐备。
+
+**唯一遗留：阶段 0 实机复核**（需要用户参与，无法自动化）：在真实 Claude Code / Codex 宿主里执行 `aiworkflow install` → 注册 MCP（地址含启动时打印的 token）→ 开会话盲调 `get_current_step`，验证 hook 注入的 `_host/_sid` 定位与 `Mcp-Session-Id` 兜底两条路都通。文档级结论均已在设计文档 §10；本文件（docs/dev/ROADMAP.md）在此项复核完成后删除，结论回写正式文档。

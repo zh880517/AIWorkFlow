@@ -75,6 +75,33 @@ export function createApp(deps: ServerDeps): Hono {
   const db = deps.db;
   if (db !== undefined) {
     app.get('/api/runs', (c) => c.json(listRuns(db)));
+    // 插值提示（阶段 8）：从该图历史 run 的 completed payload 学字段名（编辑器提示用）
+    app.get('/api/flows/:id/payload-fields', (c) => {
+      const flowId = c.req.param('id');
+      const rows = db
+        .prepare(
+          `SELECT ne.node_id, ne.payload FROM node_executions ne
+           JOIN runs r ON r.id = ne.run_id
+           WHERE r.flow_id = ? AND r.parent_run_id IS NULL AND ne.status = 'completed'
+           ORDER BY ne.id DESC LIMIT 200`,
+        )
+        .all(flowId) as Array<{ node_id: string; payload: string }>;
+      const fields: Record<string, string[]> = {};
+      for (const row of rows) {
+        let payload: unknown;
+        try {
+          payload = JSON.parse(row.payload);
+        } catch {
+          continue;
+        }
+        if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) continue;
+        const list = (fields[row.node_id] ??= []);
+        for (const key of Object.keys(payload as Record<string, unknown>)) {
+          if (!list.includes(key) && list.length < 20) list.push(key);
+        }
+      }
+      return c.json(fields);
+    });
     app.get('/api/runs/:id', (c) => {
       const run = getRunDetail(db, c.req.param('id'));
       return run === undefined ? c.json({ error: 'run not found' }, 404) : c.json(run);

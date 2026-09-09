@@ -43,6 +43,8 @@ export function EditorView({ id, navigate, registerGuard }: EditorViewProps) {
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [statusKind, setStatusKind] = useState<'ok' | 'err' | null>(null);
   const [valOpen, setValOpen] = useState(false);
+  /** 该图历史 run 学到的 payload 字段（插值提示用，阶段 8） */
+  const [payloadFields, setPayloadFields] = useState<Record<string, string[]>>({});
   /** 撤销/重做历史 + 触发按钮态刷新的计数 */
   const historyRef = useRef(new FlowHistory());
   const [histVersion, setHistVersion] = useState(0);
@@ -107,6 +109,10 @@ export function EditorView({ id, navigate, registerGuard }: EditorViewProps) {
         setDirtyState(migrated);
         setSelectedNodeId(null);
         setStatus(migrated ? '已自动把多余的默认出口分支迁移到自定义出口，保存后生效' : null, null);
+        // 插值提示：从该图历史 run 学字段名（失败静默，编辑功能不依赖它）
+        api.getPayloadFields(id).then((pf) => {
+          if (!cancelled) setPayloadFields(pf);
+        });
       } catch (e) {
         setStatus(`加载失败：${(e as Error).message}`, 'err');
       }
@@ -515,7 +521,7 @@ export function EditorView({ id, navigate, registerGuard }: EditorViewProps) {
         {/* 属性面板按需出现：没选中节点时画布占满，不常驻空面板 */}
         {flow !== null && selectedNodeId !== null && (
           <aside className="right-panel">
-            <PropsPanel flow={flow} nodeId={selectedNodeId} flowList={flowList} onChange={update} />
+            <PropsPanel flow={flow} nodeId={selectedNodeId} flowList={flowList} payloadFields={payloadFields} onChange={update} />
           </aside>
         )}
       </div>

@@ -1315,3 +1315,61 @@ code {
   color: #e5e5e5;
   border-color: #404040;
 }
+
+/* 插值提示（阶段 8）：属性面板里指令字段下方的可折叠提示 */
+.interp-hints {
+  margin-top: 6px;
+  border: 1px solid #262626;
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: #0a0a0a;
+}
+.interp-hints summary {
+  color: #737373;
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+.interp-note {
+  color: #737373;
+  font-size: 11px;
+  margin-top: 4px;
+}
+.interp-node {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 6px;
+}
+.interp-node-name {
+  color: #a3a3a3;
+  font-size: 12px;
+}
+.interp-node-name code {
+  color: #737373;
+  font-family: Consolas, monospace;
+  font-size: 11px;
+}
+.interp-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.interp-chip {
+  font-family: Consolas, monospace;
+  font-size: 11px;
+  color: #38bdf8;
+  background: #171717;
+  border: 1px solid #262626;
+  border-radius: 6px;
+  padding: 2px 7px;
+  cursor: pointer;
+}
+.interp-chip:hover {
+  border-color: #38bdf8;
+  background: #0d1520;
+}
+.interp-empty {
+  color: #525252;
+  font-size: 11px;
+}

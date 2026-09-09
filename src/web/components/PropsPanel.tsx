@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useRef, type ReactNode, type RefObject } from 'react';
 import type { Flow, FlowNode } from '../../core/types.js';
 import { NODE_META, nodeTitle, removeNodes, setEntry, updateNode } from '../dsl.js';
 import type { FlowMeta } from '../api.js';
@@ -7,11 +7,16 @@ export interface PropsPanelProps {
   flow: Flow;
   nodeId: string;
   flowList: FlowMeta[];
+  /** 该图历史 run 学到的各节点 payload 字段名（插值提示用） */
+  payloadFields: Record<string, string[]>;
   onChange: (updater: (flow: Flow) => Flow, group?: string) => void;
 }
 
-export function PropsPanel({ flow, nodeId, flowList, onChange }: PropsPanelProps) {
+export function PropsPanel({ flow, nodeId, flowList, payloadFields, onChange }: PropsPanelProps) {
   const node = flow.nodes.find((n) => n.id === nodeId);
+  const instrRef = useRef<HTMLTextAreaElement | null>(null);
+  const extraRef = useRef<HTMLTextAreaElement | null>(null);
+  const aggRef = useRef<HTMLTextAreaElement | null>(null);
   if (node === undefined) return <div className="panel-empty">节点不存在</div>;
   const meta = NODE_META[node.type];
   const patch = (p: Record<string, unknown>, group?: string) => onChange((f) => updateNode(f, nodeId, p), group);
@@ -29,12 +34,14 @@ export function PropsPanel({ flow, nodeId, flowList, onChange }: PropsPanelProps
       {node.type !== 'end' && (
         <Field label={node.type === 'prompt' ? '指令（必填）' : '补充说明（可选）'}>
           <textarea
+            ref={instrRef}
             className="input mono"
             rows={4}
             value={node.instruction ?? ''}
             placeholder={node.type === 'prompt' ? '描述干什么、怎么判断。可用 {{节点.字段}} 引用之前的结果' : '可选补充说明'}
             onChange={(e) => patch({ instruction: e.target.value }, `instr:${node.id}`)}
           />
+          <InterpHints flow={flow} selfId={node.id} payloadFields={payloadFields} areaRef={instrRef} />
         </Field>
       )}
 
@@ -59,7 +66,8 @@ export function PropsPanel({ flow, nodeId, flowList, onChange }: PropsPanelProps
             </select>
           </Field>
           <Field label="给子代理的提示（必填）">
-            <textarea className="input mono" rows={3} value={node.extraPrompt} onChange={(e) => patch({ extraPrompt: e.target.value }, `extra:${node.id}`)} />
+            <textarea ref={extraRef} className="input mono" rows={3} value={node.extraPrompt} onChange={(e) => patch({ extraPrompt: e.target.value }, `extra:${node.id}`)} />
+            <InterpHints flow={flow} selfId={node.id} payloadFields={payloadFields} areaRef={extraRef} note="fan-out 时可用 {{item}} 引用各自条目" />
           </Field>
           {node.mode === 'flowRef' && (
             <Field label="引用的流程（必填）">
@@ -124,7 +132,8 @@ export function PropsPanel({ flow, nodeId, flowList, onChange }: PropsPanelProps
             </select>
           </Field>
           <Field label="汇总指令（必填）">
-            <textarea className="input mono" rows={3} value={node.aggregateInstruction} onChange={(e) => patch({ aggregateInstruction: e.target.value }, `agg:${node.id}`)} />
+            <textarea ref={aggRef} className="input mono" rows={3} value={node.aggregateInstruction} onChange={(e) => patch({ aggregateInstruction: e.target.value }, `agg:${node.id}`)} />
+            <InterpHints flow={flow} selfId={node.id} payloadFields={payloadFields} areaRef={aggRef} />
           </Field>
         </>
       )}
@@ -245,5 +254,70 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
       <span className="label">{label}</span>
       <div className="field-body">{children}</div>
     </label>
+  );
+}
+
+/** 插值提示（阶段 8）：前序节点 + 历史 run 学到的 payload 字段名；点 chip 在光标处插入 token */
+function InterpHints({
+  flow,
+  selfId,
+  payloadFields,
+  areaRef,
+  note,
+}: {
+  flow: Flow;
+  selfId: string;
+  payloadFields: Record<string, string[]>;
+  areaRef: RefObject<HTMLTextAreaElement | null>;
+  note?: string;
+}) {
+  const others = flow.nodes.filter((n) => n.id !== selfId);
+  if (others.length === 0) return null;
+  const insert = (token: string): void => {
+    const el = areaRef.current;
+    if (el === null) return;
+    const start = el.selectionStart ?? el.value.length;
+    const end = el.selectionEnd ?? start;
+    const next = el.value.slice(0, start) + token + el.value.slice(end);
+    // React 受控组件：走原生 setter + 派发 input 事件才能触发 onChange
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+    if (setter !== undefined) setter.call(el, next);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    const caret = start + token.length;
+    el.focus();
+    el.setSelectionRange(caret, caret);
+  };
+  return (
+    <details className="interp-hints">
+      <summary>插值提示（引用之前节点的结果）</summary>
+      {note !== undefined && <div className="interp-note">{note}</div>}
+      {others.map((n) => {
+        const fields = payloadFields[n.id] ?? [];
+        return (
+          <div className="interp-node" key={n.id}>
+            <span className="interp-node-name">
+              {nodeTitle(flow, n.id)} <code>{n.id}</code>
+            </span>
+            {fields.length > 0 ? (
+              <span className="interp-chips">
+                {fields.map((f) => (
+                  <button
+                    type="button"
+                    className="interp-chip"
+                    key={f}
+                    title="点击插入到光标处"
+                    onClick={() => insert(`{{${n.id}.payload.${f}}}`)}
+                  >
+                    {`{{${n.id}.payload.${f}}}`}
+                  </button>
+                ))}
+              </span>
+            ) : (
+              <span className="interp-empty">{'这张图跑过一次后，这里会提示该节点 payload 的具体字段'}</span>
+            )}
+          </div>
+        );
+      })}
+    </details>
   );
 }
