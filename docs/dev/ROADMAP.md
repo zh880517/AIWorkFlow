@@ -120,16 +120,16 @@ tests/       # core 层单测 + 端到端 API 测试
 
 **验收**：✅（2026-09-09，161 测试 + 真实服务实测 + 浏览器 GUI 验证）引擎 18 条 gate 用例（挂起/双通道/非法选项自愈/重复作答自愈/await 超时与唤醒/入口卡点/未连线选项判失败/裸卡点隐式收尾/事件序列）；MCP 端到端：推进到卡点 → await_gate 挂起 → 面板 HTTP 放行 → await 醒来拿到下一步；面板 GUI：等确认卡片（问题+备注+选项）点选放行，状态切回进行中，轨迹显示"人工确认：发布（面板点选）· 走了「发布」"。实测抓到一个真 bug：放行推进到普通节点时没把 status 从 waiting_gate 拨回 running（run 卡死在挂起态），已修并加回归用例。
 
-## 阶段 6 — subagent 节点 + join
+## 阶段 6 — subagent 节点 + join ✅
 
 | 任务 | 状态 |
 |---|---|
-| run 树（parent_run_id / root_run_id）、childToken 签发与白名单校验 | ⬜ |
-| preamble 下发（必须原样前置的三行块） | ⬜ |
-| inline / subflow / flowRef 三种 mode（flowRef 递归快照已在 Phase 1 预留） | ⬜ |
-| join 汇聚语义（7.5）：全部完成 / 有 running 置 failed / 失败重派一轮 | ⬜ |
+| run 树（parent_run_id / root_run_id）、childToken 签发与白名单校验 | ✅（child run 落库带 parent_run_id/root_run_id/parent_node（db v4）/child_token（`c_` 前缀，UNIQUE 即白名单）；resolveRun 以 childToken 为第一优先级；事件 child_spawned） |
+| preamble 下发（必须原样前置的三行块） | ✅（§8.3 原文；派发步 children[] = { childToken, preamble, extraPrompt }，extraPrompt 用主 run 产物插值渲染后下发） |
+| inline / subflow / flowRef 三种 mode（flowRef 递归快照已在 Phase 1 预留） | ✅（inline 合成单节点图、subflow 走内嵌子图、flowRef 从父快照切子快照——buildSubSnapshot 不回读当前库，child 与主 run 钉同一版本；快照收集器补了下钻 subflow 内嵌套 flowRef） |
+| join 汇聚语义（7.5）：全部完成 / 有 running 置 failed / 失败重派一轮 | ✅（主 Agent 在派发步（waiting_children）调 get_current_step 触发汇聚：未终结 child 判"未回报"置 failed；失败的原始 child 重派一轮（新 child run + retry_of 指向旧 run，旧 run 留档）；再失败带部分结果推进 join 并在 note/汇总里记明缺了谁；join 步 childResults + aggregateInstruction + 各子结果摘要） |
 
-**验收**：单个子 Agent 派发与汇聚跑通。
+**验收**：✅（2026-09-09，174 测试 + 真实服务双 MCP 会话实测 + 面板验证）单测覆盖三种 mode、未回报重派、重派再失败部分推进、child report_blocked 置 failed、派发步自愈守卫、入口即派发；真实服务：主/子两个独立 MCP 会话（不同 Mcp-Session-Id）凭 childToken 走完 派发→子任务→汇聚 join→终结，及"子任务未回报→判 failed→自动重派→重派成功→join 采用新结果"全链路；面板任务列表子 run 带 ↳ 标记、run 树状态（waiting_children / running / failed）正确。实测抓到一个真 bug：child 的 extraPrompt 插值在主 run 轨迹提交前渲染导致取不到产物——改为"先推进提交、再建 child"，并把崩溃窗口（推进已提交但 child 未落库）做成汇聚时惰性补建。
 
 ## 阶段 7 — fan-out 并行 + 部分失败重试
 

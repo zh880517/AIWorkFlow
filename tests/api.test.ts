@@ -311,6 +311,35 @@ describe('监控只读 API（/api/runs，阶段 4）', () => {
     expect(d.status).toBe('waiting_gate');
   });
 
+  it('子 Agent run 出现在监控列表（parentRunId 标记），父 run 状态为等子 Agent', async () => {
+    const { app, store, engine } = makeAppWithRuns();
+    const flow: Flow = {
+      id: 'f_sub_api',
+      name: '子代理监控图',
+      entry: 'n1',
+      nodes: [
+        { id: 'n1', type: 'prompt', instruction: '准备', next: 'n_sub' },
+        { id: 'n_sub', type: 'subagent', extraPrompt: '干活', mode: 'inline', next: 'n_end' },
+        { id: 'n_end', type: 'end', outcome: 'success' },
+      ],
+    };
+    expect(store.save(flow).ok).toBe(true);
+    const start = engine.startRun({ flowName: '子代理监控图', cwd: 'D:/work/sub' });
+    if (!('step' in start)) throw new Error('start 失败');
+    engine.completeStep({ runId: start.runId, summary: '派发' });
+
+    const items = (await (await app.request(`/api/runs?k=${TOKEN}`)).json()) as Array<{
+      id: string;
+      parentRunId: string | null;
+      status: string;
+    }>;
+    expect(items).toHaveLength(2);
+    const parent = items.find((r) => r.id === start.runId);
+    const child = items.find((r) => r.id !== start.runId);
+    expect(parent).toMatchObject({ status: 'waiting_children', parentRunId: null });
+    expect(child).toMatchObject({ status: 'running', parentRunId: start.runId });
+  });
+
   it('鉴权同 /api/*：无 token 401；run 不存在 404', async () => {
     const { app } = makeAppWithRuns();
     expect((await app.request('/api/runs')).status).toBe(401);

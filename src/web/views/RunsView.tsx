@@ -169,7 +169,10 @@ export function RunsView({ navigate, runId }: RunsViewProps) {
                     onClick={() => navigate(`/runs/${encodeURIComponent(r.id)}`)}
                   >
                     <span className={`run-card-dot dot-${dotOf(r)}`} />
-                    <span className="task-title">{r.flowName ?? r.flowId}</span>
+                    <span className="task-title">
+                      {r.parentRunId !== null ? '↳ ' : ''}
+                      {r.flowName ?? r.flowId}
+                    </span>
                     <span className="task-meta">
                       {ACTIVE_STATUSES.has(r.status) && r.currentNode !== null
                         ? `正在 ${r.currentNode} · 活动于 ${relTime(r.lastActivity ?? r.createdAt)}`

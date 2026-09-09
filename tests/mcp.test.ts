@@ -285,6 +285,70 @@ describe('MCP Streamable HTTP 端点', () => {
     }
   });
 
+  it('subagent 全链路：主客户端到派发步 → 子客户端凭 childToken 完成 → 主客户端汇聚 join → 终结', async () => {
+    const flow: Flow = {
+      id: 'f_sub_mcp',
+      name: '派发链路图',
+      entry: 'n1',
+      nodes: [
+        { id: 'n1', type: 'prompt', instruction: '定题目', next: 'n_sub' },
+        {
+          id: 'n_sub',
+          type: 'subagent',
+          title: '查资料',
+          extraPrompt: '去查 {{n1.payload.topic}} 的资料',
+          mode: 'inline',
+          next: 'n_join',
+        },
+        { id: 'n_join', type: 'join', aggregateInstruction: '合并成报告', next: 'n_end' },
+        { id: 'n_end', type: 'end', outcome: 'success' },
+      ],
+    };
+    expect(store.save(flow).ok).toBe(true);
+    const main = await connect();
+    try {
+      const start = payloadOf(await main.callTool({ name: 'start_run', arguments: { flowName: '派发链路图' } }));
+      const dispatch = payloadOf(
+        await main.callTool({ name: 'complete_step', arguments: { summary: '题目定了', payload: { topic: 'MCP 协议' } } }),
+      );
+      expect(dispatch.step.kind).toBe('subagent');
+      expect(dispatch.note).toContain('preamble');
+      const token = dispatch.step.children[0].childToken;
+      expect(token).toMatch(/^c_/);
+      expect(dispatch.step.children[0].preamble).toContain(`childToken 是 ${token}`);
+      expect(dispatch.step.children[0].extraPrompt).toBe('去查 MCP 协议 的资料'); // 主 run 产物已插值
+      // 派发步上 complete_step → 自愈指向 get_current_step
+      const misuse = payloadOf(await main.callTool({ name: 'complete_step', arguments: { summary: '想硬推' } }));
+      expect(misuse.error).toBe(true);
+      expect(misuse.guidance).toContain('get_current_step');
+
+      // 子 Agent：独立客户端（全新 Mcp-Session-Id），只凭 childToken 定位
+      const child = await connect();
+      try {
+        const first = payloadOf(await child.callTool({ name: 'get_current_step', arguments: { childToken: token } }));
+        expect(first.runId).not.toBe(start.runId);
+        expect(first.step.instruction).toBe('去查 MCP 协议 的资料');
+        const done = payloadOf(
+          await child.callTool({ name: 'complete_step', arguments: { childToken: token, summary: '查到了 3 条', payload: { found: 3 } } }),
+        );
+        expect(done.finished).toBe(true);
+        expect(done.outcome).toBe('success');
+      } finally {
+        await child.close();
+      }
+
+      // 主 Agent 汇聚：join 步带 childResults，完成后到 end
+      const join = payloadOf(await main.callTool({ name: 'get_current_step', arguments: {} }));
+      expect(join.step.kind).toBe('join');
+      expect(join.step.childResults[0]).toMatchObject({ childToken: token, status: 'completed', summary: '查到了 3 条' });
+      const end = payloadOf(await main.callTool({ name: 'complete_step', arguments: { summary: '报告完成' } }));
+      expect(end.finished).toBe(true);
+      expect(end.outcome).toBe('success');
+    } finally {
+      await main.close();
+    }
+  });
+
   it('list_flows 返回流程清单', async () => {
     const client = await connect();
     try {

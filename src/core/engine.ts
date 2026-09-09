@@ -1,18 +1,18 @@
-// 执行引擎（设计文档 §7）。Phase 2-3 范围：串行推进 prompt / tool / end，
+// 执行引擎（设计文档 §7）。Phase 2-3：串行推进 prompt / tool / end，
 // 分支求值边界（§7.3）、环与迭代上限（§4.5 iterationLimit / maxSteps）、report_blocked（§7.8）；
-// 阶段 5：gate 卡点挂起与双通道放行（§7.6）；subagent / join 在阶段 6。
+// 阶段 5：gate 卡点挂起与双通道放行（§7.6）；阶段 6：subagent 派发 + join 汇聚（§7.1/§7.5）。
 // 三条铁律（§6.2 / §6.3 / §7.2）：
 // - 单事务推进：校验、落 node_executions、定位后继、更新 run 一个事务内完成，中途失败不推进
 // - 降噪下发：branches 剥离 to、progress 不含总数；每个响应复述 runId + nodeId
 // - 自愈式报错：所有拒绝路径返回三段式（错在哪 + 正确姿势 + 当前这一步）
 import crypto from 'node:crypto';
 import type Database from 'better-sqlite3';
-import type { Flow, FlowNode, FlowSnapshot, GateNode, NodeType } from './types.js';
-import { buildSnapshot, loadSnapshot, persistSnapshot } from './snapshot.js';
+import type { Flow, FlowNode, FlowSnapshot, GateNode, JoinNode, NodeType, SubagentNode } from './types.js';
+import { buildSnapshot, buildSubSnapshot, loadSnapshot, persistSnapshot } from './snapshot.js';
 import { validateFlow } from './validate.js';
 
-/** 支持推进的节点类型（阶段 5 起含 gate）；subagent / join 在 start_run 时整体拒绝 */
-const SUPPORTED_TYPES: ReadonlySet<NodeType> = new Set(['prompt', 'tool', 'end', 'gate']);
+/** 支持推进的节点类型（阶段 6 起六种全支持） */
+const SUPPORTED_TYPES: ReadonlySet<NodeType> = new Set(['prompt', 'tool', 'end', 'gate', 'subagent', 'join']);
 
 /** 服务端下发的循环纪律文本（§6.4：不进 Skill 文件，跟服务端版本走） */
 export const DISCIPLINE_TEXT = [
@@ -21,6 +21,7 @@ export const DISCIPLINE_TEXT = [
   '完全放开的：执行某一步时你想多读文件、多跑命令、多查一点，随意，只要最后把结果回报。',
   '不确定自己在哪：调 get_current_step()，它幂等，随时可调。',
   '遇到人工卡点（gate）：把问题原样转达用户，调 await_gate(gateId) 等答复（每轮 60 秒，到点就再调一次）；用户当场答复了就调 answer_gate 代填。',
+  '派出子 Agent（subagent）：把每个 child 的 preamble 原样放进对应子任务开头（不许改写或摘要）；等全部子任务返回后再调 get_current_step()，服务端会汇聚结果给出下一步。',
   '干不下去（缺依赖、没权限、分支全不满足且没有默认出口）：调 report_blocked(reason) 如实上报，别硬编。',
 ].join('\n');
 
@@ -44,6 +45,11 @@ export interface StepView {
   gateId?: string;
   question?: string;
   options?: Array<{ id: string; label: string }>;
+  /** subagent 专有（§6.2）：待派发的子任务（重派时只含要重派的那批） */
+  children?: Array<{ childToken: string; preamble: string; extraPrompt: string }>;
+  /** join 专有（§6.2）：各子任务结果与汇总指令 */
+  childResults?: Array<{ childToken: string; status: string; summary: string }>;
+  aggregateInstruction?: string;
 }
 
 export interface StepResult {
@@ -129,6 +135,7 @@ export type EngineEvent =
   | { type: 'run_started'; runId: string; flowId: string; at: string }
   | { type: 'step_completed'; runId: string; nodeId: string; status: 'completed' | 'blocked' | 'limit_exceeded'; at: string }
   | { type: 'gate_pending'; runId: string; nodeId: string; gateId: string; question: string; at: string }
+  | { type: 'child_spawned'; runId: string; nodeId: string; childRunId: string; at: string }
   | { type: 'run_finished'; runId: string; outcome: 'success' | 'fail'; at: string };
 
 /** 迭代上限逃生时落的一条"未执行"轨迹 */
@@ -146,12 +153,32 @@ type AdvanceOutcome =
 
 interface RunRow {
   id: string;
+  parent_run_id: string | null;
+  root_run_id: string;
   flow_id: string;
   flow_snapshot_hash: string;
   entry_node: string;
   current_node: string | null;
   status: string;
+  outcome: string | null;
+  cwd: string | null;
+  project_name: string | null;
+  child_token: string | null;
+  /** 派出该 child 的 subagent 节点（v4 起）；主 run 为 null */
+  parent_node: string | null;
+  /** 重派：替代的旧 child run id（v4 起）；首轮为 null */
+  retry_of: string | null;
   steps_used: number;
+}
+
+/** 预构建的 child run 落库参数（快照已提前持久化，事务内只做 INSERT） */
+interface ChildPlan {
+  runId: string;
+  token: string;
+  flowId: string;
+  snapshotHash: string;
+  entry: string;
+  retryOf: string | null;
 }
 
 /** gate_decisions 行；pending 时 option_id/decided_at 为 NULL、source 为占位 'pending' */
@@ -206,12 +233,20 @@ export class ExecutionEngine {
     if (unsupported.length > 0) {
       const list = unsupported.map((n) => `${n.type}（${n.title ?? n.id}）`).join('、');
       return selfHeal(
-        `流程「${flow.name}」包含当前版本尚未支持的节点类型：${list}。`,
-        '换一张只含 prompt / tool / gate / end 的流程，或在面板里删掉这些节点。subagent / join 将在后续版本支持。',
+        `流程「${flow.name}」包含当前版本不认识的节点类型：${list}。`,
+        '这张图可能由更新版本的服务创建，请升级 aiworkflow 后再跑。',
       );
     }
 
-    const snapshot = buildSnapshot(flow, { get: (id) => this.resolveFlow(id) });
+    let snapshot: FlowSnapshot;
+    try {
+      snapshot = buildSnapshot(flow, { get: (id) => this.resolveFlow(id) });
+    } catch (e) {
+      return selfHeal(
+        `流程「${flow.name}」的快照构建失败：${(e as Error).message}`,
+        '通常是 flowRef 引用的图已被删除或引用成环，在面板修好后再跑。',
+      );
+    }
     const hash = persistSnapshot(this.db, snapshot);
     const runId = `run_${crypto.randomBytes(4).toString('hex')}`;
     const now = new Date().toISOString();
@@ -230,11 +265,18 @@ export class ExecutionEngine {
       const gateId = this.enterGate(runId, entryNode, now);
       this.emit({ type: 'gate_pending', runId, nodeId: entryNode.id, gateId: String(gateId), question: entryNode.question, at: now });
     }
+    // 入口即派发：start 后直接进入子 Agent 派发步（§7.1）
+    if (entryNode !== undefined && entryNode.type === 'subagent') {
+      const spawned = this.enterSubagent(runId, entryNode, now);
+      if (spawned !== undefined) return spawned;
+    }
 
     return this.stepResult(runId);
   }
 
-  /** 幂等。返回"我在哪、要干啥"；上下文压缩后的恢复入口 */
+  /** 幂等。返回"我在哪、要干啥"；上下文压缩后的恢复入口。
+   *  例外（§7.5）：主 Agent 在派发步上（waiting_children）调用即触发汇聚——
+   *  前提是宿主的 Task 调用已返回，此时 children 该完成的都完成了，没完成的按"未回报"处理。 */
   getCurrentStep(ref: RunRef, mcpSessionId?: string): StepOpResult {
     const run = this.resolveRun(ref, mcpSessionId);
     if (run === null) {
@@ -244,6 +286,9 @@ export class ExecutionEngine {
           : '没有找到你正在进行的 run。',
         '主 Agent 调 start_run 开始一个流程；如果上下文被压缩过、不确定自己在哪，这个结果就是答案的来源——先 start_run 或问用户该跑哪张图。',
       );
+    }
+    if (run.status === 'waiting_children') {
+      return this.gatherChildren(run);
     }
     return this.resultForRun(run, 'get_current_step');
   }
@@ -263,6 +308,13 @@ export class ExecutionEngine {
       return selfHeal(
         'run 正挂在人工卡点上等确认，complete_step 推不动它。',
         '调 await_gate(gateId) 等用户答复（每轮 60 秒）；用户已在聊天里答复就调 answer_gate(gateId, optionId) 代填。gateId 和选项见下面这一步。',
+        this.currentRef(run),
+      );
+    }
+    if (run.status === 'waiting_children') {
+      return selfHeal(
+        '这一步是子 Agent 派发步，完成由子任务回报驱动，不用 complete_step。',
+        '把每个 child 的 preamble 原样放进子任务开头派出；等全部子任务返回后调 get_current_step()，服务端会汇聚结果给出下一步。',
         this.currentRef(run),
       );
     }
@@ -334,6 +386,19 @@ export class ExecutionEngine {
       payload: JSON.stringify(params.payload ?? {}),
       branchId: params.branchId ?? null,
     }, now);
+    // 推进到派发步（§7.1）：主 run 已提交并挂 waiting_children，现在建 child——
+    // 放在事务后是为了 extraPrompt 的插值能取到刚提交的本步产物（{{nodeId.payload…}}）
+    if (plan.kind === 'advance' && plan.targetId !== null) {
+      const target = findNode(snapshot, plan.targetId);
+      if (target !== undefined && target.type === 'subagent') {
+        const planned = this.planChild(run, target, null);
+        if ('error' in planned) {
+          this.failRun(run);
+          return selfHeal(planned.error.what, `${planned.error.guidance}主 run 已判失败，修好后请重新 start_run。`, null);
+        }
+        this.spawnChildren(run, target.id, [planned]);
+      }
+    }
     return this.resultForPlan(run.id, snapshot, plan);
   }
 
@@ -352,6 +417,13 @@ export class ExecutionEngine {
       return selfHeal(
         'run 正挂在人工卡点上等确认，这不是阻塞，不需要 report_blocked。',
         '调 await_gate(gateId) 等用户答复；用户已在聊天里答复就调 answer_gate(gateId, optionId) 代填。',
+        this.currentRef(run),
+      );
+    }
+    if (run.status === 'waiting_children') {
+      return selfHeal(
+        '这一步是子 Agent 派发步，不是阻塞点。',
+        '等全部子任务返回后调 get_current_step() 汇聚；确实派不出去（宿主不支持派子 Agent）就请用户改图，去掉 subagent 节点后重跑。',
         this.currentRef(run),
       );
     }
@@ -384,6 +456,29 @@ export class ExecutionEngine {
         `节点不匹配：你上报的是 ${params.nodeId}，但当前这一步是 ${run.current_node}（可能是上下文压缩后记串了）。`,
         `对当前节点 ${run.current_node} 重新调 report_blocked；不确定的话先调 get_current_step() 取回最新状态。`,
         this.currentRef(run),
+      );
+    }
+
+    // child run 的阻塞（§7.8 末行）：不走三级出口，直接置 failed，由 §7.5 的失败处理接管（父级重派或带部分结果推进）
+    if (run.child_token !== null) {
+      const now = new Date().toISOString();
+      this.db.transaction((): void => {
+        this.db
+          .prepare(
+            `INSERT INTO node_executions (run_id, node_id, iteration, status, summary, payload, branch_id, started_at, finished_at)
+             VALUES (?, ?, ?, 'blocked', ?, '{}', NULL, ?, ?)`,
+          )
+          .run(run.id, node.id, this.execCount(run.id, node.id) + 1, params.reason, now, now);
+        this.db
+          .prepare(`UPDATE runs SET status = 'failed', outcome = 'fail', last_activity = ?, finished_at = ? WHERE id = ?`)
+          .run(now, now, run.id);
+      })();
+      this.emit({ type: 'step_completed', runId: run.id, nodeId: node.id, status: 'blocked', at: now });
+      this.emit({ type: 'run_finished', runId: run.id, outcome: 'fail', at: now });
+      return this.finishedResult(
+        run.id,
+        'fail',
+        `子任务上报阻塞：${params.reason}。该子任务已置为失败；主流程汇聚时（get_current_step）会自动重派一轮或带部分结果推进。`,
       );
     }
 
@@ -568,6 +663,225 @@ export class ExecutionEngine {
     }
   }
 
+  // ---- subagent 派发与 join 汇聚（§7.1 / §7.5，阶段 6）----
+
+  /** 入口即派发：start 后直接建 child 并挂 waiting_children（与入口即 gate 对称） */
+  private enterSubagent(runId: string, node: SubagentNode, now: string): SelfHealError | undefined {
+    const run = this.runById(runId);
+    if (run === null) {
+      return selfHeal(`run ${runId} 不存在（数据异常）。`, '这是服务端数据问题，请把这条错误原样反馈给用户。', null);
+    }
+    const planned = this.planChild(run, node, null);
+    if ('error' in planned) return planned.error;
+    const events: EngineEvent[] = [];
+    this.db.transaction((): void => {
+      this.db
+        .prepare(`UPDATE runs SET status = 'waiting_children', last_activity = ? WHERE id = ?`)
+        .run(now, runId);
+      this.insertChildRuns(run, node.id, [planned], events, now);
+    })();
+    for (const e of events) this.emit(e);
+    return undefined;
+  }
+
+  /** 预构建一个 child run（初始派发与重派共用；Phase 7 fan-out 扩为 N 个）：
+   *  子图（inline/subflow/flowRef）→ 从父快照切子快照（不回读当前库）→ 持久化 → 落库参数 */
+  private planChild(run: RunRow, node: SubagentNode, retryOf: string | null): ChildPlan | { error: SelfHealError } {
+    const snapshot = this.snapshotOf(run);
+    try {
+      const childFlow = this.childFlowOf(run, node, snapshot);
+      const childSnapshot = buildSubSnapshot(snapshot, childFlow);
+      const hash = persistSnapshot(this.db, childSnapshot);
+      return {
+        runId: `run_${crypto.randomBytes(4).toString('hex')}`,
+        token: `c_${crypto.randomBytes(4).toString('hex')}`,
+        flowId: childFlow.id,
+        snapshotHash: hash,
+        entry: childFlow.entry,
+        retryOf,
+      };
+    } catch (e) {
+      return {
+        error: selfHeal(
+          `子任务图构建失败：${(e as Error).message}`,
+          '在面板修好该 subagent 节点后重新 start_run。',
+          this.currentRef(run),
+        ),
+      };
+    }
+  }
+
+  /** §7.5 汇聚：主 Agent 在派发步上调 get_current_step 触发。
+   *  前提是宿主的 Task 调用已全部返回——children 没完成的就是"未回报"，判 failed 后走失败处理。
+   *  对稳定的 child 终态收敛（重复调用幂等）：要么推进离开派发步，要么重派后仍在派发步等新一轮回报。 */
+  private gatherChildren(run: RunRow): StepOpResult {
+    const snapshot = this.snapshotOf(run);
+    const node = run.current_node !== null ? findNode(snapshot, run.current_node) : undefined;
+    if (node === undefined || node.type !== 'subagent') {
+      return selfHeal(
+        `run ${run.id} 处于 waiting_children 但当前节点不是 subagent（${run.current_node}），数据异常。`,
+        '这是服务端数据问题，请把这条错误原样反馈给用户。',
+        null,
+      );
+    }
+    let slots = this.childSlots(run.id, node.id);
+    if (slots.length === 0) {
+      // 崩溃窗口自愈：推进事务已提交但 child 没落库——按节点配置补建，而不是把 run 卡死
+      const planned = this.planChild(run, node, null);
+      if ('error' in planned) return planned.error;
+      this.spawnChildren(run, node.id, [planned]);
+      slots = this.childSlots(run.id, node.id);
+    }
+    const now = new Date().toISOString();
+    // Task 已返回仍未终结的 child：挂了或未回报（§7.5 第二行），置 failed 后转失败处理
+    const stuck = slots.filter((s) => !isTerminalRun(s.latest));
+    for (const s of stuck) {
+      this.failChild(s.latest, now);
+    }
+    if (stuck.length > 0) slots = this.childSlots(run.id, node.id);
+
+    const failedSlots = slots.filter((s) => s.latest.status === 'failed');
+    // 重派只做一轮（§7.5）：失败的最新 child 若是原始 run（没被重派替代过）才可重派
+    const retryable = failedSlots.filter((s) => s.latest.id === s.original.id);
+    if (retryable.length > 0) {
+      const plans: ChildPlan[] = [];
+      for (const s of retryable) {
+        const plan = this.planChild(run, node, s.original.id);
+        if ('error' in plan) return plan.error;
+        plans.push(plan);
+      }
+      this.spawnChildren(run, node.id, plans);
+      const step = this.stepResult(run.id);
+      const note = `${failedSlots.length} 个子任务失败（原因见监控页对应子任务），已建新的 child run 重派——只重派这一轮：把新的 preamble 原样发给子 Agent 再跑一次，全部返回后再调 get_current_step()。`;
+      return 'step' in step ? { ...step, note } : step;
+    }
+
+    // 全部完成，或失败但已重派过 → 带已有结果推进（部分失败在汇总与 note 里显性记明缺了谁）
+    const missing = failedSlots.map((s) => s.latest.id);
+    const results = slots.map((s) => this.childResultOf(s.latest));
+    const sRow = {
+      nodeId: node.id,
+      status: 'completed' as const,
+      summary:
+        missing.length === 0
+          ? `子 Agent 全部回报（${slots.length} 个）`
+          : `子 Agent 汇聚：${slots.length - missing.length} 完成、${missing.length} 失败（缺：${missing.join('、')}）`,
+      payload: JSON.stringify({ children: results }),
+      branchId: null,
+    };
+    const successorId = node.next ?? null;
+    const plan: AdvanceOutcome =
+      successorId === null
+        ? { kind: 'advance', targetId: null, limitRows: [] }
+        : this.resolveAdvance(run, snapshot, successorId);
+    this.advanceTransaction(run, snapshot, plan, sRow, now);
+    const r = this.resultForPlan(run.id, snapshot, plan);
+    if (missing.length === 0) return r;
+    const missingNote = `部分子任务失败（缺：${missing.join('、')}），已带部分结果推进；失败详情在监控页对应子任务里。`;
+    if ('step' in r || 'finished' in r) {
+      return { ...r, note: r.note !== undefined ? `${r.note}${missingNote}` : missingNote };
+    }
+    return r;
+  }
+
+  /** child 批量落库（独立小事务 + child_spawned 事件）；主 run 指针已在先前的推进事务里更新 */
+  private spawnChildren(run: RunRow, parentNodeId: string, plans: ChildPlan[]): void {
+    const now = new Date().toISOString();
+    const events: EngineEvent[] = [];
+    this.db.transaction((): void => {
+      this.db.prepare(`UPDATE runs SET last_activity = ? WHERE id = ?`).run(now, run.id);
+      this.insertChildRuns(run, parentNodeId, plans, events, now);
+    })();
+    for (const e of events) this.emit(e);
+  }
+
+  /** child 落库（在事务内调用）；child_spawned 事件随事务提交后发出 */
+  private insertChildRuns(run: RunRow, parentNodeId: string, plans: ChildPlan[], events: EngineEvent[], now: string): void {
+    const stmt = this.db
+      .prepare(
+        `INSERT INTO runs (id, parent_run_id, root_run_id, flow_id, flow_snapshot_hash, entry_node, current_node,
+           status, cwd, project_name, child_token, parent_node, retry_of, steps_used, last_activity, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, 0, ?, ?)`,
+      );
+    for (const c of plans) {
+      stmt.run(c.runId, run.id, run.root_run_id, c.flowId, c.snapshotHash, c.entry, c.entry, run.cwd, run.project_name, c.token, parentNodeId, c.retryOf, now, now);
+      events.push({ type: 'child_spawned', runId: run.id, nodeId: parentNodeId, childRunId: c.runId, at: now });
+    }
+  }
+
+  /** (run, 派发节点) 的 child 槽位：每槽 = 原始 run + 最新替代（重派后的那个，若有）。
+   *  nodeId 为 null 表示该 run 的全部 child（join 缺省语义，§4 join.waitFor）。 */
+  private childSlots(runId: string, nodeId: string | null): Array<{ original: RunRow; latest: RunRow }> {
+    const rows = (
+      nodeId !== null
+        ? this.db
+            .prepare(
+              `SELECT * FROM runs WHERE parent_run_id = ? AND parent_node = ? AND retry_of IS NULL ORDER BY created_at, rowid`,
+            )
+            .all(runId, nodeId)
+        : this.db
+            .prepare(`SELECT * FROM runs WHERE parent_run_id = ? AND retry_of IS NULL ORDER BY created_at, rowid`)
+            .all(runId)
+    ) as RunRow[];
+    return rows.map((o) => {
+      const retry = this.runBy('retry_of = ?', o.id);
+      return { original: o, latest: retry ?? o };
+    });
+  }
+
+  /** 派发步当前要派的那一批 child（视图用）：有重派批就只看重派批，否则原始批 */
+  private currentWave(runId: string, nodeId: string): RunRow[] {
+    const retries = this.db
+      .prepare(`SELECT * FROM runs WHERE parent_run_id = ? AND parent_node = ? AND retry_of IS NOT NULL ORDER BY created_at, rowid`)
+      .all(runId, nodeId) as RunRow[];
+    if (retries.length > 0) return retries;
+    return this.db
+      .prepare(`SELECT * FROM runs WHERE parent_run_id = ? AND parent_node = ? AND retry_of IS NULL ORDER BY created_at, rowid`)
+      .all(runId, nodeId) as RunRow[];
+  }
+
+  /** child 置 failed（§7.5 "未回报"路径）；run_finished 事件让面板立即看到 */
+  private failChild(child: RunRow, now: string): void {
+    this.db
+      .prepare(`UPDATE runs SET status = 'failed', outcome = 'fail', last_activity = ?, finished_at = ? WHERE id = ?`)
+      .run(now, now, child.id);
+    this.emit({ type: 'run_finished', runId: child.id, outcome: 'fail', at: now });
+  }
+
+  /** child 的结果条目（join 视图与汇总 payload 用）；summary 取它最后一条轨迹 */
+  private childResultOf(child: RunRow): { childToken: string; status: string; summary: string } {
+    return { childToken: child.child_token ?? '', status: child.status, summary: this.childSummaryOf(child.id) };
+  }
+
+  private childSummaryOf(runId: string): string {
+    const row = this.db
+      .prepare('SELECT summary FROM node_executions WHERE run_id = ? ORDER BY id DESC LIMIT 1')
+      .get(runId) as { summary: string | null } | undefined;
+    return row?.summary ?? '';
+  }
+
+private childFlowOf(run: RunRow, node: SubagentNode, snapshot: FlowSnapshot): Flow {
+  const parent = snapshot.flows[snapshot.rootFlowId]!;
+  const name = node.title?.trim() !== '' && node.title !== undefined ? node.title : node.id;
+  if (node.mode === 'inline') {
+    return {
+      id: `${parent.id}::${node.id}`,
+      name,
+      entry: 'task',
+      nodes: [{ id: 'task', type: 'prompt', instruction: this.render(node.extraPrompt, run.id) }],
+    };
+  }
+  if (node.mode === 'subflow') {
+    const sub = node.subflow;
+    if (sub === undefined) throw new Error(`节点 ${node.id} 是 subflow 模式但没有内嵌子图`);
+    return { id: `${parent.id}::${node.id}`, name, entry: sub.entry, maxSteps: sub.maxSteps, nodes: sub.nodes };
+  }
+  const ref = snapshot.flows[node.flowRef ?? ''];
+  if (ref === undefined) throw new Error(`flowRef 引用的图不在快照里：${node.flowRef}（节点 ${node.id}）`);
+  return ref;
+}
+
+
   // ---- 内部 ----
 
   private resultForRun(run: RunRow, via: string): StepOpResult {
@@ -612,6 +926,9 @@ export class ExecutionEngine {
     };
     if (node.type === 'gate') {
       result.note = '人工卡点：run 已挂起等确认。把问题转达用户后调 await_gate(gateId) 等待（每轮 60 秒）；用户已在聊天里答复就调 answer_gate(gateId, optionId) 代填。';
+    }
+    if (node.type === 'subagent') {
+      result.note = '派发步：把每个 child 的 preamble 原样放进对应子任务开头（不许改写或摘要），extraPrompt 一并带上。等全部子任务返回后再调 get_current_step()，服务端会汇聚结果给出下一步。';
     }
     return result;
   }
@@ -669,6 +986,29 @@ export class ExecutionEngine {
       if (pending !== null) view.gateId = String(pending.id);
       view.question = node.question;
       view.options = node.options.map((o) => ({ id: o.id, label: o.label }));
+    }
+    if (node.type === 'subagent') {
+      // 派发步（§6.2）：当前批 child 的 token + preamble + 任务提示；extraPrompt 随主 run 插值渲染
+      const wave = this.currentWave(run.id, node.id);
+      if (wave.length > 0) {
+        view.children = wave.map((c) => ({
+          childToken: c.child_token ?? '',
+          preamble: preambleText(run.id, node.id, c.child_token ?? ''),
+          extraPrompt: this.render(node.extraPrompt, run.id),
+        }));
+      }
+    }
+    if (node.type === 'join') {
+      // 汇聚步（§6.2）：childResults + aggregateInstruction（结果摘要拼进 instruction，主 Agent 直接可读）
+      const slots = this.childSlots(run.id, node.waitFor ?? null);
+      const results = slots.map((s) => this.childResultOf(s.latest));
+      const lines = results.map((r) => `- ${r.status === 'completed' ? '✓' : '✗'} ${r.summary}`);
+      view.childResults = results;
+      view.aggregateInstruction = this.render(node.aggregateInstruction, run.id);
+      view.instruction =
+        lines.length > 0
+          ? `${view.aggregateInstruction}\n\n各子任务结果：\n${lines.join('\n')}`
+          : view.aggregateInstruction;
     }
     return view;
   }
@@ -850,8 +1190,9 @@ export class ExecutionEngine {
     return { kind: 'advance', targetId: null, limitRows };
   }
 
-  /** 单事务推进：落本步轨迹（completed / blocked）+ 迭代逃生轨迹 + 卡点决策更新 + 更新 run 指针/状态，任何一步失败整体回滚。
-   *  目标是 gate 时置 waiting_gate 并写 pending 卡点决策（§7.6）。事件在事务提交后才发（事务内只收集），回滚不会产生假事件。 */
+  /** 单事务推进：落本步轨迹（completed / blocked）+ 迭代逃生轨迹 + 卡点决策更新 + 子 run 落库 + 更新 run 指针/状态，任何一步失败整体回滚。
+   *  目标是 gate 时置 waiting_gate 并写 pending 卡点决策（§7.6）；目标是 subagent 时置 waiting_children（child 落库由调用方在事务后补，见 completeStep）。
+   *  事件在事务提交后才发（事务内只收集），回滚不会产生假事件。 */
   private advanceTransaction(
     run: RunRow,
     snapshot: FlowSnapshot,
@@ -904,6 +1245,11 @@ export class ExecutionEngine {
           .run(target.id, stepsUsed, now, run.id);
         const gateId = this.insertPendingGate(run.id, target);
         events.push({ type: 'gate_pending', runId: run.id, nodeId: target.id, gateId: String(gateId), question: target.question, at: now });
+      } else if (target !== undefined && target.type === 'subagent') {
+        // 派发步（§7.1）：挂起等子 Agent 回报；child run 由调用方在事务提交后落库（extraPrompt 插值需要本事务刚提交的产物）
+        this.db
+          .prepare(`UPDATE runs SET current_node = ?, status = 'waiting_children', steps_used = ?, last_activity = ? WHERE id = ?`)
+          .run(target.id, stepsUsed, now, run.id);
       } else {
         // 普通推进：status 显式回 running——从卡点放行出来时 run 还挂着 waiting_gate
         this.db
@@ -972,6 +1318,26 @@ export class ExecutionEngine {
 
 function findNode(snapshot: FlowSnapshot, nodeId: string): FlowNode | undefined {
   return snapshot.flows[snapshot.rootFlowId]!.nodes.find((n) => n.id === nodeId);
+}
+
+/** run 是否已到终态（child 汇聚用：没到终态的就是"未回报"） */
+function isTerminalRun(run: RunRow): boolean {
+  return run.status === 'completed' || run.status === 'failed' || run.status === 'stale';
+}
+
+/** subagent 节点 → 子 run 要跑的图（§4 subagent.mode 三态）。
+ *  inline：合成单节点图（extraPrompt 即任务，用主 run 数据渲染插值——child 上下文里没有主 run 的产物）；
+ *  subflow：内嵌子图（自包含，插值在 child 上下文里正常走）；flowRef：从父快照取——
+ *  不回读当前库，child 与主 run 钉同一版本（copy-on-run 一致性，§5.2）。 */
+/** §8.3 子 Agent preamble：必须原样前置的块，主 Agent 派发时逐字携带 */
+function preambleText(runId: string, nodeId: string, token: string): string {
+  return [
+    '[以下三行由流程引擎提供，请原样前置，不要改写或摘要]',
+    `你是流程 ${runId} 节点 ${nodeId} 派出的子任务，你的 childToken 是 ${token}。`,
+    `调 get_current_step({childToken:"${token}"}) 取你这一步要做什么。`,
+    `做完调 complete_step({childToken:"${token}", summary, payload?, branchId})。`,
+    '[主 Agent 的补充说明写在这行之后]',
+  ].join('\n');
 }
 
 function renderParams(

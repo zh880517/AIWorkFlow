@@ -276,6 +276,14 @@ run 定位顺序：**childToken → runId → hostSession（hook 注入的 `"<ho
 
 重派使用新 child run 而非复用旧 run，是为了让面板能同时看到"第一次失败了"和"重试的结果"，而不是被覆盖掉。
 
+实现落点（阶段 6 实测后补记）：
+
+- 派发步把主 run 置 `waiting_children`；汇聚由主 Agent 在派发步上调 `get_current_step` 触发（对稳定的 child 终态收敛，重复调用幂等）。
+- child 的 `extraPrompt` 用**主 run 的产物**渲染插值后写进 child 快照（inline 模式即子任务指令）；subflow 内的插值则在 child 自己的上下文里正常走。
+- child 快照从父快照切出（`buildSubSnapshot`），不回读当前库——child 与主 run 钉同一版本。
+- child 建库在主 run 推进事务**之后**（插值需要刚提交的本步产物）；若两步之间进程崩溃，汇聚时发现无 child 会按节点配置惰性补建，不把 run 卡死。
+- 重派一轮用 `runs.retry_of`（db v4）指向被替代的旧 run；"最新一批" = 有 retry 取 retry、否则原始。
+
 ### 7.6 人工卡点
 
 `gate` 节点将 run 置为 `waiting_gate` 并写一条 pending `gate_decisions`。两个通道均可解决：

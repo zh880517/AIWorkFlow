@@ -90,6 +90,13 @@ const MIGRATIONS: string[] = [
   `
   ALTER TABLE runs ADD COLUMN outcome TEXT;
   `,
+  // v4：阶段 6 子 Agent——child run 记录派出它的 subagent 节点（parent_node）；
+  // 重派一轮时新 child run 指向被替换的旧 run（retry_of），旧 run 保留为失败记录便于回看（§7.5）
+  `
+  ALTER TABLE runs ADD COLUMN parent_node TEXT;
+  ALTER TABLE runs ADD COLUMN retry_of TEXT REFERENCES runs(id);
+  CREATE INDEX IF NOT EXISTS idx_runs_parent_node ON runs(parent_run_id, parent_node);
+  `,
 ];
 
 function migrate(db: Database.Database): void {

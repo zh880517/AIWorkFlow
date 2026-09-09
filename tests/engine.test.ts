@@ -151,19 +151,6 @@ function unwiredGateFlow(): Flow {
   };
 }
 
-/** 未支持类型（subagent / join 在阶段 6） */
-function subagentFlow(): Flow {
-  return {
-    id: 'f_subagent',
-    name: '子代理图',
-    entry: 'n1',
-    nodes: [
-      { id: 'n1', type: 'subagent', extraPrompt: '干活', mode: 'inline', next: 'n2' },
-      { id: 'n2', type: 'end', outcome: 'success' },
-    ],
-  };
-}
-
 // 验收场景：改代码 → 跑测试，失败回退重跑（环），撞 iterationLimit 走逃生
 function retryFlow(escape: boolean): Flow {
   return {
@@ -299,12 +286,24 @@ describe('start_run', () => {
     expect(r.current).toBeNull();
   });
 
-  it('含 subagent 等未支持类型 → start_run 整体拒绝', () => {
-    const { engine } = makeEngine([subagentFlow()]);
-    const r = engine.startRun({ flowName: '子代理图' });
+  it('未知节点类型 → 校验层拒绝，三段式自愈（六种 DSL 类型阶段 6 起全支持）', () => {
+    // 不经 store（存图校验会硬拒），直接喂给引擎：走 startRun 内的 validateFlow 分支
+    const flow = {
+      id: 'f_unknown_type',
+      name: '未知类型图',
+      entry: 'n1',
+      nodes: [
+        { id: 'n1', type: 'custom', instruction: 'x', next: 'n2' },
+        { id: 'n2', type: 'end', outcome: 'success' },
+      ],
+    } as unknown as Flow;
+    const db = openMemoryDb();
+    const engine = new ExecutionEngine({ db, resolveFlow: (n) => (n === '未知类型图' || n === 'f_unknown_type' ? flow : undefined) });
+    const r = engine.startRun({ flowName: '未知类型图' });
     expect(isErr(r)).toBe(true);
     if (!isErr(r)) return;
-    expect(r.what).toContain('subagent');
+    expect(r.what).toContain('校验不通过');
+    expect(r.what).toContain('custom');
   });
 
   it('同一张图的 run 互不影响：各自持有快照', () => {
@@ -1118,5 +1117,275 @@ describe('gate 卡点（§7.6）', () => {
     expect(gate.nodeId).toBe('n_gate');
     expect(gate.question).toBe('可以发布吗？');
     expect(gate.gateId).toMatch(/^\d+$/);
+  });
+});
+
+// ---- subagent 派发与 join 汇聚（§7.1 / §7.5，阶段 6）----
+
+function subagentFlow(mode: 'inline' | 'subflow' | 'flowRef'): Flow {
+  return {
+    id: 'f_sub',
+    name: '派发图',
+    entry: 'n1',
+    nodes: [
+      { id: 'n1', type: 'prompt', instruction: '定题目', next: 'n_sub' },
+      {
+        id: 'n_sub',
+        type: 'subagent',
+        title: '查资料',
+        extraPrompt: '去查 {{n1.payload.topic}} 的资料并总结成三行',
+        mode,
+        next: 'n_join',
+        ...(mode === 'subflow'
+          ? {
+              subflow: {
+                entry: 's1',
+                nodes: [
+                  { id: 's1', type: 'prompt', instruction: '查资料第一步', next: 's2' },
+                  { id: 's2', type: 'prompt', instruction: '整理成摘要' },
+                ],
+              },
+            }
+          : {}),
+        ...(mode === 'flowRef' ? { flowRef: 'f_child' } : {}),
+      },
+      { id: 'n_join', type: 'join', aggregateInstruction: '把各子任务结果合并成一份报告', next: 'n_end' },
+      { id: 'n_end', type: 'end', outcome: 'success' },
+    ],
+  };
+}
+
+function refChildFlow(): Flow {
+  return {
+    id: 'f_child',
+    name: '被引用子图',
+    entry: 'c1',
+    nodes: [
+      { id: 'c1', type: 'prompt', instruction: '子任务第一棒', next: 'c2' },
+      { id: 'c2', type: 'prompt', instruction: '子任务收尾' },
+    ],
+  };
+}
+
+describe('subagent 派发与 join 汇聚（§7.1/§7.5）', () => {
+  /** 跑到派发步：返回 { runId, token }（token = 派发步下发的第一个 child） */
+  function toDispatch(engine: ExecutionEngine): { runId: string; token: string } {
+    const start = engine.startRun({ flowName: '派发图' });
+    if (!isStep(start)) throw new Error('start 失败');
+    const done = engine.completeStep({ runId: start.runId, summary: '题目定了', payload: { topic: '配表系统' } });
+    if (!isStep(done) || done.step.children === undefined) throw new Error(`应推进到派发步：${JSON.stringify(done)}`);
+    return { runId: start.runId, token: done.step.children[0]!.childToken };
+  }
+
+  function makeSubEngine(mode: 'inline' | 'subflow' | 'flowRef') {
+    const flows = mode === 'flowRef' ? [subagentFlow(mode), refChildFlow()] : [subagentFlow(mode)];
+    return makeEngine(flows);
+  }
+
+  it('推进到派发步：主 run 挂 waiting_children，children 带 token/preamble/插值后的 extraPrompt，child run 落库', () => {
+    const events: EngineEvent[] = [];
+    const { engine, db } = makeEngine([subagentFlow('inline')], (e) => events.push(e));
+    const start = engine.startRun({ flowName: '派发图' });
+    if (!isStep(start)) throw new Error('start 失败');
+    const r = engine.completeStep({ runId: start.runId, summary: '题目定了', payload: { topic: '配表系统' } });
+    if (!isStep(r)) throw new Error(`应到派发步：${JSON.stringify(r)}`);
+    expect(r.step.kind).toBe('subagent');
+    expect(r.note).toContain('preamble');
+    const child = r.step.children![0]!;
+    expect(child.childToken).toMatch(/^c_/);
+    expect(child.preamble).toContain(`你是流程 ${start.runId} 节点 n_sub 派出的子任务`);
+    expect(child.preamble).toContain(`get_current_step({childToken:"${child.childToken}"})`);
+    expect(child.extraPrompt).toBe('去查 配表系统 的资料并总结成三行'); // 主 run 插值已渲染
+    // 库：主 run 状态 + child run 行（run 树 / 白名单 token）
+    const main = db.prepare('SELECT status, current_node FROM runs WHERE id = ?').get(start.runId) as { status: string; current_node: string };
+    expect(main).toMatchObject({ status: 'waiting_children', current_node: 'n_sub' });
+    const childRow = db
+      .prepare('SELECT parent_run_id, root_run_id, parent_node, child_token, status, flow_id FROM runs WHERE child_token = ?')
+      .get(child.childToken) as { parent_run_id: string; root_run_id: string; parent_node: string; child_token: string; status: string; flow_id: string };
+    expect(childRow).toMatchObject({
+      parent_run_id: start.runId,
+      root_run_id: start.runId,
+      parent_node: 'n_sub',
+      status: 'running',
+    });
+    expect(childRow.flow_id).toBe('f_sub::n_sub');
+    expect(events.map((e) => e.type)).toContain('child_spawned');
+    const spawned = events.find((e) => e.type === 'child_spawned') as Extract<EngineEvent, { type: 'child_spawned' }>;
+    expect(spawned.nodeId).toBe('n_sub');
+  });
+
+  it('inline：子 Agent 靠 childToken 领步并完成（单节点隐式 end），主 run 挂起不动', () => {
+    const { engine, db } = makeSubEngine('inline');
+    const { runId, token } = toDispatch(engine);
+    // 子 Agent 盲调（只有 childToken）
+    const first = engine.getCurrentStep({ childToken: token });
+    if (!isStep(first)) throw new Error('child 应领到任务步');
+    expect(first.runId).not.toBe(runId);
+    expect(first.step.instruction).toBe('去查 配表系统 的资料并总结成三行');
+    const done = engine.completeStep({ childToken: token, summary: '查完了：三行摘要', payload: { lines: 3 } });
+    if (!isFinished(done)) throw new Error('child 应隐式收尾');
+    expect(done.outcome).toBe('success');
+    // 主 run 仍在派发步等汇聚
+    const main = db.prepare('SELECT status FROM runs WHERE id = ?').get(runId) as { status: string };
+    expect(main.status).toBe('waiting_children');
+  });
+
+  it('subflow：子 Agent 走内嵌子图两步完成', () => {
+    const { engine } = makeSubEngine('subflow');
+    const { token } = toDispatch(engine);
+    const s1 = engine.completeStep({ childToken: token, summary: '第一步完成' });
+    if (!isStep(s1)) throw new Error('应到子图第二步');
+    expect(s1.step.nodeId).toBe('s2');
+    const done = engine.completeStep({ childToken: token, summary: '摘要整理完毕' });
+    if (!isFinished(done)) throw new Error('子图走完应终结');
+    expect(done.outcome).toBe('success');
+  });
+
+  it('flowRef：子 Agent 走引用图（主 run 快照里的版本）', () => {
+    const { engine, store } = makeSubEngine('flowRef');
+    const { runId, token } = toDispatch(engine);
+    // 汇聚前改原图：child 仍跑快照版本（copy-on-run 一致性）
+    const mutated = refChildFlow();
+    mutated.nodes = [
+      { id: 'c1', type: 'prompt', instruction: '被改过的第一棒', next: 'c2' },
+      { id: 'c2', type: 'prompt', instruction: '子任务收尾' },
+    ];
+    expect(store.save(mutated).ok).toBe(true);
+    const first = engine.getCurrentStep({ childToken: token });
+    if (!isStep(first)) throw new Error('child 应领到步');
+    expect(first.step.instruction).toBe('子任务第一棒');
+    expect(first.runId).not.toBe(runId);
+    engine.completeStep({ childToken: token, summary: '第一棒完成' });
+    const done = engine.completeStep({ childToken: token, summary: '收尾完成' });
+    if (!isFinished(done)) throw new Error('应终结');
+    expect(done.outcome).toBe('success');
+  });
+
+  it('汇聚（全部完成）：get_current_step 返回 join 步，childResults 带结果，join 完成后到 end', () => {
+    const { engine, db } = makeSubEngine('inline');
+    const { runId, token } = toDispatch(engine);
+    engine.completeStep({ childToken: token, summary: '查完了：三行摘要', payload: { lines: 3 } });
+    const join = engine.getCurrentStep({ runId });
+    if (!isStep(join)) throw new Error(`应汇聚到 join：${JSON.stringify(join)}`);
+    expect(join.step.kind).toBe('join');
+    expect(join.step.nodeId).toBe('n_join');
+    expect(join.step.aggregateInstruction).toBe('把各子任务结果合并成一份报告');
+    expect(join.step.childResults).toHaveLength(1);
+    expect(join.step.childResults![0]).toMatchObject({ childToken: token, status: 'completed', summary: '查完了：三行摘要' });
+    expect(join.step.instruction).toContain('✓ 查完了：三行摘要');
+    // 派发步落一条汇总轨迹
+    const sRow = db
+      .prepare("SELECT summary, payload FROM node_executions WHERE run_id = ? AND node_id = 'n_sub'")
+      .get(runId) as { summary: string; payload: string };
+    expect(sRow.summary).toContain('全部回报');
+    const done = engine.completeStep({ runId, nodeId: 'n_join', summary: '报告写完了' });
+    if (!isFinished(done)) throw new Error('join 后应到 end');
+    expect(done.outcome).toBe('success');
+  });
+
+  it('child report_blocked → child 判失败；主汇聚自动重派一轮（新 child run、旧 run 留档）', () => {
+    const { engine, db } = makeSubEngine('inline');
+    const { runId, token } = toDispatch(engine);
+    const blocked = engine.reportBlocked({ childToken: token, reason: '缺数据库权限' });
+    if (!isFinished(blocked)) throw new Error('child 应判失败');
+    expect(blocked.outcome).toBe('fail');
+    expect(blocked.note).toContain('重派');
+    // child 落 blocked 轨迹
+    const childRow = db.prepare('SELECT id, status FROM runs WHERE child_token = ?').get(token) as { id: string; status: string };
+    expect(childRow.status).toBe('failed');
+    // 主汇聚：重派一轮，children 只含新 token
+    const retry = engine.getCurrentStep({ runId });
+    if (!isStep(retry) || retry.step.children === undefined) throw new Error(`应重派：${JSON.stringify(retry)}`);
+    expect(retry.step.kind).toBe('subagent');
+    expect(retry.note).toContain('重派');
+    expect(retry.step.children).toHaveLength(1);
+    const newToken = retry.step.children[0]!.childToken;
+    expect(newToken).not.toBe(token);
+    const newChild = db.prepare('SELECT retry_of, status FROM runs WHERE child_token = ?').get(newToken) as { retry_of: string; status: string };
+    expect(newChild).toMatchObject({ retry_of: childRow.id, status: 'running' });
+    // 重派成功 → join 用新 child 的结果
+    engine.completeStep({ childToken: newToken, summary: '第二次查完了' });
+    const join = engine.getCurrentStep({ runId });
+    if (!isStep(join)) throw new Error('应汇聚到 join');
+    expect(join.step.childResults![0]).toMatchObject({ childToken: newToken, status: 'completed', summary: '第二次查完了' });
+    const done = engine.completeStep({ runId, summary: '报告完成' });
+    if (!isFinished(done)) throw new Error('应到 end');
+    expect(done.outcome).toBe('success');
+  });
+
+  it('子任务未回报（Task 返回后仍 running）→ 判 failed 并重派一轮', () => {
+    const { engine, db } = makeSubEngine('inline');
+    const { runId, token } = toDispatch(engine);
+    // 主 Agent 不等子任务直接汇聚（子 Agent 挂了/没回报）
+    const r = engine.getCurrentStep({ runId });
+    if (!isStep(r) || r.step.children === undefined) throw new Error(`应重派：${JSON.stringify(r)}`);
+    const oldChild = db.prepare('SELECT status FROM runs WHERE child_token = ?').get(token) as { status: string };
+    expect(oldChild.status).toBe('failed'); // 未回报判 failed
+    expect(r.step.children[0]!.childToken).not.toBe(token);
+    expect(r.note).toContain('重派');
+  });
+
+  it('重派后仍失败 → 不再重派，带部分结果推进 join（note 与汇总显性记明缺了谁）', () => {
+    const { engine } = makeSubEngine('inline');
+    const { runId, token } = toDispatch(engine);
+    engine.reportBlocked({ childToken: token, reason: '第一次失败' });
+    const retry = engine.getCurrentStep({ runId }); // 重派
+    if (!isStep(retry) || retry.step.children === undefined) throw new Error('应重派');
+    const newToken = retry.step.children[0]!.childToken;
+    engine.reportBlocked({ childToken: newToken, reason: '第二次还是失败' });
+    // 再汇聚：不再重派，带部分结果（其实全缺）推进到 join
+    const join = engine.getCurrentStep({ runId });
+    if (!isStep(join)) throw new Error(`应带部分结果推进：${JSON.stringify(join)}`);
+    expect(join.step.kind).toBe('join');
+    expect(join.note).toContain('部分子任务失败');
+    expect(join.step.instruction).toContain('✗');
+    expect(join.step.childResults![0]).toMatchObject({ status: 'failed' });
+    // 主流程还能继续走完
+    const done = engine.completeStep({ runId, summary: '带着缺口写了报告' });
+    if (!isFinished(done)) throw new Error('join 后应到 end');
+    expect(done.outcome).toBe('success');
+  });
+
+  it('主 run 在派发步上 complete_step / report_blocked → 自愈不推进', () => {
+    const { engine } = makeSubEngine('inline');
+    const { runId } = toDispatch(engine);
+    const c = engine.completeStep({ runId, summary: '想硬推' });
+    expect(isErr(c)).toBe(true);
+    if (isErr(c)) expect(c.guidance).toContain('get_current_step');
+    const b = engine.reportBlocked({ runId, reason: '派不出去' });
+    expect(isErr(b)).toBe(true);
+    if (isErr(b)) expect(b.guidance).toContain('get_current_step');
+    const cur = engine.getCurrentStep({ runId }); // 触发汇聚：子任务未回报 → 判失败 → 重派，仍回到派发步
+    expect(isStep(cur)).toBe(true);
+  });
+
+  it('入口即 subagent：start 直接进入派发步', () => {
+    const flow: Flow = {
+      id: 'f_entry_sub',
+      name: '入口派发图',
+      entry: 'n_sub',
+      nodes: [
+        { id: 'n_sub', type: 'subagent', extraPrompt: '直接干活', mode: 'inline', next: 'n_end' },
+        { id: 'n_end', type: 'end', outcome: 'success' },
+      ],
+    };
+    const { engine, db } = makeEngine([flow]);
+    const start = engine.startRun({ flowName: '入口派发图' });
+    if (!isStep(start)) throw new Error('start 失败');
+    expect(start.step.kind).toBe('subagent');
+    expect(start.step.children).toHaveLength(1);
+    const run = db.prepare('SELECT status FROM runs WHERE id = ?').get(start.runId) as { status: string };
+    expect(run.status).toBe('waiting_children');
+  });
+
+  it('join 缺省（无 waitFor）：等该 run 全部 child', () => {
+    // n_join 不带 waitFor，靠 run 全量 child 汇聚（§4）
+    const { engine } = makeSubEngine('inline');
+    const { runId, token } = toDispatch(engine);
+    engine.completeStep({ childToken: token, summary: '完成' });
+    const join = engine.getCurrentStep({ runId });
+    if (!isStep(join)) throw new Error('应汇聚到 join');
+    expect(join.step.childResults).toHaveLength(1);
+    expect(join.step.childResults![0]!.status).toBe('completed');
   });
 });
