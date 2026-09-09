@@ -131,15 +131,15 @@ tests/       # core 层单测 + 端到端 API 测试
 
 **验收**：✅（2026-09-09，174 测试 + 真实服务双 MCP 会话实测 + 面板验证）单测覆盖三种 mode、未回报重派、重派再失败部分推进、child report_blocked 置 failed、派发步自愈守卫、入口即派发；真实服务：主/子两个独立 MCP 会话（不同 Mcp-Session-Id）凭 childToken 走完 派发→子任务→汇聚 join→终结，及"子任务未回报→判 failed→自动重派→重派成功→join 采用新结果"全链路；面板任务列表子 run 带 ↳ 标记、run 树状态（waiting_children / running / failed）正确。实测抓到一个真 bug：child 的 extraPrompt 插值在主 run 轨迹提交前渲染导致取不到产物——改为"先推进提交、再建 child"，并把崩溃窗口（推进已提交但 child 未落库）做成汇聚时惰性补建。
 
-## 阶段 7 — fan-out 并行 + 部分失败重试
+## 阶段 7 — fan-out 并行 + 部分失败重试 ✅
 
 | 任务 | 状态 |
 |---|---|
-| fanOut（from 插值 / 固定 N）+ max 截断显性记录被丢弃项 | ⬜ |
-| 派发时先建 N 个 child run 再返回 children[] | ⬜ |
-| 重试一轮后仍失败 → 带部分结果推进 join，面板标黄 | ⬜ |
+| fanOut（from 插值 / 固定 N）+ max 截断显性记录被丢弃项 | ✅（from 指向主 run 产物的数组字段，每条目一个 child（db v5 runs.fanout_item 记条目，重派沿用原条目）；count 固定 N；max 截断时落 dispatched 轨迹显性列出丢弃项 + 派发步 note 同步提示——铁律"不静默截断"；from 非数组/空数组/未产出 → 三段式自愈且 run 判失败） |
+| 派发时先建 N 个 child run 再返回 children[] | ✅（§7.4：面板立刻可见、token 白名单、截断可记录；children[] 按条目序，extraPrompt 里 {{item}} 渲染为各自条目） |
+| 重试一轮后仍失败 → 带部分结果推进 join，面板标黄 | ✅（note 与汇总行记明缺哪个条目；汇总行 payload.children 留 failed 痕迹，面板轨迹"部分完成"黄标 + 失败子 run 红标） |
 
-**验收**："按模块数派 N 个子 Agent"正确汇聚；截断与失败在面板显性可见。
+**验收**：✅（2026-09-09，180 测试 + 真实服务实测）"按模块数派 N 个子 Agent"：3 模块 max=2 → 派 2 截 1（guild 显性记录在派发轨迹与 note）→ 2 个子 Agent 各自条目任务完成 → join 汇聚 2 条 → 终结；部分失败：battle 成功 + shop 两轮失败 → 只重派 shop 槽（沿用原条目）→ 带部分结果推进 join（note 记"缺：shop"），主流程仍可走完。
 
 ## 阶段 8 — 图编辑器（React Flow）
 

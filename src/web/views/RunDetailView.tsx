@@ -22,6 +22,19 @@ const EXEC_STATUS: Record<string, { text: string; cls: string }> = {
   completed: { text: '完成', cls: 'ok' },
   blocked: { text: '阻塞', cls: 'bad' },
   limit_exceeded: { text: '超限逃生', cls: 'warn' },
+  dispatched: { text: '派发', cls: 'warn' },
+};
+
+/** 部分失败的汇聚行标黄（§7.5：重派后仍失败 → 带部分结果推进，面板显性可见） */
+const isPartialGather = (p: unknown): boolean => {
+  if (typeof p !== 'object' || p === null || !('children' in p)) return false;
+  const kids = (p as { children?: unknown }).children;
+  return Array.isArray(kids) && kids.some((k) => (k as { status?: string } | null)?.status === 'failed');
+};
+
+const chipOf = (e: api.RunExecutionItem): { text: string; cls: string } => {
+  if (e.status === 'completed' && isPartialGather(e.payload)) return { text: '部分完成', cls: 'warn' };
+  return EXEC_STATUS[e.status] ?? { text: e.status, cls: 'warn' };
 };
 
 const isSelfHeal = (r: unknown): r is { error: true; what: string; guidance: string } =>
@@ -198,7 +211,7 @@ export function RunDetailView({ id, navigate }: RunDetailViewProps) {
           </div>
           <ol className="run-trace-list">
             {visibleExecs.map((e, i) => {
-              const st = EXEC_STATUS[e.status] ?? { text: e.status, cls: 'warn' };
+              const st = chipOf(e);
               return (
                 <li
                   key={e.id}

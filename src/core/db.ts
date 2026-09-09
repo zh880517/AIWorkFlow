@@ -97,6 +97,10 @@ const MIGRATIONS: string[] = [
   ALTER TABLE runs ADD COLUMN retry_of TEXT REFERENCES runs(id);
   CREATE INDEX IF NOT EXISTS idx_runs_parent_node ON runs(parent_run_id, parent_node);
   `,
+  // v5：阶段 7 fan-out——每个 child 对应的条目（JSON，重派时沿用原 slot 条目；非 fan-out 为 NULL）
+  `
+  ALTER TABLE runs ADD COLUMN fanout_item TEXT;
+  `,
 ];
 
 function migrate(db: Database.Database): void {

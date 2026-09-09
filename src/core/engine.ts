@@ -168,6 +168,8 @@ interface RunRow {
   parent_node: string | null;
   /** 重派：替代的旧 child run id（v4 起）；首轮为 null */
   retry_of: string | null;
+  /** fan-out：该 child 对应的条目（JSON 序列化，v5 起）；非 fan-out 为 null */
+  fanout_item: string | null;
   steps_used: number;
 }
 
@@ -179,6 +181,8 @@ interface ChildPlan {
   snapshotHash: string;
   entry: string;
   retryOf: string | null;
+  /** fan-out 条目（JSON 序列化）；非 fan-out 为 null */
+  fanoutItem: string | null;
 }
 
 /** gate_decisions 行；pending 时 option_id/decided_at 为 NULL、source 为占位 'pending' */
@@ -386,17 +390,27 @@ export class ExecutionEngine {
       payload: JSON.stringify(params.payload ?? {}),
       branchId: params.branchId ?? null,
     }, now);
-    // 推进到派发步（§7.1）：主 run 已提交并挂 waiting_children，现在建 child——
-    // 放在事务后是为了 extraPrompt 的插值能取到刚提交的本步产物（{{nodeId.payload…}}）
+    // 推进到派发步（§7.1/§7.4）：主 run 已提交并挂 waiting_children，现在建 child（ren）——
+    // 放在事务后是为了 extraPrompt 的插值能取到刚提交的本步产物（{{nodeId.payload…}}）；
+    // fan-out 先把 N 个 child run 全部建好再返回 children[]（§7.4：面板立刻可见、token 白名单、截断可记录）
     if (plan.kind === 'advance' && plan.targetId !== null) {
       const target = findNode(snapshot, plan.targetId);
       if (target !== undefined && target.type === 'subagent') {
-        const planned = this.planChild(run, target, null);
-        if ('error' in planned) {
+        const list = this.childItems(run, target);
+        if ('error' in list) {
           this.failRun(run);
-          return selfHeal(planned.error.what, `${planned.error.guidance}主 run 已判失败，修好后请重新 start_run。`, null);
+          return selfHeal(list.error.what, `${list.error.guidance}主 run 已判失败，修好后请重新 start_run。`, null);
         }
-        this.spawnChildren(run, target.id, [planned]);
+        const plans: ChildPlan[] = [];
+        for (const item of list.items) {
+          const planned = this.planChild(run, target, null, item === null ? null : JSON.stringify(item));
+          if ('error' in planned) {
+            this.failRun(run);
+            return selfHeal(planned.error.what, `${planned.error.guidance}主 run 已判失败，修好后请重新 start_run。`, null);
+          }
+          plans.push(planned);
+        }
+        this.spawnChildren(run, target.id, plans, list.fanOuted ? { dropped: list.dropped } : undefined);
       }
     }
     return this.resultForPlan(run.id, snapshot, plan);
@@ -671,25 +685,88 @@ export class ExecutionEngine {
     if (run === null) {
       return selfHeal(`run ${runId} 不存在（数据异常）。`, '这是服务端数据问题，请把这条错误原样反馈给用户。', null);
     }
-    const planned = this.planChild(run, node, null);
-    if ('error' in planned) return planned.error;
+    const list = this.childItems(run, node);
+    if ('error' in list) return list.error;
+    const plans: ChildPlan[] = [];
+    for (const item of list.items) {
+      const planned = this.planChild(run, node, null, item === null ? null : JSON.stringify(item));
+      if ('error' in planned) return planned.error;
+      plans.push(planned);
+    }
     const events: EngineEvent[] = [];
     this.db.transaction((): void => {
       this.db
         .prepare(`UPDATE runs SET status = 'waiting_children', last_activity = ? WHERE id = ?`)
         .run(now, runId);
-      this.insertChildRuns(run, node.id, [planned], events, now);
+      this.insertChildRuns(run, node.id, plans, events, now);
     })();
     for (const e of events) this.emit(e);
     return undefined;
   }
 
-  /** 预构建一个 child run（初始派发与重派共用；Phase 7 fan-out 扩为 N 个）：
-   *  子图（inline/subflow/flowRef）→ 从父快照切子快照（不回读当前库）→ 持久化 → 落库参数 */
-  private planChild(run: RunRow, node: SubagentNode, retryOf: string | null): ChildPlan | { error: SelfHealError } {
+  /** fan-out 条目解析（§7.4）：from 插值（数组，max 截断）/ 固定 count / 无 fanOut（单 child）。
+   *  items 元素为 null 表示该 child 没有对应条目（count 模式与非 fan-out）。 */
+  private childItems(run: RunRow, node: SubagentNode): { items: unknown[]; dropped: unknown[]; fanOuted: boolean } | { error: SelfHealError } {
+    const fan = node.fanOut;
+    if (fan === undefined) return { items: [null], dropped: [], fanOuted: false };
+    if (fan.count !== undefined) {
+      const n = Math.floor(fan.count);
+      if (n < 1) {
+        return { error: selfHeal(`fanOut.count 必须是正整数（当前 ${fan.count}）。`, '在面板把 count 改成 ≥1，或改用 from 按数据条数派发。', this.currentRef(run)) };
+      }
+      return { items: Array.from({ length: n }, () => null), dropped: [], fanOuted: true };
+    }
+    const from = fan.from ?? '';
+    const m = /^\{\{\s*(.+?)\s*\}\}$/.exec(from.trim());
+    if (m === null) {
+      return {
+        error: selfHeal(
+          `fanOut.from 应是一个 {{...}} 插值表达式（当前 ${JSON.stringify(from)}）。`,
+          '改成如 "{{n3.payload.modules}}"——解析结果必须是数组，每个元素派一个子 Agent。',
+          this.currentRef(run),
+        ),
+      };
+    }
+    const value = this.lookupExpr(m[1]!, run.id);
+    if (value === undefined) {
+      return {
+        error: selfHeal(
+          `fanOut.from 引用的数据还不存在：${from}（引用的节点没跑过或字段缺失）。`,
+          '把 fanOut.from 指向一个已完成节点返回的数组字段，或改用 count 固定数量。',
+          this.currentRef(run),
+        ),
+      };
+    }
+    if (!Array.isArray(value)) {
+      return {
+        error: selfHeal(
+          `fanOut.from 解析结果不是数组：${from} → ${JSON.stringify(value).slice(0, 80)}。`,
+          'from 必须指向数组字段（每个元素派一个子 Agent），单值请走普通 subagent 节点。',
+          this.currentRef(run),
+        ),
+      };
+    }
+    if (value.length === 0) {
+      return {
+        error: selfHeal(
+          `fanOut.from 解析结果是空数组：${from}，没有可派发的条目。`,
+          '确认上游节点会产出非空数组，或改用 count 固定数量。',
+          this.currentRef(run),
+        ),
+      };
+    }
+    const max = fan.max !== undefined ? fan.max : value.length;
+    const items = value.slice(0, max);
+    return { items, dropped: value.slice(max), fanOuted: true };
+  }
+
+  /** 预构建一个 child run（初始派发与重派共用）：
+   *  子图（inline/subflow/flowRef）→ 从父快照切子快照（不回读当前库）→ 持久化 → 落库参数。
+   *  fanoutItem：该 child 对应的 fan-out 条目（JSON）；inline 模式下渲染进子任务指令。 */
+  private planChild(run: RunRow, node: SubagentNode, retryOf: string | null, fanoutItem: string | null): ChildPlan | { error: SelfHealError } {
     const snapshot = this.snapshotOf(run);
     try {
-      const childFlow = this.childFlowOf(run, node, snapshot);
+      const childFlow = this.childFlowOf(run, node, snapshot, fanoutItem);
       const childSnapshot = buildSubSnapshot(snapshot, childFlow);
       const hash = persistSnapshot(this.db, childSnapshot);
       return {
@@ -699,6 +776,7 @@ export class ExecutionEngine {
         snapshotHash: hash,
         entry: childFlow.entry,
         retryOf,
+        fanoutItem,
       };
     } catch (e) {
       return {
@@ -726,10 +804,16 @@ export class ExecutionEngine {
     }
     let slots = this.childSlots(run.id, node.id);
     if (slots.length === 0) {
-      // 崩溃窗口自愈：推进事务已提交但 child 没落库——按节点配置补建，而不是把 run 卡死
-      const planned = this.planChild(run, node, null);
-      if ('error' in planned) return planned.error;
-      this.spawnChildren(run, node.id, [planned]);
+      // 崩溃窗口自愈：推进事务已提交但 child 没落库——按节点配置补建（fan-out 按当时的数据重算），而不是把 run 卡死
+      const list = this.childItems(run, node);
+      if ('error' in list) return list.error;
+      const plans: ChildPlan[] = [];
+      for (const item of list.items) {
+        const planned = this.planChild(run, node, null, item === null ? null : JSON.stringify(item));
+        if ('error' in planned) return planned.error;
+        plans.push(planned);
+      }
+      this.spawnChildren(run, node.id, plans, list.fanOuted ? { dropped: list.dropped } : undefined);
       slots = this.childSlots(run.id, node.id);
     }
     const now = new Date().toISOString();
@@ -741,23 +825,31 @@ export class ExecutionEngine {
     if (stuck.length > 0) slots = this.childSlots(run.id, node.id);
 
     const failedSlots = slots.filter((s) => s.latest.status === 'failed');
-    // 重派只做一轮（§7.5）：失败的最新 child 若是原始 run（没被重派替代过）才可重派
+    // 重派只做一轮（§7.5）：失败的最新 child 若是原始 run（没被重派替代过）才可重派；
+    // fan-out 的重派沿用原 slot 的条目（fanout_item），子任务拿到的还是同一条数据
     const retryable = failedSlots.filter((s) => s.latest.id === s.original.id);
     if (retryable.length > 0) {
       const plans: ChildPlan[] = [];
       for (const s of retryable) {
-        const plan = this.planChild(run, node, s.original.id);
+        const plan = this.planChild(run, node, s.original.id, s.original.fanout_item);
         if ('error' in plan) return plan.error;
         plans.push(plan);
       }
-      this.spawnChildren(run, node.id, plans);
+      this.spawnChildren(run, node.id, plans, node.fanOut !== undefined ? { dropped: [] } : undefined);
       const step = this.stepResult(run.id);
       const note = `${failedSlots.length} 个子任务失败（原因见监控页对应子任务），已建新的 child run 重派——只重派这一轮：把新的 preamble 原样发给子 Agent 再跑一次，全部返回后再调 get_current_step()。`;
       return 'step' in step ? { ...step, note } : step;
     }
 
-    // 全部完成，或失败但已重派过 → 带已有结果推进（部分失败在汇总与 note 里显性记明缺了谁）
-    const missing = failedSlots.map((s) => s.latest.id);
+    // 全部完成，或失败但已重派过 → 带已有结果推进（部分失败在汇总与 note 里显性记明缺了谁；fan-out 用条目名）
+    const missing = failedSlots.map((s) => {
+      if (s.latest.fanout_item === null) return s.latest.id;
+      try {
+        return formatItem(JSON.parse(s.latest.fanout_item));
+      } catch {
+        return s.latest.id;
+      }
+    });
     const results = slots.map((s) => this.childResultOf(s.latest));
     const sRow = {
       nodeId: node.id,
@@ -784,13 +876,34 @@ export class ExecutionEngine {
     return r;
   }
 
-  /** child 批量落库（独立小事务 + child_spawned 事件）；主 run 指针已在先前的推进事务里更新 */
-  private spawnChildren(run: RunRow, parentNodeId: string, plans: ChildPlan[]): void {
+  /** child 批量落库（独立小事务 + child_spawned 事件）；主 run 指针已在先前的推进事务里更新。
+   *  fan-out 节点同时落一条 dispatched 轨迹：N 个 child 与被 max 截断丢弃的条目都显性在案（铁律：不静默截断）。 */
+  private spawnChildren(run: RunRow, parentNodeId: string, plans: ChildPlan[], fanout?: { dropped: unknown[] }): void {
     const now = new Date().toISOString();
     const events: EngineEvent[] = [];
     this.db.transaction((): void => {
       this.db.prepare(`UPDATE runs SET last_activity = ? WHERE id = ?`).run(now, run.id);
       this.insertChildRuns(run, parentNodeId, plans, events, now);
+      if (fanout !== undefined) {
+        const droppedNote =
+          fanout.dropped.length > 0
+            ? `（max 截断，丢弃 ${fanout.dropped.length} 个：${fanout.dropped.map(formatItem).join('、')}）`
+            : '';
+        this.db
+          .prepare(
+            `INSERT INTO node_executions (run_id, node_id, iteration, status, summary, payload, branch_id, started_at, finished_at)
+             VALUES (?, ?, ?, 'dispatched', ?, ?, NULL, ?, ?)`,
+          )
+          .run(
+            run.id,
+            parentNodeId,
+            this.execCount(run.id, parentNodeId) + 1,
+            `派出 ${plans.length} 个子任务${droppedNote}`,
+            JSON.stringify({ children: plans.map((p) => p.runId), dropped: fanout.dropped }),
+            now,
+            now,
+          );
+      }
     })();
     for (const e of events) this.emit(e);
   }
@@ -800,11 +913,11 @@ export class ExecutionEngine {
     const stmt = this.db
       .prepare(
         `INSERT INTO runs (id, parent_run_id, root_run_id, flow_id, flow_snapshot_hash, entry_node, current_node,
-           status, cwd, project_name, child_token, parent_node, retry_of, steps_used, last_activity, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, 0, ?, ?)`,
+           status, cwd, project_name, child_token, parent_node, retry_of, fanout_item, steps_used, last_activity, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
       );
     for (const c of plans) {
-      stmt.run(c.runId, run.id, run.root_run_id, c.flowId, c.snapshotHash, c.entry, c.entry, run.cwd, run.project_name, c.token, parentNodeId, c.retryOf, now, now);
+      stmt.run(c.runId, run.id, run.root_run_id, c.flowId, c.snapshotHash, c.entry, c.entry, run.cwd, run.project_name, c.token, parentNodeId, c.retryOf, c.fanoutItem, now, now);
       events.push({ type: 'child_spawned', runId: run.id, nodeId: parentNodeId, childRunId: c.runId, at: now });
     }
   }
@@ -860,7 +973,19 @@ export class ExecutionEngine {
     return row?.summary ?? '';
   }
 
-private childFlowOf(run: RunRow, node: SubagentNode, snapshot: FlowSnapshot): Flow {
+  /** fan-out 条目渲染：把 extraPrompt 里的 {{item}} 替换为该 child 的条目（非 fan-out 原样返回） */
+  private renderItem(text: string, fanoutItem: string | null): string {
+    if (fanoutItem === null || !text.includes('{{')) return text;
+    let value: unknown;
+    try {
+      value = JSON.parse(fanoutItem);
+    } catch {
+      value = fanoutItem;
+    }
+    return text.replace(/\{\{\s*item\s*\}\}/g, () => (typeof value === 'string' ? value : JSON.stringify(value)));
+  }
+
+private childFlowOf(run: RunRow, node: SubagentNode, snapshot: FlowSnapshot, fanoutItem: string | null): Flow {
   const parent = snapshot.flows[snapshot.rootFlowId]!;
   const name = node.title?.trim() !== '' && node.title !== undefined ? node.title : node.id;
   if (node.mode === 'inline') {
@@ -868,7 +993,8 @@ private childFlowOf(run: RunRow, node: SubagentNode, snapshot: FlowSnapshot): Fl
       id: `${parent.id}::${node.id}`,
       name,
       entry: 'task',
-      nodes: [{ id: 'task', type: 'prompt', instruction: this.render(node.extraPrompt, run.id) }],
+      // 主 run 产物插值 + fan-out 条目（{{item}}）都渲染进子任务指令——child 上下文里两者都取不到
+      nodes: [{ id: 'task', type: 'prompt', instruction: this.renderItem(this.render(node.extraPrompt, run.id), fanoutItem) }],
     };
   }
   if (node.mode === 'subflow') {
@@ -929,6 +1055,16 @@ private childFlowOf(run: RunRow, node: SubagentNode, snapshot: FlowSnapshot): Fl
     }
     if (node.type === 'subagent') {
       result.note = '派发步：把每个 child 的 preamble 原样放进对应子任务开头（不许改写或摘要），extraPrompt 一并带上。等全部子任务返回后再调 get_current_step()，服务端会汇聚结果给出下一步。';
+      // 不静默截断（铁律 6）：被 max 丢弃的条目在下发内容里也说一遍
+      const dRow = this.db
+        .prepare("SELECT payload FROM node_executions WHERE run_id = ? AND node_id = ? AND status = 'dispatched' ORDER BY id DESC LIMIT 1")
+        .get(run.id, node.id) as { payload: string } | undefined;
+      if (dRow !== undefined) {
+        const dropped = (JSON.parse(dRow.payload) as { dropped?: unknown[] }).dropped ?? [];
+        if (dropped.length > 0) {
+          result.note += `fan-out 已按 max 截断：丢弃了 ${dropped.length} 个条目（${dropped.map(formatItem).join('、')}），监控页轨迹有完整记录。`;
+        }
+      }
     }
     return result;
   }
@@ -988,13 +1124,13 @@ private childFlowOf(run: RunRow, node: SubagentNode, snapshot: FlowSnapshot): Fl
       view.options = node.options.map((o) => ({ id: o.id, label: o.label }));
     }
     if (node.type === 'subagent') {
-      // 派发步（§6.2）：当前批 child 的 token + preamble + 任务提示；extraPrompt 随主 run 插值渲染
+      // 派发步（§6.2）：当前批 child 的 token + preamble + 任务提示；extraPrompt 随主 run 插值渲染，fan-out 再渲染各自条目
       const wave = this.currentWave(run.id, node.id);
       if (wave.length > 0) {
         view.children = wave.map((c) => ({
           childToken: c.child_token ?? '',
           preamble: preambleText(run.id, node.id, c.child_token ?? ''),
-          extraPrompt: this.render(node.extraPrompt, run.id),
+          extraPrompt: this.renderItem(this.render(node.extraPrompt, run.id), c.fanout_item),
         }));
       }
     }
@@ -1338,6 +1474,12 @@ function preambleText(runId: string, nodeId: string, token: string): string {
     `做完调 complete_step({childToken:"${token}", summary, payload?, branchId})。`,
     '[主 Agent 的补充说明写在这行之后]',
   ].join('\n');
+}
+
+/** fan-out 条目转可读文本（截断记录、缺失名单用） */
+function formatItem(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  return typeof value === 'string' ? value : JSON.stringify(value);
 }
 
 function renderParams(

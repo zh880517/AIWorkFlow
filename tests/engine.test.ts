@@ -1389,3 +1389,199 @@ describe('subagent 派发与 join 汇聚（§7.1/§7.5）', () => {
     expect(join.step.childResults![0]!.status).toBe('completed');
   });
 });
+
+// ---- fan-out 并行与部分失败（§7.4，阶段 7）----
+
+function fanoutFlow(max?: number): Flow {
+  return {
+    id: 'f_fanout',
+    name: '按模块派发图',
+    entry: 'n1',
+    nodes: [
+      { id: 'n1', type: 'prompt', instruction: '列出模块', next: 'n_sub' },
+      {
+        id: 'n_sub',
+        type: 'subagent',
+        title: '逐模块调研',
+        extraPrompt: '调研 {{item}} 的对外接口',
+        mode: 'inline',
+        fanOut: max === undefined ? { from: '{{n1.payload.modules}}' } : { from: '{{n1.payload.modules}}', max },
+        next: 'n_join',
+      },
+      { id: 'n_join', type: 'join', aggregateInstruction: '合并成模块清单', next: 'n_ok' },
+      { id: 'n_ok', type: 'end', outcome: 'success' },
+    ],
+  };
+}
+
+describe('fan-out 并行（§7.4，阶段 7）', () => {
+  /** 跑到派发步，返回所有 child token（按条目顺序） */
+  function toFanout(engine: ExecutionEngine, modules: string[]): { runId: string; tokens: string[] } {
+    const start = engine.startRun({ flowName: '按模块派发图' });
+    if (!isStep(start)) throw new Error('start 失败');
+    const done = engine.completeStep({ runId: start.runId, summary: '模块定了', payload: { modules } });
+    if (!isStep(done) || done.step.children === undefined) throw new Error(`应到派发步：${JSON.stringify(done)}`);
+    return { runId: start.runId, tokens: done.step.children.map((c) => c.childToken) };
+  }
+
+  it('from 派 N：每 child 一个条目（{{item}} 已渲染），全部完成后 join 正确汇聚', () => {
+    const { engine, db } = makeEngine([fanoutFlow()]);
+    const start = engine.startRun({ flowName: '按模块派发图' });
+    if (!isStep(start)) throw new Error('start 失败');
+    const done = engine.completeStep({ runId: start.runId, summary: '模块定了', payload: { modules: ['battle', 'shop', 'chat'] } });
+    if (!isStep(done) || done.step.children === undefined) throw new Error('应到派发步');
+    expect(done.step.children).toHaveLength(3);
+    expect(done.step.children.map((c) => c.extraPrompt)).toEqual([
+      '调研 battle 的对外接口',
+      '调研 shop 的对外接口',
+      '调研 chat 的对外接口',
+    ]);
+    // 子 Agent 各自领到自己的条目任务
+    const instr = done.step.children.map((c) => {
+      const s = engine.getCurrentStep({ childToken: c.childToken });
+      return isStep(s) ? s.step.instruction : `ERR:${JSON.stringify(s)}`;
+    });
+    expect(instr).toEqual(['调研 battle 的对外接口', '调研 shop 的对外接口', '调研 chat 的对外接口']);
+    // 无截断：dispatched 轨迹记录 3 个 child、丢弃 0
+    const dRow = db
+      .prepare("SELECT summary, payload FROM node_executions WHERE run_id = ? AND node_id = 'n_sub' AND status = 'dispatched'")
+      .get(start.runId) as { summary: string; payload: string };
+    expect(dRow.summary).toContain('派出 3 个子任务');
+    expect(JSON.parse(dRow.payload).dropped).toEqual([]);
+    // 全部完成 → 汇聚
+    for (const c of done.step.children) engine.completeStep({ childToken: c.childToken, summary: `${c.extraPrompt.slice(2, 8)} 完成` });
+    const join = engine.getCurrentStep({ runId: start.runId });
+    if (!isStep(join)) throw new Error('应汇聚到 join');
+    expect(join.step.childResults).toHaveLength(3);
+    const end = engine.completeStep({ runId: start.runId, summary: '清单合并完成' });
+    if (!isFinished(end)) throw new Error('应到 end');
+    expect(end.outcome).toBe('success');
+  });
+
+  it('max 截断：只派前 N 个，被丢弃的条目显性记录在派发轨迹（铁律：不静默截断）', () => {
+    const { engine, db } = makeEngine([fanoutFlow(2)]);
+    const start = engine.startRun({ flowName: '按模块派发图' });
+    if (!isStep(start)) throw new Error('start 失败');
+    const done = engine.completeStep({ runId: start.runId, summary: '模块定了', payload: { modules: ['battle', 'shop', 'chat', 'guild'] } });
+    if (!isStep(done) || done.step.children === undefined) throw new Error('应到派发步');
+    expect(done.step.children).toHaveLength(2);
+    expect(done.note ?? '').toContain('截断'); // note 提示? — 派发步 note 是固定文案，截断信息在轨迹；这里只验轨迹
+    const dRow = db
+      .prepare("SELECT summary, payload FROM node_executions WHERE run_id = ? AND node_id = 'n_sub' AND status = 'dispatched'")
+      .get(start.runId) as { summary: string; payload: string };
+    expect(dRow.summary).toContain('丢弃 2 个');
+    expect(dRow.summary).toContain('chat');
+    expect(dRow.summary).toContain('guild');
+    const payload = JSON.parse(dRow.payload) as { children: string[]; dropped: string[] };
+    expect(payload.children).toHaveLength(2);
+    expect(payload.dropped).toEqual(['chat', 'guild']);
+    engine.completeStep({ childToken: done.step.children[0]!.childToken, summary: 'battle 完成' });
+    engine.completeStep({ childToken: done.step.children[1]!.childToken, summary: 'shop 完成' });
+    const join = engine.getCurrentStep({ runId: start.runId });
+    if (!isStep(join)) throw new Error('应汇聚');
+    expect(join.step.childResults).toHaveLength(2); // 只汇聚被派出的
+  });
+
+  it('count 固定 N：派 N 个相同子任务', () => {
+    const flow: Flow = {
+      id: 'f_fanout_count',
+      name: '定数派发图',
+      entry: 'n_sub',
+      nodes: [
+        {
+          id: 'n_sub',
+          type: 'subagent',
+          extraPrompt: '抽查一个文件',
+          mode: 'inline',
+          fanOut: { count: 3 },
+          next: 'n_ok',
+        },
+        { id: 'n_ok', type: 'end', outcome: 'success' },
+      ],
+    };
+    const { engine } = makeEngine([flow]);
+    const start = engine.startRun({ flowName: '定数派发图' });
+    if (!isStep(start)) throw new Error('start 失败');
+    expect(start.step.children).toHaveLength(3);
+    for (const c of start.step.children!) {
+      engine.completeStep({ childToken: c.childToken, summary: '抽查完成' });
+    }
+    const done = engine.getCurrentStep({ runId: start.runId });
+    if (!isFinished(done)) throw new Error(`n_sub 后无 join，直接隐式推进到 end：${JSON.stringify(done)}`);
+    expect(done.outcome).toBe('success');
+  });
+
+  it('from 数据问题（非数组 / 空数组 / 未产出）→ 三段式自愈且 run 判失败', () => {
+    const { engine, db } = makeEngine([fanoutFlow()]);
+    // 非数组
+    let start = engine.startRun({ flowName: '按模块派发图' });
+    if (!isStep(start)) throw new Error('start 失败');
+    let r = engine.completeStep({ runId: start.runId, summary: 'x', payload: { modules: 'battle' } });
+    expect(isErr(r)).toBe(true);
+    if (isErr(r)) expect(r.what).toContain('不是数组');
+    expect((db.prepare('SELECT status FROM runs WHERE id = ?').get(start.runId) as { status: string }).status).toBe('failed');
+    // 空数组
+    start = engine.startRun({ flowName: '按模块派发图' });
+    if (!isStep(start)) throw new Error('start 失败');
+    r = engine.completeStep({ runId: start.runId, summary: 'x', payload: { modules: [] } });
+    expect(isErr(r)).toBe(true);
+    if (isErr(r)) expect(r.what).toContain('空数组');
+    // 字段缺失（没跑过）
+    start = engine.startRun({ flowName: '按模块派发图' });
+    if (!isStep(start)) throw new Error('start 失败');
+    r = engine.completeStep({ runId: start.runId, summary: 'x', payload: { other: 1 } });
+    expect(isErr(r)).toBe(true);
+    if (isErr(r)) expect(r.what).toContain('不存在');
+  });
+
+  it('部分失败：只重派失败的槽（沿用原条目），重派成功后 join 齐活', () => {
+    const { engine } = makeEngine([fanoutFlow()]);
+    const { runId, tokens } = toFanout(engine, ['battle', 'shop']);
+    engine.completeStep({ childToken: tokens[0]!, summary: 'battle 完成' });
+    engine.reportBlocked({ childToken: tokens[1]!, reason: 'shop 文档缺失' });
+    // 汇聚 → 只重派 shop 那个槽
+    const retry = engine.getCurrentStep({ runId });
+    if (!isStep(retry) || retry.step.children === undefined) throw new Error('应重派');
+    expect(retry.step.children).toHaveLength(1);
+    const newToken = retry.step.children[0]!.childToken;
+    expect(retry.step.children[0]!.extraPrompt).toBe('调研 shop 的对外接口'); // 沿用原条目
+    const task = engine.getCurrentStep({ childToken: newToken });
+    expect(isStep(task) && task.step.instruction).toBe('调研 shop 的对外接口');
+    engine.completeStep({ childToken: newToken, summary: 'shop 补齐' });
+    const join = engine.getCurrentStep({ runId });
+    if (!isStep(join)) throw new Error('应汇聚');
+    const results = join.step.childResults!;
+    expect(results).toHaveLength(2);
+    expect(results.map((x) => x.childToken).sort()).toEqual([tokens[0]!, newToken].sort());
+    expect(results.every((x) => x.status === 'completed')).toBe(true);
+    const end = engine.completeStep({ runId, summary: '合并完成' });
+    if (!isFinished(end)) throw new Error('应到 end');
+    expect(end.outcome).toBe('success');
+  });
+
+  it('重派再失败 → 带部分结果推进 join：note 记明缺哪个条目，汇总行 payload 留 failed 痕迹（面板黄标数据源）', () => {
+    const { engine, db } = makeEngine([fanoutFlow()]);
+    const { runId, tokens } = toFanout(engine, ['battle', 'shop']);
+    engine.completeStep({ childToken: tokens[0]!, summary: 'battle 完成' });
+    engine.reportBlocked({ childToken: tokens[1]!, reason: 'shop 挂了' });
+    const retry = engine.getCurrentStep({ runId }); // 重派
+    if (!isStep(retry) || retry.step.children === undefined) throw new Error('应重派');
+    engine.reportBlocked({ childToken: retry.step.children[0]!.childToken, reason: 'shop 还是挂' });
+    // 再汇聚：不再重派，带部分结果推进
+    const join = engine.getCurrentStep({ runId });
+    if (!isStep(join)) throw new Error('应带部分结果推进');
+    expect(join.step.kind).toBe('join');
+    expect(join.note).toContain('部分子任务失败');
+    expect(join.note).toContain('shop'); // 用条目名记明缺谁
+    expect(join.step.childResults!.map((r) => r.status)).toEqual(['completed', 'failed']);
+    // 汇总行（部分完成 → 面板黄标）
+    const sRow = db
+      .prepare("SELECT payload FROM node_executions WHERE run_id = ? AND node_id = 'n_sub' AND status = 'completed'")
+      .get(runId) as { payload: string };
+    const kids = (JSON.parse(sRow.payload) as { children: Array<{ status: string }> }).children;
+    expect(kids.some((k) => k.status === 'failed')).toBe(true);
+    const end = engine.completeStep({ runId, summary: '带缺口合并' });
+    if (!isFinished(end)) throw new Error('应到 end');
+    expect(end.outcome).toBe('success');
+  });
+});
