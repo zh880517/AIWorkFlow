@@ -8,7 +8,17 @@ import * as api from './api.js';
 import { FlowCanvas, type CanvasApi, type Point } from './canvas.js';
 import { Inspector } from './inspector.js';
 import { ContextMenu, type MenuItem } from './menu.js';
-import { buildFlow, canvasOf, detailOf, makeNode, PALETTE, typeLabel, type CanvasEdge, type CanvasNode } from './model.js';
+import {
+  bindGateTarget,
+  buildFlow,
+  canvasOf,
+  detailOf,
+  makeNode,
+  PALETTE,
+  typeLabel,
+  type CanvasEdge,
+  type CanvasNode,
+} from './model.js';
 import { editorCss } from './styles.js';
 
 export interface WorkflowPageProps {
@@ -523,6 +533,35 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
     record(`patch:${selectedId}:${Object.keys(patch).join(',')}`);
     const next = { ...current, ...patch } as FlowNode;
     setBodies((all) => ({ ...all, [selectedId]: next }));
+    // 卡点选项变了：改文案同步出边标签，删选项连带删掉它的出边（不留无主的线）
+    if (current.type === 'gate' && Array.isArray(patch.options)) {
+      const labels = new Map(
+        (patch.options as Array<{ id: string; label: string }>).map((entry) => [entry.id, entry.label]),
+      );
+      setEdges((all) => {
+        let changed = false;
+        const kept: CanvasEdge[] = [];
+        for (const edge of all) {
+          const outlet = edge.source === selectedId ? edge.data?.outlet : undefined;
+          if (outlet === undefined) {
+            kept.push(edge);
+            continue;
+          }
+          const label = labels.get(outlet);
+          if (label === undefined) {
+            changed = true;
+            continue;
+          }
+          if (edge.label === label) {
+            kept.push(edge);
+            continue;
+          }
+          changed = true;
+          kept.push({ ...edge, label });
+        }
+        return changed ? kept : all;
+      });
+    }
     setNodes((all) =>
       all.map((node) =>
         node.id === selectedId
@@ -561,24 +600,25 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
     setDirty(true);
   };
 
-  /** 卡点出口绑定：这条线属于哪个选项。顺手把边上的标签换成选项文案 */
-  const setOutlet = (edgeId: string, optionId: string): void => {
-    record(`outlet:${edgeId}`);
-    const sourceBody = edges.find((edge) => edge.id === edgeId)?.source;
-    const gate = sourceBody === undefined ? undefined : bodies[sourceBody];
-    const label =
-      gate?.type === 'gate' ? (gate.options ?? []).find((option) => option.id === optionId)?.label : undefined;
-    setEdges((all) =>
-      all.map((edge) =>
-        edge.id === edgeId
-          ? {
-              ...edge,
-              ...(label !== undefined ? { label } : {}),
-              data: { ...(edge.data ?? {}), outlet: optionId },
-            }
-          : edge,
-      ),
-    );
+  /** 卡点：在属性面板里给选项挑目标节点（''=断开），等价于画布上连/删一条线 */
+  const setGateTarget = (optionId: string, targetId: string): void => {
+    if (selectedId === null) return;
+    const gate = bodies[selectedId];
+    if (gate?.type !== 'gate') return;
+    const option = (gate.options ?? []).find((item) => item.id === optionId);
+    if (option === undefined) return;
+    if (targetId === entry) {
+      reportInfo('入口节点不能有入线：先把别的节点设为入口');
+      return;
+    }
+    const result = bindGateTarget(edges, selectedId, optionId, option.label, targetId);
+    if (result.error !== undefined) {
+      reportInfo(result.error);
+      return;
+    }
+    if (result.edges === edges) return;
+    record(`gate-target:${selectedId}:${optionId}`);
+    setEdges(result.edges);
     setDirty(true);
   };
 
@@ -1041,7 +1081,7 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
             onPatch={patchNode}
             onDelete={deleteNode}
             onCondition={setCondition}
-            onOutlet={setOutlet}
+            onGateTarget={setGateTarget}
             onSetEntry={() => {
               if (selectedId !== null) setEntryId(selectedId);
             }}

@@ -53,13 +53,15 @@ npm run typecheck:plugin && npm run build:plugin
 | 加第二条出边后保存被拒「多个 default」 | `buildFlow` 把空条件一律补成 `*` | 只有第一路补 `*`；其余保持空，交给校验器报 `E_EMPTY_CONDITION`（错误信息才指向真问题） |
 | 键盘删除节点后，属性面板还在编辑已删节点 | React Flow 自带 `deleteKeyCode` 绕过 `deleteNode`，bodies/入口/选中都没清 | `deleteKeyCode={null}`，删除统一走 `deleteSelected`（清 bodies、修入口、清选中，并压一次历史） |
 | 新增节点落在视口外 / 叠在一起 | 位置写死 `y=320` 起 | 加节点前取画布视口中心（`CanvasApi.center()`），每 6 个再错开偏移 |
-| 卡点保存后每个选项都警告「没有连线」 | 分支没有 `outlet`，校验器/引擎按 outlet 或分支 id 匹配选项 | `buildFlow` 给 gate 节点补 `outlet`；面板每条出边可选绑定哪个选项（存 `edge.data.outlet`，优先于按顺序兜底） |
+| 卡点保存后每个选项都警告「没有连线」 | 分支没有 `outlet`，校验器/引擎按 outlet 或分支 id 匹配选项 | `buildFlow` 给 gate 节点补 `outlet`；属性面板「出口分支」改成按选项一行，给选项挑目标节点就等于连/删一条出边（`bindGateTarget()`） |
+| 加了选项，「出口分支」行数不变 | 出口分支原先按**出边**渲染（选项只是边上的标签），加选项不会凭空长出一条边 | 卡点改成**选项驱动**：每个选项一行下拉选目标节点；画布上先拉的线可被认领；删选项连带删它的出边 |
 
 ## 当前实现的事实（改之前先确认，别按记忆）
 
 - 画布节点/边的唯一数据源是 `canvasOf(flow)`：位置优先取 `flow._ui.positions`，缺省按 `autoPosition(index)` 网格铺开。
 - **连线即后继**：`buildFlow` 从边重建 DSL——单出边写 `next`，多出边写 `branches`；索引 0 的空条件补 `*`，其余空条件**保持空**（交给校验器报 `E_EMPTY_CONDITION`；补成 `*` 会变成多个 default）。
-- **卡点出口**：多出边时每条边绑定一个选项（`edge.data.outlet`，面板下拉选），优先于按顺序兜底；`condition` 引擎不用但校验器要求非空，所以用选项文案补齐。单出边仍写 `next`（引擎对 gate 的 next 兜底 = 所有选项走同一节点），面板会给出提示。
+- **卡点出口**：多出边时每条边绑定一个选项（`edge.data.outlet`），优先于按顺序兜底；`condition` 引擎不用但校验器要求非空，所以用选项文案补齐。只有一条出边且**没绑定选项**时才写 `next`（引擎对 gate 的 next 兜底 = 所有选项走同一节点）；绑定过选项就写 `branches`，否则校验器会对每个选项报 `W_GATE_OPTION_UNWIRED`。
+- **卡点「出口分支」是选项驱动的**（`bindGateTarget(edges, gateId, optionId, label, targetId)` in `model.ts`）：一行一个选项，下拉选目标节点 = 建一条 `gate→目标` 的出边（自动顺延 `bN`，边 id 用 `e-<gateId>-out-<optionId>`，标签写选项文案）；选「（未连线）」= 删掉这条边。已有绑定边只改 `target`；画布上先拉了线还没归属选项的，会被**认领**而不是再连一条；同卡点已有边指向同一目标时拒绝并 `reportInfo`。删选项 / 改选项文案由 `patchNode` 同步（删边 / 改边标签）。
 - 节点本体（instruction/options/params/fanOut/iterationLimit/onLimitExceeded/subflow 等）不在画布节点里，存在 `bodies` map（`page.tsx`），保存时按边重建，其余字段原样保留。**subflow 目前只保留不可编辑**：模式选项被禁用，已有 subflow 节点会显示警告。
 - 属性面板分区：基本信息 / 类型参数 / 补充说明（非 prompt、非 end 的 instruction）/ 循环与逃生（iterationLimit、onLimitExceeded）/ 出口分支；工具参数是键值对行，fan-out 是 from 与 count 互斥 + max。
 - 撤销/重做是快照栈（`page.tsx` 的 `record()` / `undo()` / `redo()`）：任何会改图的新交互都必须**先 `record()` 再改 state**，否则撤销漏步；同一个输入框连续输入用 `record('patch:<nodeId>:<field>')` 在 900ms 内合并；拖拽在 `onNodeDragStart` 压一次，整段只算一步。
@@ -121,3 +123,14 @@ npm run typecheck:plugin && npm run build:plugin
 - 编辑器实时校验：改动后防抖 350ms 调 validate，页头显示「✓ 校验通过 / ⚠ N 条警告 / ✕ N 处硬拒」；点开浮层列出错误与警告，点条目选中并 `fitView` 定位节点。保存仍以服务端结果为准（两处共用同一个校验器）。
 - 插值提示：指令 / 子 Agent 附加指令 / 汇聚指令三个文本域下方有可折叠的「插值提示」，列出其他节点 + 历史 run 学到的 payload 字段；点 chip 在光标处插入 `{{节点.payload.字段}}`（受控 textarea 走原生 setter + input 事件，和主编辑器同一套做法）。
 - Escape 现在会依次收起校验浮层、右键菜单并取消选中。
+
+## 第四轮：卡点出口改成选项驱动（2026-10-23）
+
+用户反馈：在卡点上加了第三个选项，「出口分支」还是只有两行。原因是那一段按**出边**渲染，选项只是边上的标签——加选项不会凭空长出一条边，缺口在“选项与出口是两套东西”这件事上完全不可见。
+
+- 卡点「出口分支」改成**一行一个选项**，下拉直接挑目标节点：选中即在画布上建一条出边（`bindGateTarget()`，边 id `e-<gateId>-out-<optionId>`、分支号顺延 `bN`、标签写选项文案）；选「（未连线）」即删掉这条边。所以加选项立刻多一行。
+- 画布上先拉的、还没归属选项的线会被**认领**（只补 `outlet`，不重复连）；同一卡点已有边指向同一目标时拒绝并提示。认领后剩下的无主出边会在段落底部黄色提示里列出。
+- 改选项文案同步改边标签；删选项连带删它的出边（都在 `patchNode` 里做），不留无主的线。
+- 非卡点节点仍是「第 N 路 + 条件输入」；卡点单出边也不再走 `next` 兜底提示（每个选项各有出口）。
+- 另外：画布右键菜单的「新建节点」合并成一层子菜单（`MenuItem.children`，靠右翻左、贴底上移）。
+- 单测新增 `bindGateTarget` 一组 7 条（建边 / 认领 / 改指向 / 断开 / 冲突 / 自连 / 存盘后 outlet+condition），总计 199 passed。

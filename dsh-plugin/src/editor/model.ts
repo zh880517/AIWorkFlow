@@ -134,6 +134,73 @@ export function spreadSourceHandles(edges: CanvasEdge[]): CanvasEdge[] {
   return changed ? next : edges;
 }
 
+/**
+ * 卡点选项 -> 出边。面板里直接给选项挑目标节点，等于在画布上连一条线；
+ * 选空串就是断开（删掉这条出边）。返回新数组，出错时原样返回并带原因。
+ */
+export function bindGateTarget(
+  edges: CanvasEdge[],
+  gateId: string,
+  optionId: string,
+  optionLabel: string,
+  targetId: string,
+): { edges: CanvasEdge[]; error?: string } {
+  const bound = edges.find((edge) => edge.source === gateId && edge.data?.outlet === optionId);
+  if (targetId === '') {
+    return { edges: bound === undefined ? edges : edges.filter((edge) => edge !== bound) };
+  }
+  if (targetId === gateId) return { edges, error: '卡点不能连回自己' };
+  if (bound?.target === targetId) return { edges };
+  if (bound !== undefined) {
+    // 同一个卡点两条出边指向同一个节点：画布上会重叠，引擎里也没法区分，先拦住
+    if (edges.some((edge) => edge.source === gateId && edge.id !== bound.id && edge.target === targetId)) {
+      return { edges, error: '这个卡点已经有一条出边指向该节点了，先改那条边的归属' };
+    }
+    return {
+      edges: edges.map((edge) =>
+        edge.id === bound.id ? { ...edge, target: targetId, label: optionLabel } : edge,
+      ),
+    };
+  }
+  // 画布上先拉了线、还没归属选项：直接认领，不再重复长一条
+  const orphan = edges.find(
+    (edge) => edge.source === gateId && edge.target === targetId && edge.data?.outlet === undefined,
+  );
+  if (orphan !== undefined) {
+    return {
+      edges: edges.map((edge) =>
+        edge.id === orphan.id
+          ? { ...edge, label: optionLabel, data: { ...(edge.data ?? {}), outlet: optionId } }
+          : edge,
+      ),
+    };
+  }
+  // 目标已经有这个卡点的出边（且刚没认领掉）：说明它属于别的选项，别连第二条
+  if (edges.some((edge) => edge.source === gateId && edge.target === targetId)) {
+    return { edges, error: '这个卡点已经有一条出边指向该节点了，先改那条边的归属' };
+  }
+  const usedBranches = new Set(
+    edges
+      .filter((edge) => edge.source === gateId)
+      .map((edge) => edge.data?.branchId)
+      .filter((id): id is string => typeof id === 'string'),
+  );
+  let branchIndex = 1;
+  while (usedBranches.has(`b${branchIndex}`)) branchIndex += 1;
+  return {
+    edges: [
+      ...edges,
+      {
+        id: `e-${gateId}-out-${optionId}`,
+        source: gateId,
+        target: targetId,
+        label: optionLabel,
+        data: { branchId: `b${branchIndex}`, outlet: optionId },
+      },
+    ],
+  };
+}
+
 export function buildFlow(
   base: Flow,
   bodies: Record<string, FlowNode>,
@@ -165,8 +232,27 @@ export function buildFlow(
       delete node.next;
       delete node.branches;
     } else if (outs.length === 1) {
-      node.next = outs[0]!.target;
-      delete node.branches;
+      const single = outs[0]!;
+      const singleOutlet = single.data?.outlet;
+      if (body.type === 'gate' && singleOutlet !== undefined) {
+        // 卡点即使只有一条出边也写 branches：outlet 决定人工选中哪个选项时走它。
+        // 写 next 会让所有选项都走这条，校验器还会报每个选项都没连线（W_GATE_OPTION_UNWIRED）。
+        const previous = body.branches?.find((branch) => branch.id === single.data?.branchId);
+        const option = (body.options ?? []).find((item) => item.id === singleOutlet);
+        node.branches = [
+          {
+            ...(previous ?? {}),
+            id: previous?.id ?? uniqueBranchId(single.data?.branchId ?? 'b1', new Set<string>()),
+            condition: option?.label?.trim() || previous?.condition || '*',
+            to: single.target,
+            outlet: singleOutlet,
+          },
+        ];
+        delete node.next;
+      } else {
+        node.next = single.target;
+        delete node.branches;
+      }
     } else {
       const usedBranchIds = new Set<string>();
       node.branches = outs.map((edge, index) => {

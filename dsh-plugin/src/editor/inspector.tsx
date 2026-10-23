@@ -19,8 +19,8 @@ export interface InspectorProps {
   onPatch: (patch: Record<string, unknown>) => void;
   onDelete: () => void;
   onCondition: (edgeId: string, value: string) => void;
-  /** 卡点：这条出边绑定哪个选项（引擎按 outlet 匹配） */
-  onOutlet: (edgeId: string, optionId: string) => void;
+  /** 卡点：这个选项走哪个节点（''=断开，等于删除这条出边） */
+  onGateTarget: (optionId: string, targetId: string) => void;
   onSetEntry: () => void;
 }
 
@@ -85,6 +85,8 @@ export function Inspector(props: InspectorProps): React.ReactElement {
   const patch = (value: Record<string, unknown>): void => props.onPatch(value);
   const multi = props.edges.length > 1;
   const options = body.type === 'gate' ? (body.options ?? []) : [];
+  /** 画布上先拉了线、还没归属任何选项的出边（提示用户去认领或删掉） */
+  const loose = body.type === 'gate' ? props.edges.filter((edge) => edge.data?.outlet === undefined) : [];
   const others = props.nodes.filter((node) => node.id !== body.id);
   const danglingRef = (id: string | undefined): string | undefined =>
     id !== undefined && id !== '' && !props.nodes.some((node) => node.id === id) ? id : undefined;
@@ -233,11 +235,7 @@ export function Inspector(props: InspectorProps): React.ReactElement {
           </Field>
           <Field
             label="选项"
-            hint={
-              multi
-                ? '每个选项对应一条出边，在下面「出口分支」里选它属于哪个选项'
-                : '每个选项建议连一条出边；只有一条出边时，所有选项都会走那条'
-            }
+            hint="加一个选项，下面「出口分支」就会多一行；删选项会连带删掉它的出边"
           >
             {options.map((option: GateOption, index: number) => (
               <div className="wf-row" key={option.id}>
@@ -360,61 +358,64 @@ export function Inspector(props: InspectorProps): React.ReactElement {
         </Section>
       )}
 
-      {multi && (
+      {body.type === 'gate' && options.length > 0 ? (
         <Section title="出口分支">
-          {body.type === 'gate' ? (
-            <div className="wf-hint">一个选项对应一条出边；改绑定不会动连线，只改人工选中这个选项时走哪条。</div>
-          ) : (
-            <div className="wf-hint">第一路填 * 表示默认分支；其余填自然语言条件，由 Agent 自行判断。</div>
-          )}
-          {props.edges.map((edge, index) => {
-            const option = body.type === 'gate' ? options[index] : undefined;
-            const current = edge.data?.outlet ?? option?.id ?? '';
-            if (body.type === 'gate' && options.length === 0) {
-              return (
-                <Field key={edge.id} label={`第 ${index + 1} 路`} hint={`→ ${edge.target}`}>
-                  <div className="wf-hint">这个卡点还没有选项，先在「人工卡点」里加选项</div>
-                </Field>
-              );
-            }
-            if (body.type === 'gate') {
-              return (
-                <Field key={edge.id} label={`第 ${index + 1} 路`} hint={`→ ${edge.target}`}>
-                  <select
-                    className="wf-input"
-                    value={current}
-                    onChange={(event) => props.onOutlet(edge.id, event.target.value)}
-                  >
-                    {options.map((item) => (
-                      <option key={item.id} value={item.id}>
-                        选项「{item.label}」
-                      </option>
-                    ))}
-                    {!options.some((item) => item.id === current) && (
-                      <option value={current}>（已删除的选项 {current || '（未绑定）'}）</option>
-                    )}
-                  </select>
-                </Field>
-              );
-            }
+          <div className="wf-hint">
+            每个选项一条出边：在这里给它挑目标节点，等于在画布上连一条线；选「未连线」等于删掉那条线。
+          </div>
+          {options.map((option) => {
+            const bound = props.edges.filter((edge) => edge.data?.outlet === option.id);
+            const edge = bound[0];
+            const known = edge !== undefined && others.some((node) => node.id === edge.target);
             return (
-              <Field key={edge.id} label={`第 ${index + 1} 路`} hint={`→ ${edge.target}`}>
-                <input
+              <Field
+                key={option.id}
+                label={`选项「${option.label}」`}
+                hint={edge === undefined ? '还没连线：人工选这个选项时 run 会判失败' : `→ ${edge.target}`}
+              >
+                <select
                   className="wf-input"
-                  value={String(edge.data?.condition ?? (index === 0 ? '*' : ''))}
-                  onChange={(event) => props.onCondition(edge.id, event.target.value)}
-                  placeholder={index === 0 ? '默认分支一般填 *' : '例如：上一步结论为通过'}
-                />
+                  value={edge?.target ?? ''}
+                  onChange={(event) => props.onGateTarget(option.id, event.target.value)}
+                >
+                  <option value="">（未连线）</option>
+                  {others.map((node) => (
+                    <option key={node.id} value={node.id}>
+                      {nodeLabel(node)}
+                    </option>
+                  ))}
+                  {edge !== undefined && !known && <option value={edge.target}>（节点 {edge.target} 已不存在）</option>}
+                </select>
               </Field>
             );
           })}
+          {loose.length > 0 && (
+            <div className="wf-hint wf-hint-warn">
+              还有 {loose.length} 条出边没有归属选项（{loose.map((edge) => `→ ${edge.target}`).join('、')}）：
+              随便给上面某个选项挑这个目标就能认领它，或者到画布上删掉。
+            </div>
+          )}
         </Section>
+      ) : null}
+
+      {body.type === 'gate' && options.length === 0 && props.edges.length > 0 && (
+        <div className="wf-hint wf-hint-warn">这个卡点还没有选项：先在「人工卡点」里加选项，再给每个选项挑目标节点。</div>
       )}
 
-      {body.type === 'gate' && props.edges.length === 1 && (
-        <div className="wf-hint">
-          只有一条出边：所有选项都会走这条（引擎按 next 兜底）。要按选项分流，先再连一条出边。
-        </div>
+      {body.type !== 'gate' && multi && (
+        <Section title="出口分支">
+          <div className="wf-hint">第一路填 * 表示默认分支；其余填自然语言条件，由 Agent 自行判断。</div>
+          {props.edges.map((edge, index) => (
+            <Field key={edge.id} label={`第 ${index + 1} 路`} hint={`→ ${edge.target}`}>
+              <input
+                className="wf-input"
+                value={String(edge.data?.condition ?? (index === 0 ? '*' : ''))}
+                onChange={(event) => props.onCondition(edge.id, event.target.value)}
+                placeholder={index === 0 ? '默认分支一般填 *' : '例如：上一步结论为通过'}
+              />
+            </Field>
+          ))}
+        </Section>
       )}
 
       <div className="wf-insp-foot">
