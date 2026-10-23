@@ -12,6 +12,8 @@ export interface InspectorProps {
   nodes: CanvasNode[];
   /** 流程库列表（已排除当前图）：flowRef 下拉用 */
   flows: FlowMeta[];
+  /** 历史 run 学到的 payload 字段名（插值提示用） */
+  payloadFields: Record<string, string[]>;
   edges: CanvasEdge[];
   isEntry: boolean;
   onPatch: (patch: Record<string, unknown>) => void;
@@ -66,6 +68,10 @@ function nodeLabel(node: CanvasNode): string {
 
 export function Inspector(props: InspectorProps): React.ReactElement {
   const { body } = props;
+  // 插值提示要往光标处插 token，必须拿到三个文本域实例（Hooks 不能放在条件 return 之后）
+  const instrRef = React.useRef<HTMLTextAreaElement | null>(null);
+  const extraRef = React.useRef<HTMLTextAreaElement | null>(null);
+  const aggRef = React.useRef<HTMLTextAreaElement | null>(null);
   if (body === undefined) {
     return (
       <div className="wf-insp-empty">
@@ -103,10 +109,16 @@ export function Inspector(props: InspectorProps): React.ReactElement {
         <Section title="指令内容">
           <Field label="指令" hint="这一步要 Agent 做什么；可用 {{nodeId.payload.field}} 插值">
             <textarea
+              ref={instrRef}
               className="wf-area"
               value={body.instruction ?? ''}
               onChange={(event) => patch({ instruction: event.target.value })}
               placeholder="例如：读 docs/ROADMAP.md，列出阶段 8 的验收项"
+            />
+            <InterpHints
+              nodes={others}
+              payloadFields={props.payloadFields}
+              areaRef={instrRef}
             />
           </Field>
         </Section>
@@ -127,10 +139,16 @@ export function Inspector(props: InspectorProps): React.ReactElement {
         <Section title="子 Agent">
           <Field label="附加指令" hint="追加给子 Agent 的上下文；主指令来自上游节点">
             <textarea
+              ref={extraRef}
               className="wf-area"
               value={body.extraPrompt ?? ''}
               onChange={(event) => patch({ extraPrompt: event.target.value })}
               placeholder="例如：只读不写，产出不超过 20 行的结论"
+            />
+            <InterpHints
+              nodes={others}
+              payloadFields={props.payloadFields}
+              areaRef={extraRef}
             />
           </Field>
           <Field label="执行模式" hint={MODE_HINTS[body.mode] ?? ''}>
@@ -257,9 +275,15 @@ export function Inspector(props: InspectorProps): React.ReactElement {
         <Section title="汇聚">
           <Field label="汇聚指令" hint="所有上游完成后追加给 Agent 的汇总指令">
             <textarea
+              ref={aggRef}
               className="wf-area"
               value={body.aggregateInstruction ?? ''}
               onChange={(event) => patch({ aggregateInstruction: event.target.value })}
+            />
+            <InterpHints
+              nodes={others}
+              payloadFields={props.payloadFields}
+              areaRef={aggRef}
             />
           </Field>
           <Field label="等待的节点" hint="留空 = 等待本次 run 的全部子 run">
@@ -482,4 +506,64 @@ function ParamsEditor({
       </button>
     </React.Fragment>
   );
+}
+
+/** 插值提示：其他节点 + 历史 run 学到的 payload 字段，点 chip 插到光标处 */
+function InterpHints({
+  nodes,
+  payloadFields,
+  areaRef,
+}: {
+  nodes: CanvasNode[];
+  payloadFields: Record<string, string[]>;
+  areaRef: React.RefObject<HTMLTextAreaElement | null>;
+}): React.ReactElement | null {
+  if (nodes.length === 0) return null;
+  return (
+    <details className="wf-hints">
+      <summary>插值提示（引用之前节点的结果）</summary>
+      {nodes.map((node) => {
+        const fields = payloadFields[node.id] ?? [];
+        return (
+          <div className="wf-hints-node" key={node.id}>
+            <span className="wf-hints-name">
+              {node.data.title} <code>{node.id}</code>
+            </span>
+            {fields.length > 0 ? (
+              <span className="wf-hints-chips">
+                {fields.map((field) => (
+                  <button
+                    type="button"
+                    className="wf-hints-chip"
+                    key={field}
+                    title="插入到光标处"
+                    onClick={() => insertToken(areaRef.current, `{{${node.id}.payload.${field}}}`)}
+                  >
+                    {`{{${node.id}.payload.${field}}}`}
+                  </button>
+                ))}
+              </span>
+            ) : (
+              <span className="wf-hint">这张图跑过一次后，这里会提示该节点 payload 的字段</span>
+            )}
+          </div>
+        );
+      })}
+    </details>
+  );
+}
+
+/** 往受控 textarea 的光标处插 token 后把光标放到 token 后面 */
+function insertToken(area: HTMLTextAreaElement | null, token: string): void {
+  if (area === null) return;
+  const start = area.selectionStart ?? area.value.length;
+  const end = area.selectionEnd ?? start;
+  const next = area.value.slice(0, start) + token + area.value.slice(end);
+  // React 受控组件：走原生 setter + 派发 input 事件才能触发 onChange
+  const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+  if (setter !== undefined) setter.call(area, next);
+  area.dispatchEvent(new Event('input', { bubbles: true }));
+  const caret = start + token.length;
+  area.focus();
+  area.setSelectionRange(caret, caret);
 }

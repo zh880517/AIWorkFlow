@@ -46,6 +46,8 @@ export interface Point {
 /** 交给父组件的画布能力：新节点按当前视口中心放置，避免落在可视区外 */
 export interface CanvasApi {
   center: () => Point;
+  /** 把某个节点滚进视野（校验问题定位用） */
+  focusNode: (id: string) => void;
 }
 
 export interface FlowCanvasProps {
@@ -79,6 +81,9 @@ function CanvasFlow(props: FlowCanvasProps): React.ReactElement {
         if (element === null) return { x: 0, y: 0 };
         const rect = element.getBoundingClientRect();
         return flow.screenToFlowPosition({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
+      },
+      focusNode: (id: string): void => {
+        void flow.fitView({ nodes: [{ id }], padding: 0.6, duration: 300 });
       },
     });
   }, [flow]);

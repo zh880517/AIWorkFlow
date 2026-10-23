@@ -8,6 +8,19 @@ export interface FlowMeta {
   updatedAt: string;
 }
 
+export interface ValidationIssue {
+  severity: 'error' | 'warning';
+  code: string;
+  message: string;
+  nodeId?: string;
+}
+
+export interface ValidationResult {
+  ok: boolean;
+  errors: ValidationIssue[];
+  warnings: ValidationIssue[];
+}
+
 export interface SaveRejected {
   ok: false;
   errors: Array<{ code: string; message: string; nodeId?: string }>;
@@ -51,4 +64,21 @@ export function saveFlow(flow: Flow): Promise<SaveOk | SaveRejected> {
 
 export function deleteFlow(id: string): Promise<{ ok: true; deleted: boolean }> {
   return request<{ ok: true; deleted: boolean }>(`flows/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+/** 干跑校验：与保存用同一个 validateFlow，不落库 */
+export async function validateFlow(flow: Flow): Promise<ValidationResult> {
+  const body = await request<{ ok: true; result: ValidationResult }>('flows/validate', {
+    method: 'POST',
+    body: JSON.stringify(flow),
+  });
+  return body.result;
+}
+
+/** 该图历史 run 里出现过的 payload 字段名（插值提示用） */
+export async function payloadFields(id: string): Promise<Record<string, string[]>> {
+  const body = await request<{ ok: true; fields: Record<string, string[]> }>(
+    `flows/${encodeURIComponent(id)}/payload-fields`,
+  );
+  return body.fields;
 }

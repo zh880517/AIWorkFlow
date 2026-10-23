@@ -201,6 +201,11 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
   const [menu, setMenu] = React.useState<MenuState | null>(null);
   const [clipboard, setClipboard] = React.useState<ClipboardEntry | null>(null);
   const [history, setHistory] = React.useState<{ past: Snapshot[]; future: Snapshot[] }>({ past: [], future: [] });
+  /** 干跑校验结果（防抖 350ms，与保存共用同一个校验器） */
+  const [validation, setValidation] = React.useState<api.ValidationResult | null>(null);
+  const [valOpen, setValOpen] = React.useState(false);
+  /** 历史 run 学到的 payload 字段名（插值提示用） */
+  const [payloadFields, setPayloadFields] = React.useState<Record<string, string[]>>({});
 
   const pageRef = React.useRef<HTMLDivElement | null>(null);
   const baseRef = React.useRef<Flow>(initial);
@@ -578,6 +583,14 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
         return; // 输入框里让浏览器自己处理撤销/复制
       }
 
+      if (event.key === 'Escape') {
+        // 依次收起：校验浮层 → 右键菜单 → 取消选中
+        setValOpen(false);
+        setMenu(null);
+        setSelectedId(null);
+        return;
+      }
+
       if (!mod && (event.key === 'Delete' || event.key === 'Backspace')) {
         event.preventDefault();
         deleteSelected();
@@ -614,6 +627,46 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
     canvasApiRef.current = next;
   }, []);
 
+  React.useEffect(() => {
+    let alive = true;
+    void api
+      .payloadFields(initial.id)
+      .then((fields) => {
+        if (alive) setPayloadFields(fields);
+      })
+      .catch(() => {
+        // 插值提示是可选增强：图还没跑过 / 读不到历史都正常
+      });
+    return () => {
+      alive = false;
+    };
+  }, [initial.id]);
+
+  // 实时校验：防抖 350ms 走 Host 的干跑接口，不落库；保存仍以服务端结果为准
+  React.useEffect(() => {
+    let alive = true;
+    const timer = window.setTimeout(() => {
+      let flow: Flow;
+      try {
+        flow = buildFlow({ ...baseRef.current, name, entry }, bodies, nodes, edges);
+      } catch {
+        return;
+      }
+      void api
+        .validateFlow(flow)
+        .then((result) => {
+          if (alive) setValidation(result);
+        })
+        .catch(() => {
+          // 接口不可用时不阻塞编辑；保存会再校验一次
+        });
+    }, 350);
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+    };
+  }, [nodes, edges, bodies, entry, name]);
+
   const save = async (): Promise<void> => {
     setBusy(true);
     setBanner(null);
@@ -648,6 +701,22 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
   const selected = selectedId === null ? undefined : bodies[selectedId];
   const selectedCanvas = nodes.find((node) => node.id === selectedId);
   const selectedEdges = edges.filter((edge) => edge.source === selectedId);
+
+  const validationChip =
+    validation === null
+      ? null
+      : !validation.ok
+        ? { kind: 'error' as const, text: `✕ ${validation.errors.length} 处硬拒` }
+        : validation.warnings.length > 0
+          ? { kind: 'warn' as const, text: `⚠ ${validation.warnings.length} 条警告` }
+          : { kind: 'ok' as const, text: '✓ 校验通过' };
+
+  const jumpToNode = (nodeId: string | undefined): void => {
+    if (nodeId === undefined) return;
+    setSelectedId(nodeId);
+    canvasApiRef.current?.focusNode?.(nodeId);
+    setValOpen(false);
+  };
 
   saveRef.current = () => {
     void save();
@@ -727,6 +796,17 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
           onChange={(event) => rename(event.target.value)}
         />
         <span className="wf-sub">{dirty ? '未保存' : '已同步'}</span>
+        {validationChip !== null && (
+          <button
+            type="button"
+            className="wf-btn"
+            data-tone={validationChip.kind}
+            onClick={() => setValOpen((open) => !open)}
+            title="校验结果（与保存同一个校验器；点条目可定位节点）"
+          >
+            {validationChip.text}
+          </button>
+        )}
         <button
           type="button"
           className="wf-btn"
@@ -762,6 +842,28 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
           </button>
         )}
       </header>
+      {valOpen && validation !== null && (
+        <div className="wf-val-pop" role="dialog" aria-label="校验结果">
+          <div className="wf-val-head">校验结果（与保存同一个 validateFlow）</div>
+          {validation.errors.length === 0 && validation.warnings.length === 0 && (
+            <div className="wf-hint">没有发现问题，可以保存。</div>
+          )}
+          {[...validation.errors, ...validation.warnings].map((issue, index) => (
+            <button
+              type="button"
+              key={`${issue.code}-${index}`}
+              className="wf-val-item"
+              data-kind={issue.severity}
+              disabled={issue.nodeId === undefined}
+              title={issue.nodeId === undefined ? '这条问题没有关联节点' : `定位到 ${issue.nodeId}`}
+              onClick={() => jumpToNode(issue.nodeId)}
+            >
+              <span className="wf-val-code">{issue.code}</span>
+              <span className="wf-val-msg">{issue.message}</span>
+            </button>
+          ))}
+        </div>
+      )}
       <div className="wf-palette">
         <span className="wf-sub">添加节点：</span>
         {PALETTE.map((item) => (
@@ -815,6 +917,7 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
             canvasNode={selectedCanvas}
             nodes={nodes}
             flows={flows.filter((item) => item.id !== initial.id)}
+            payloadFields={payloadFields}
             edges={selectedEdges}
             isEntry={selectedId !== null && entry === selectedId}
             onPatch={patchNode}

@@ -9,7 +9,7 @@ import {
   type RunDetail,
   type RunListItem,
 } from '@shared/index.js';
-import { deleteFlow, getFlow, listFlows, saveFlow, type FlowWriter } from '@shared/flows.js';
+import { deleteFlow, getFlow, listFlows, saveFlow, validateFlowOnly, type FlowWriter } from '@shared/flows.js';
 import { closeDatabase, database, databasePath, flowsDir } from './db.js';
 import { workflowEngine } from './engine.js';
 import { registerTools } from './tools.js';
@@ -106,8 +106,28 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       return methodNotAllowed(res);
     }
 
+    if (url.pathname === `${FLOWS_PATH}/validate`) {
+      if (method !== 'POST') return methodNotAllowed(res);
+      const body = await readJson(req);
+      if (body === undefined || typeof body !== 'object' || body === null) {
+        send(res, 400, { ok: false, error: { code: 'bad-json', message: '请求体不是合法 JSON 对象' } });
+        return;
+      }
+      // 干跑：与保存走同一个校验器，不写库
+      send(res, 200, { ok: true, result: validateFlowOnly(body as never) });
+      return;
+    }
+
     if (url.pathname.startsWith(`${FLOWS_PATH}/`)) {
-      const flowId = decodeURIComponent(url.pathname.slice(FLOWS_PATH.length + 1));
+      const rest = decodeURIComponent(url.pathname.slice(FLOWS_PATH.length + 1));
+      if (rest.endsWith('/payload-fields')) {
+        if (method !== 'GET' && method !== 'HEAD') return methodNotAllowed(res);
+        const flowId = rest.slice(0, -'/payload-fields'.length);
+        if (flowId === '') return sendNotFound(res, url.pathname);
+        send(res, 200, { ok: true, fields: payloadFieldsOf(flowId) });
+        return;
+      }
+      const flowId = rest;
       if (flowId === '') return sendNotFound(res, url.pathname);
       if (method === 'GET' || method === 'HEAD') {
         const flow = getFlow(database(), flowId);
@@ -262,6 +282,37 @@ function buildState(runId: string | null, sessionId: string | null): StatePayloa
       reason: describeDatabaseError(error, file),
     };
   }
+}
+
+/** 从该图历史 run 的 completed payload 学字段名，供编辑器做 {{节点.payload.字段}} 提示 */
+function payloadFieldsOf(flowId: string): Record<string, string[]> {
+  const fields: Record<string, string[]> = {};
+  try {
+    const rows = database()
+      .prepare(
+        `SELECT ne.node_id, ne.payload FROM node_executions ne
+         JOIN runs r ON r.id = ne.run_id
+         WHERE r.flow_id = ? AND r.parent_run_id IS NULL AND ne.status = 'completed'
+         ORDER BY ne.id DESC LIMIT 200`,
+      )
+      .all(flowId) as Array<{ node_id: string; payload: string }>;
+    for (const row of rows) {
+      let payload: unknown;
+      try {
+        payload = JSON.parse(row.payload);
+      } catch {
+        continue;
+      }
+      if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) continue;
+      const list = (fields[row.node_id] ??= []);
+      for (const key of Object.keys(payload as Record<string, unknown>)) {
+        if (!list.includes(key) && list.length < 20) list.push(key);
+      }
+    }
+  } catch {
+    // 库读不到就当作没有历史数据，插值提示是可选增强
+  }
+  return fields;
 }
 
 /** 界面传原始会话 id；库里存的是 `dsh:<sessionId>`（与 start_run / 面板启动一致） */

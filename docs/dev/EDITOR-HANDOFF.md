@@ -69,7 +69,7 @@ npm run typecheck:plugin && npm run build:plugin
 - 连线重连：`onReconnect` 只改 source/target，保留 `edge.data`（条件 / 出口绑定）；连进入口、重复边会被拒绝并 `reportInfo`。
 - 删除节点仍不会自动清其他节点里的 `waitFor` / `onLimitExceeded` 引用；这两个字段现在都有下拉可改（悬空值会显示「节点 X 已不存在」），保存被校验器拦下后可以就地修。
 - 右键菜单：画布用 `onPaneContextMenu`（React Flow 内部 `wrapHandler` 只在 `event.target === pane` 时触发，节点/边右键盘不会误开画布菜单）；节点和边各自有独立菜单。菜单定位是 fixed 视口坐标，`ContextMenu` 自己贴边翻转。
-- `localIssues()` 只是保存前的廉价自检（prompt 缺 instruction、tool 缺 toolName、gate 缺 question）；真正的判定仍以服务端 `validateFlow` 为准。
+- `localIssues()` 仍是死代码；实时校验走 Host 的 `POST /flows/validate`（与保存同一个 `validateFlow`），页头 chip + 浮层定位；保存结果仍以服务端返回为准。
 - 编辑器与运行图是两套东西：`runview/` 只读，别把编辑能力加进去。
 
 ## 排查顺序建议
@@ -108,8 +108,13 @@ npm run typecheck:plugin && npm run build:plugin
 - `subflow` 模式选项禁用 + 警告文案（面板不编辑内嵌子图）。
 
 **本轮没做（下一批）**
-- 实时校验 / 问题定位（`localIssues` 仍是死代码；需要 Host 加 validate 路由）。
-- 插值提示（`{{节点.payload.字段}}` chips；需要 payload-fields 路由）。
-- 预览（Agent 视角）、流程复制/导入导出、多选复制、调色板拖入、Escape 清选中。
+- 预览（Agent 视角）、流程复制/导入导出、多选复制、调色板拖入。
 - 自定义出口（outlets）在卡片上增删/排序/指定默认分支——画布结构改造，最大的一块。
 - Flow 级 `description` / `maxSteps` 无入口。
+
+## 第三轮：实时校验 + 插值提示（2026-10-23）
+
+- Host 新增两条只读路由：`POST /aiworkflow/flows/validate`（干跑，复用 `validateFlowOnly`，不落库）、`GET /aiworkflow/flows/:id/payload-fields`（从该图历史 run 的 completed payload 学字段名）。
+- 编辑器实时校验：改动后防抖 350ms 调 validate，页头显示「✓ 校验通过 / ⚠ N 条警告 / ✕ N 处硬拒」；点开浮层列出错误与警告，点条目选中并 `fitView` 定位节点。保存仍以服务端结果为准（两处共用同一个校验器）。
+- 插值提示：指令 / 子 Agent 附加指令 / 汇聚指令三个文本域下方有可折叠的「插值提示」，列出其他节点 + 历史 run 学到的 payload 字段；点 chip 在光标处插入 `{{节点.payload.字段}}`（受控 textarea 走原生 setter + input 事件，和主编辑器同一套做法）。
+- Escape 现在会依次收起校验浮层、右键菜单并取消选中。
