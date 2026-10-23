@@ -11,3 +11,5 @@
 
 - 正式设计文档：[2026-09-02-flowchart-driven-agent-design.md](./2026-09-02-flowchart-driven-agent-design.md)
 - 开发路线图（临时）：[dev/ROADMAP.md](./dev/ROADMAP.md)
+- 待处理项（临时）：[dev/PENDING.md](./dev/PENDING.md)
+- 编辑器交接（临时）：[dev/EDITOR-HANDOFF.md](./dev/EDITOR-HANDOFF.md)

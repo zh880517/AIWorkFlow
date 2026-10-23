@@ -1,0 +1,3 @@
+- insert:
+    - id: aiworkflow-progress
+      name: '@aiworkflow/dsh-plugin'

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "AI 工作流进度",
+    "description": "在会话标题栏显示 aiworkflow 当前 run，并展开浮动进度面板：当前步骤、已走路径与执行轨迹。"
+  }
+}

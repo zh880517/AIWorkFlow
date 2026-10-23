@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "AI Workflow Progress",
+    "description": "Shows the running aiworkflow run in the session header and opens a floating progress panel with the current step, path and execution trace."
+  }
+}

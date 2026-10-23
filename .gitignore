@@ -4,3 +4,9 @@ dist/
 .DS_Store
 dist-web/
 tmp/
+# DSH 插件构建产物（npm run build:plugin 生成，安装时按 README 构建）
+dsh-plugin/index.js
+dsh-plugin/client.js
+dsh-plugin/.build/
+# 本地 agent 工具的临时计划文件
+.zcode/

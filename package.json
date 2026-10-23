@@ -10,6 +10,8 @@
   "scripts": {
     "build": "tsc && vite build",
     "build:web": "vite build",
+    "build:plugin": "node dsh-plugin/build.mjs",
+    "typecheck:plugin": "tsc -p shared/tsconfig.json --noEmit && tsc -p dsh-plugin/tsconfig.json --noEmit",
     "dev:web": "vite",
     "start": "node dist/cli.js",
     "test": "vitest run",

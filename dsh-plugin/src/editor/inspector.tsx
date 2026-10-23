@@ -1,0 +1,485 @@
+// 右侧属性面板：只编辑当前节点/当前层的字段，其余图结构由画布上的连线表达。
+// 排版约定：区块标题 > 加粗字段名 > 控件 > 灰色说明，说明文字单独一行，不塞进 label。
+import * as React from 'react';
+import type { FlowNode, GateOption, SubagentMode, SubagentNode } from '@shared/index.js';
+import type { FlowMeta } from './api.js';
+import { typeLabel, type CanvasEdge, type CanvasNode } from './model.js';
+
+export interface InspectorProps {
+  body: FlowNode | undefined;
+  canvasNode: CanvasNode | undefined;
+  /** 画布上的全部节点：waitFor / onLimitExceeded 下拉用 */
+  nodes: CanvasNode[];
+  /** 流程库列表（已排除当前图）：flowRef 下拉用 */
+  flows: FlowMeta[];
+  edges: CanvasEdge[];
+  isEntry: boolean;
+  onPatch: (patch: Record<string, unknown>) => void;
+  onDelete: () => void;
+  onCondition: (edgeId: string, value: string) => void;
+  /** 卡点：这条出边绑定哪个选项（引擎按 outlet 匹配） */
+  onOutlet: (edgeId: string, optionId: string) => void;
+  onSetEntry: () => void;
+}
+
+interface FieldProps {
+  label: string;
+  hint?: string;
+  children: React.ReactNode;
+}
+
+function Field({ label, hint, children }: FieldProps): React.ReactElement {
+  return (
+    <div className="wf-field">
+      <span className="wf-label">{label}</span>
+      {children}
+      {hint !== undefined && <span className="wf-hint">{hint}</span>}
+    </div>
+  );
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }): React.ReactElement {
+  return (
+    <section className="wf-section">
+      <div className="wf-section-title">{title}</div>
+      {children}
+    </section>
+  );
+}
+
+const MODE_HINTS: Record<SubagentMode, string> = {
+  inline: '在同一个会话里派子 Agent 执行一个子任务',
+  subflow: '把内嵌子图当成一次独立的小型流程执行',
+  flowRef: '引用另一张已存在的图，启动 run 时递归解析进快照',
+};
+
+/** 空串 / 非正整数都按「不设」处理，避免把 NaN 写进 DSL */
+function positiveInt(text: string): number | undefined {
+  if (text.trim() === '') return undefined;
+  const value = Number(text);
+  return Number.isInteger(value) && value >= 1 ? value : undefined;
+}
+
+function nodeLabel(node: CanvasNode): string {
+  return `${node.data.title} · ${typeLabel(node.data.kind)}`;
+}
+
+export function Inspector(props: InspectorProps): React.ReactElement {
+  const { body } = props;
+  if (body === undefined) {
+    return (
+      <div className="wf-insp-empty">
+        <div className="wf-insp-empty-title">未选中节点</div>
+        <div className="wf-hint">点选画布上的节点编辑属性；从节点右侧圆点拖线到另一个节点即可连边。</div>
+        <div className="wf-hint">右键画布：在指针处新建 / 粘贴；右键节点：复制、设为入口、删除。</div>
+        <div className="wf-hint">快捷键：Ctrl+Z 撤销、Ctrl+Shift+Z 重做、Ctrl+S 保存、Delete 删除选中。</div>
+      </div>
+    );
+  }
+  const patch = (value: Record<string, unknown>): void => props.onPatch(value);
+  const multi = props.edges.length > 1;
+  const options = body.type === 'gate' ? (body.options ?? []) : [];
+  const others = props.nodes.filter((node) => node.id !== body.id);
+  const danglingRef = (id: string | undefined): string | undefined =>
+    id !== undefined && id !== '' && !props.nodes.some((node) => node.id === id) ? id : undefined;
+
+  return (
+    <React.Fragment>
+      <div className="wf-insp-head">
+        <span className="wf-kind" data-kind={body.type}>
+          {typeLabel(body.type)}
+        </span>
+        <code className="wf-id">{body.id}</code>
+        {props.isEntry && <span className="wf-chip">入口</span>}
+      </div>
+
+      <Section title="基本信息">
+        <Field label="标题" hint="显示在画布节点上；留空则显示节点 id">
+          <input className="wf-input" value={body.title ?? ''} onChange={(event) => patch({ title: event.target.value })} />
+        </Field>
+      </Section>
+
+      {body.type === 'prompt' && (
+        <Section title="指令内容">
+          <Field label="指令" hint="这一步要 Agent 做什么；可用 {{nodeId.payload.field}} 插值">
+            <textarea
+              className="wf-area"
+              value={body.instruction ?? ''}
+              onChange={(event) => patch({ instruction: event.target.value })}
+              placeholder="例如：读 docs/ROADMAP.md，列出阶段 8 的验收项"
+            />
+          </Field>
+        </Section>
+      )}
+
+      {body.type === 'tool' && (
+        <Section title="工具调用">
+          <Field label="工具名" hint="MCP 工具名，例如 web_search、read">
+            <input className="wf-input" value={body.toolName ?? ''} onChange={(event) => patch({ toolName: event.target.value })} />
+          </Field>
+          <Field label="参数" hint="键值对；值能按 JSON 解析就当 JSON，否则按字符串。会作为 view.tool.params 下发给 Agent">
+            <ParamsEditor value={body.params} onChange={(params) => patch({ params })} />
+          </Field>
+        </Section>
+      )}
+
+      {body.type === 'subagent' && (
+        <Section title="子 Agent">
+          <Field label="附加指令" hint="追加给子 Agent 的上下文；主指令来自上游节点">
+            <textarea
+              className="wf-area"
+              value={body.extraPrompt ?? ''}
+              onChange={(event) => patch({ extraPrompt: event.target.value })}
+              placeholder="例如：只读不写，产出不超过 20 行的结论"
+            />
+          </Field>
+          <Field label="执行模式" hint={MODE_HINTS[body.mode] ?? ''}>
+            <select
+              className="wf-input"
+              value={body.mode}
+              onChange={(event) => patch({ mode: event.target.value as SubagentMode })}
+            >
+              <option value="inline">inline — 同一会话内执行</option>
+              <option value="flowRef">flowRef — 引用另一张图</option>
+              <option value="subflow" disabled>
+                subflow — 内嵌子图（面板暂不支持）
+              </option>
+            </select>
+          </Field>
+          {body.mode === 'subflow' && (
+            <div className="wf-hint wf-hint-warn">
+              当前节点是 subflow 模式，但面板暂不支持编辑内嵌子图；保存会被校验器拒绝（缺少子图）。请用 MCP 建图工具或主工程编辑器改它。
+            </div>
+          )}
+          {body.mode === 'flowRef' && (
+            <Field label="引用的图" hint="目标图必须已保存；run 启动时按 id 递归解析">
+              <select
+                className="wf-input"
+                value={body.flowRef ?? ''}
+                onChange={(event) => patch({ flowRef: event.target.value === '' ? undefined : event.target.value })}
+              >
+                <option value="">（选择一张图）</option>
+                {props.flows.map((flow) => (
+                  <option key={flow.id} value={flow.id}>
+                    {flow.name} · {flow.id}
+                  </option>
+                ))}
+                {body.flowRef !== undefined &&
+                  body.flowRef !== '' &&
+                  !props.flows.some((flow) => flow.id === body.flowRef) && (
+                    <option value={body.flowRef}>（当前值 {body.flowRef}，不在列表）</option>
+                  )}
+              </select>
+            </Field>
+          )}
+          <Field label="并行派发来源" hint="插值表达式（解析成数组）；与下面的固定数量二选一。用 {{item}} 引用各条目">
+            <input
+              className="wf-input"
+              value={body.fanOut?.from ?? ''}
+              placeholder="{{n2.payload.modules}}"
+              onChange={(event) => patchFanOut(patch, body, { from: event.target.value })}
+            />
+          </Field>
+          <Field label="或固定数量 / 上限" hint="max 截断超出项；被丢弃的条目会在派发轨迹里显式记录">
+            <div className="wf-row">
+              <input
+                className="wf-input"
+                type="number"
+                min={1}
+                placeholder="数量"
+                value={body.fanOut?.count ?? ''}
+                onChange={(event) => patchFanOut(patch, body, { count: positiveInt(event.target.value) })}
+              />
+              <input
+                className="wf-input"
+                type="number"
+                min={1}
+                placeholder="max 上限"
+                value={body.fanOut?.max ?? ''}
+                onChange={(event) => patchFanOut(patch, body, { max: positiveInt(event.target.value) })}
+              />
+            </div>
+          </Field>
+        </Section>
+      )}
+
+      {body.type === 'gate' && (
+        <Section title="人工卡点">
+          <Field label="问题" hint="卡点会挂起 run，等人工答复后才继续">
+            <textarea
+              className="wf-area"
+              value={body.question ?? ''}
+              onChange={(event) => patch({ question: event.target.value })}
+              placeholder="例如：这次改动可以合并吗？"
+            />
+          </Field>
+          <Field
+            label="选项"
+            hint={
+              multi
+                ? '每个选项对应一条出边，在下面「出口分支」里选它属于哪个选项'
+                : '每个选项建议连一条出边；只有一条出边时，所有选项都会走那条'
+            }
+          >
+            {options.map((option: GateOption, index: number) => (
+              <div className="wf-row" key={option.id}>
+                <input
+                  className="wf-input"
+                  value={option.label}
+                  onChange={(event) => {
+                    const next = options.map((entry, i) => (i === index ? { ...entry, label: event.target.value } : entry));
+                    patch({ options: next });
+                  }}
+                />
+                <button
+                  type="button"
+                  className="wf-btn"
+                  onClick={() => patch({ options: options.filter((_, i) => i !== index) })}
+                >
+                  删
+                </button>
+              </div>
+            ))}
+            <button
+              type="button"
+              className="wf-btn"
+              onClick={() =>
+                patch({ options: [...options, { id: nextOptionId(options), label: '新选项' }] })
+              }
+            >
+              + 加选项
+            </button>
+          </Field>
+        </Section>
+      )}
+
+      {body.type === 'join' && (
+        <Section title="汇聚">
+          <Field label="汇聚指令" hint="所有上游完成后追加给 Agent 的汇总指令">
+            <textarea
+              className="wf-area"
+              value={body.aggregateInstruction ?? ''}
+              onChange={(event) => patch({ aggregateInstruction: event.target.value })}
+            />
+          </Field>
+          <Field label="等待的节点" hint="留空 = 等待本次 run 的全部子 run">
+            <select
+              className="wf-input"
+              value={body.waitFor ?? ''}
+              onChange={(event) => patch({ waitFor: event.target.value === '' ? undefined : event.target.value })}
+            >
+              <option value="">（等待全部子 run）</option>
+              {others.map((node) => (
+                <option key={node.id} value={node.id}>
+                  {nodeLabel(node)}
+                </option>
+              ))}
+              {danglingRef(body.waitFor) !== undefined && (
+                <option value={body.waitFor}>（节点 {body.waitFor} 已不存在）</option>
+              )}
+            </select>
+          </Field>
+        </Section>
+      )}
+
+      {body.type === 'end' && (
+        <Section title="结束">
+          <Field label="结果" hint="success 正常结束；fail 判 run 失败但仍记录轨迹">
+            <select className="wf-input" value={body.outcome} onChange={(event) => patch({ outcome: event.target.value })}>
+              <option value="success">success</option>
+              <option value="fail">fail</option>
+            </select>
+          </Field>
+        </Section>
+      )}
+
+      {body.type !== 'prompt' && body.type !== 'end' && (
+        <Section title="补充说明">
+          <Field label="instruction（可选）" hint="会作为这一步的 instruction 下发给 Agent；不填则用该类型的默认说明">
+            <textarea
+              className="wf-area"
+              value={body.instruction ?? ''}
+              onChange={(event) => patch({ instruction: event.target.value })}
+            />
+          </Field>
+        </Section>
+      )}
+
+      {body.type !== 'end' && (
+        <Section title="循环与逃生">
+          <Field label="迭代上限" hint="环上节点建议设置；不设时只在全局步数上限处兜底">
+            <input
+              className="wf-input"
+              type="number"
+              min={1}
+              value={body.iterationLimit ?? ''}
+              onChange={(event) => patch({ iterationLimit: positiveInt(event.target.value) })}
+            />
+          </Field>
+          <Field label="撞上限后跳转到" hint="不设则撞上限直接判 run 失败">
+            <select
+              className="wf-input"
+              value={body.onLimitExceeded ?? ''}
+              onChange={(event) => patch({ onLimitExceeded: event.target.value === '' ? undefined : event.target.value })}
+            >
+              <option value="">（不设，判失败）</option>
+              {others.map((node) => (
+                <option key={node.id} value={node.id}>
+                  {nodeLabel(node)}
+                </option>
+              ))}
+              {danglingRef(body.onLimitExceeded) !== undefined && (
+                <option value={body.onLimitExceeded}>（节点 {body.onLimitExceeded} 已不存在）</option>
+              )}
+            </select>
+          </Field>
+        </Section>
+      )}
+
+      {multi && (
+        <Section title="出口分支">
+          {body.type === 'gate' ? (
+            <div className="wf-hint">一个选项对应一条出边；改绑定不会动连线，只改人工选中这个选项时走哪条。</div>
+          ) : (
+            <div className="wf-hint">第一路填 * 表示默认分支；其余填自然语言条件，由 Agent 自行判断。</div>
+          )}
+          {props.edges.map((edge, index) => {
+            const option = body.type === 'gate' ? options[index] : undefined;
+            const current = edge.data?.outlet ?? option?.id ?? '';
+            if (body.type === 'gate' && options.length === 0) {
+              return (
+                <Field key={edge.id} label={`第 ${index + 1} 路`} hint={`→ ${edge.target}`}>
+                  <div className="wf-hint">这个卡点还没有选项，先在「人工卡点」里加选项</div>
+                </Field>
+              );
+            }
+            if (body.type === 'gate') {
+              return (
+                <Field key={edge.id} label={`第 ${index + 1} 路`} hint={`→ ${edge.target}`}>
+                  <select
+                    className="wf-input"
+                    value={current}
+                    onChange={(event) => props.onOutlet(edge.id, event.target.value)}
+                  >
+                    {options.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        选项「{item.label}」
+                      </option>
+                    ))}
+                    {!options.some((item) => item.id === current) && (
+                      <option value={current}>（已删除的选项 {current || '（未绑定）'}）</option>
+                    )}
+                  </select>
+                </Field>
+              );
+            }
+            return (
+              <Field key={edge.id} label={`第 ${index + 1} 路`} hint={`→ ${edge.target}`}>
+                <input
+                  className="wf-input"
+                  value={String(edge.data?.condition ?? (index === 0 ? '*' : ''))}
+                  onChange={(event) => props.onCondition(edge.id, event.target.value)}
+                  placeholder={index === 0 ? '默认分支一般填 *' : '例如：上一步结论为通过'}
+                />
+              </Field>
+            );
+          })}
+        </Section>
+      )}
+
+      {body.type === 'gate' && props.edges.length === 1 && (
+        <div className="wf-hint">
+          只有一条出边：所有选项都会走这条（引擎按 next 兜底）。要按选项分流，先再连一条出边。
+        </div>
+      )}
+
+      <div className="wf-insp-foot">
+        <button type="button" className="wf-btn" onClick={props.onSetEntry} disabled={props.isEntry}>
+          {props.isEntry ? '当前入口' : '设为入口'}
+        </button>
+        <button type="button" className="wf-btn" data-danger="true" onClick={props.onDelete}>
+          删除节点
+        </button>
+      </div>
+    </React.Fragment>
+  );
+}
+
+/** 选项 id 要唯一：复用最小可用的 oN（删掉 o1 后再加不会撞 o2） */
+function nextOptionId(options: GateOption[]): string {
+  const used = new Set(options.map((option) => option.id));
+  for (let index = 1; index < 1000; index += 1) {
+    const id = `o${index}`;
+    if (!used.has(id)) return id;
+  }
+  return `o${Date.now().toString(36)}`;
+}
+
+/** fan-out 三字段互斥合并：改 from 就清 count，改 count 就清 from（校验器要求二选一） */
+function patchFanOut(
+  patch: (value: Record<string, unknown>) => void,
+  body: SubagentNode,
+  change: { from?: string; count?: number; max?: number },
+): void {
+  const next: Record<string, unknown> = { ...(body.fanOut ?? {}) };
+  if (change.from !== undefined) delete next.count;
+  if (change.count !== undefined) delete next.from;
+  for (const [key, value] of Object.entries(change)) {
+    if (value === undefined || value === '') delete next[key];
+    else next[key] = value;
+  }
+  patch({ fanOut: Object.keys(next).length === 0 ? undefined : next });
+}
+
+/** 工具参数键值对编辑：不暴露整段 JSON；值能按 JSON 解析就用解析结果 */
+function ParamsEditor({
+  value,
+  onChange,
+}: {
+  value: Record<string, unknown> | undefined;
+  onChange: (params: Record<string, unknown> | undefined) => void;
+}): React.ReactElement {
+  const entries = Object.entries(value ?? {});
+  const toText = (val: unknown): string => (typeof val === 'string' ? val : JSON.stringify(val) ?? '');
+  const parse = (text: string): unknown => {
+    try {
+      return JSON.parse(text) as unknown;
+    } catch {
+      return text;
+    }
+  };
+  const write = (rows: Array<[string, unknown]>): void => {
+    const kept = rows.filter(([key]) => key.trim() !== '');
+    onChange(kept.length === 0 ? undefined : Object.fromEntries(kept));
+  };
+
+  return (
+    <React.Fragment>
+      {entries.map(([key, val], index) => (
+        <div className="wf-row" key={index}>
+          <input
+            className="wf-input"
+            value={key}
+            placeholder="名称"
+            onChange={(event) => write(entries.map(([k, v], i) => (i === index ? [event.target.value, v] : [k, v])))}
+          />
+          <input
+            className="wf-input"
+            value={toText(val)}
+            placeholder="值"
+            onChange={(event) => {
+              const text = event.target.value;
+              write(entries.map(([k, v], i) => (i === index ? [k, parse(text)] : [k, v])));
+            }}
+          />
+          <button type="button" className="wf-btn" onClick={() => write(entries.filter((_, i) => i !== index))}>
+            ✕
+          </button>
+        </div>
+      ))}
+      <button type="button" className="wf-btn" onClick={() => write([...entries, [`param${entries.length + 1}`, '']])}>
+        + 加参数
+      </button>
+    </React.Fragment>
+  );
+}
