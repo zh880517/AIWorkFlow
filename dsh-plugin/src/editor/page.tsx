@@ -836,11 +836,15 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
     if (menu.kind === 'pane') {
       const at = menu.at;
       return [
-        ...PALETTE.map((item) => ({
-          id: `add-${item.type}`,
-          label: `新建${item.label}节点`,
-          onSelect: () => addNode(item.type, at),
-        })),
+        {
+          id: 'create',
+          label: '新建节点',
+          children: PALETTE.map((item) => ({
+            id: `add-${item.type}`,
+            label: item.label,
+            onSelect: () => addNode(item.type, at),
+          })),
+        },
         {
           id: 'paste',
           label: '粘贴节点',
@@ -1048,7 +1052,7 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
         <ContextMenu
           x={menu.x}
           y={menu.y}
-          heading={menu.kind === 'pane' ? '在此处新建' : menu.kind === 'node' ? '节点操作' : '连线操作'}
+          heading={menu.kind === 'pane' ? '画布' : menu.kind === 'node' ? '节点操作' : '连线操作'}
           items={menuItems}
           onClose={() => setMenu(null)}
         />

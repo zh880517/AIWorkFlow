@@ -68,7 +68,7 @@ npm run typecheck:plugin && npm run build:plugin
 - 入口标记：`data.isEntry` 由 `withEntryFlags()` 统一维护——`setEntryId`、删除节点、撤销、保存成功后都要刷一遍；入口不渲染 target handle，`onConnect` / `onReconnect` 里再兜底拒一次「连进入口」。
 - 连线重连：`onReconnect` 只改 source/target，保留 `edge.data`（条件 / 出口绑定）；连进入口、重复边会被拒绝并 `reportInfo`。
 - 删除节点仍不会自动清其他节点里的 `waitFor` / `onLimitExceeded` 引用；这两个字段现在都有下拉可改（悬空值会显示「节点 X 已不存在」），保存被校验器拦下后可以就地修。
-- 右键菜单：画布用 `onPaneContextMenu`（React Flow 内部 `wrapHandler` 只在 `event.target === pane` 时触发，节点/边右键盘不会误开画布菜单）；节点和边各自有独立菜单。菜单定位是 fixed 视口坐标，`ContextMenu` 自己贴边翻转。
+- 右键菜单：画布用 `onPaneContextMenu`（React Flow 内部 `wrapHandler` 只在 `event.target === pane` 时触发，节点/边右键盘不会误开画布菜单）；节点和边各自有独立菜单。菜单定位是 fixed 视口坐标，`ContextMenu` 自己贴边翻转；画布菜单的「新建节点」是一层子菜单（`MenuItem.children`，悬停/点击展开，靠右翻左、贴底上移）。
 - **分支出口排布**：`spreadSourceHandles()` 在渲染层把同一节点的出边按数组顺序挂到 `out-0` / `out-1` …，节点卡按出边数量渲染多个右侧 handle（从上到下均分）。state 里的边不保存 handle 绑定，`buildFlow` 仍按边顺序生成 branches。
 - **属性面板宽度可拖**：画布与面板之间是 `.wf-splitter`（pointer capture 拖动，键盘 ←/→ 调 16px、Shift 48px、Home 复位、双击复位），宽度 240–640 且保证画布至少 280px；宽度写进 localStorage `aiworkflow.editor.inspectorWidth`。`.wf-inspector` 不再写死 `width:312px`，宽度由内联 style 给。
 - **运行图轮询去抖**：`runview/page.tsx` 用业务数据指纹（active/recent/selectedId/detail）判断是否 `setData`；`generatedAt` 每轮都变，不能参与比较。否则每 2 秒一次的空刷新会让边标签闪动。

@@ -86,6 +86,11 @@ export const editorCss = `
 .wf-menu-item[data-danger="true"]{color:var(--dsw-alias-state-error-primary)}
 .wf-menu-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .wf-menu-hint{flex:none;font-size:10.5px;color:var(--dsw-alias-label-secondary)}
+.wf-menu-caret{flex:none;font-size:13px;line-height:1;color:var(--dsw-alias-label-secondary);opacity:.75}
+.wf-menu-group{position:relative}
+/* 子菜单：贴父项右侧（重叠 2px，避免斜着移过去时中间漏 hover），靠右边缘时翻到左侧 */
+.wf-menu.wf-submenu{position:absolute;top:-5px;left:calc(100% - 2px);margin:0}
+.wf-menu.wf-submenu[data-side="left"]{left:auto;right:calc(100% - 2px)}
 .wf-btn[data-danger="true"]{color:var(--dsw-alias-state-error-primary)}
 .wf-btn[data-danger="true"]:hover{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-state-error-primary)}
 .wf-btn[data-tone="error"]{color:var(--dsw-alias-state-error-primary);border-color:var(--dsw-alias-state-error-primary)}
