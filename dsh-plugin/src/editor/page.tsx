@@ -9,11 +9,11 @@ import { FlowCanvas, type CanvasApi, type Point } from './canvas.js';
 import { Inspector } from './inspector.js';
 import { ContextMenu, type MenuItem } from './menu.js';
 import {
-  bindGateTarget,
   buildFlow,
   canvasOf,
   detailOf,
   makeNode,
+  outletsOf,
   PALETTE,
   typeLabel,
   type CanvasEdge,
@@ -240,6 +240,8 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
   /** 右侧属性面板宽度：可拖动分隔条调整，记到 localStorage */
   const [inspectorWidth, setInspectorWidth] = React.useState<number>(readInspectorWidth);
   const [resizing, setResizing] = React.useState(false);
+  /** 点出口名字后待连线的来源：再点一个目标节点就把它连上 */
+  const [pendingLink, setPendingLink] = React.useState<{ nodeId: string; outletKey: string } | null>(null);
 
   const pageRef = React.useRef<HTMLDivElement | null>(null);
   const bodyRef = React.useRef<HTMLDivElement | null>(null);
@@ -401,7 +403,7 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
           type: 'wf',
           position,
           selected: true,
-          data: { title, kind: body.type, detail: detailOf(body), isEntry: false },
+          data: { title, kind: body.type, detail: detailOf(body), isEntry: false, outlets: outletsOf(body) },
         },
       ]);
       setSelectedId(id);
@@ -449,6 +451,17 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
     [record, insertNode],
   );
 
+  /** 从卡点出口拖出来的线：带上 outlet，保存时才知道这条分支属于哪个选项 */
+  const outletOfConnection = (
+    source: string,
+    sourceHandle: string | null,
+    snapshot: { nodes: CanvasNode[] },
+  ): { key: string; label: string } | undefined => {
+    if (sourceHandle === null) return undefined;
+    const node = snapshot.nodes.find((item) => item.id === source);
+    return (node?.data.outlets ?? []).find((outlet) => `out-${outlet.key}` === sourceHandle);
+  };
+
   const onConnect = React.useCallback(
     (connection: Connection): void => {
       if (connection.source === null || connection.target === null) return;
@@ -461,6 +474,15 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
       }
       // 同一条有向边不重复连：重复边在 DSL 里会变成同 to 的重复分支
       if (snapshot.edges.some((edge) => edge.source === connection.source && edge.target === connection.target)) return;
+      const outlet = outletOfConnection(connection.source, connection.sourceHandle, snapshot);
+      // 卡点一个出口只连一条：否则人工选中这个选项时不知道该走哪条
+      if (
+        outlet !== undefined &&
+        snapshot.edges.some((edge) => edge.source === connection.source && edge.data?.outlet === outlet.key)
+      ) {
+        reportInfo(`出口「${outlet.label}」已经连了别的节点：先删掉那条线，或从别的出口连`);
+        return;
+      }
       record();
       setEdges((current) =>
         addEdge<CanvasEdge>(
@@ -470,7 +492,7 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
             target: connection.target,
             sourceHandle: connection.sourceHandle,
             targetHandle: connection.targetHandle,
-            data: {},
+            ...(outlet !== undefined ? { label: outlet.label, data: { outlet: outlet.key } } : { data: {} }),
           },
           current,
         ),
@@ -497,17 +519,23 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
       }
       record();
       setEdges((all) =>
-        all.map((edge) =>
-          edge.id === oldEdge.id
-            ? {
-                ...edge,
-                source,
-                target,
-                sourceHandle: connection.sourceHandle,
-                targetHandle: connection.targetHandle,
-              }
-            : edge,
-        ),
+        all.map((edge) => {
+          if (edge.id !== oldEdge.id) return edge;
+          // 从哪个出口拖出来就归哪个选项；换成别的节点的入口就清掉 outlet
+          const outlet = outletOfConnection(source, connection.sourceHandle, snapshot);
+          const data = { ...(edge.data ?? {}) };
+          if (outlet !== undefined) data.outlet = outlet.key;
+          else delete data.outlet;
+          return {
+            ...edge,
+            source,
+            target,
+            sourceHandle: connection.sourceHandle,
+            targetHandle: connection.targetHandle,
+            ...(outlet !== undefined ? { label: outlet.label } : {}),
+            data,
+          };
+        }),
       );
       setDirty(true);
     },
@@ -571,6 +599,8 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
                 ...node.data,
                 title: typeof patch.title === 'string' ? patch.title : node.data.title,
                 detail: detailOf(next),
+                // 卡点的出口 = 选项：选项增删改要立刻反映到卡片右侧
+                outlets: outletsOf(next),
               },
             }
           : node,
@@ -600,25 +630,48 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
     setDirty(true);
   };
 
-  /** 卡点：在属性面板里给选项挑目标节点（''=断开），等价于画布上连/删一条线 */
-  const setGateTarget = (optionId: string, targetId: string): void => {
-    if (selectedId === null) return;
-    const gate = bodies[selectedId];
-    if (gate?.type !== 'gate') return;
-    const option = (gate.options ?? []).find((item) => item.id === optionId);
-    if (option === undefined) return;
+  /** 点了卡片右侧的出口名字：记下来，下一次点目标节点就把它连上（鼠标也可以直接从圆点拖） */
+  const startOutletLink = (nodeId: string, outletKey: string): void => {
+    setPendingLink((current) =>
+      current !== null && current.nodeId === nodeId && current.outletKey === outletKey ? null : { nodeId, outletKey },
+    );
+  };
+
+  const completeOutletLink = (targetId: string): void => {
+    const pending = pendingLink;
+    if (pending === null) return;
+    setPendingLink(null);
+    const { nodeId, outletKey } = pending;
+    if (targetId === nodeId) return;
+    const sourceNode = nodes.find((node) => node.id === nodeId);
+    const outlet = (sourceNode?.data.outlets ?? []).find((item) => item.key === outletKey);
+    if (outlet === undefined) return;
     if (targetId === entry) {
       reportInfo('入口节点不能有入线：先把别的节点设为入口');
       return;
     }
-    const result = bindGateTarget(edges, selectedId, optionId, option.label, targetId);
-    if (result.error !== undefined) {
-      reportInfo(result.error);
+    if (edges.some((edge) => edge.source === nodeId && edge.data?.outlet === outletKey)) {
+      reportInfo(`出口「${outlet.label}」已经连了别的节点：先删掉那条线，或从别的出口连`);
       return;
     }
-    if (result.edges === edges) return;
-    record(`gate-target:${selectedId}:${optionId}`);
-    setEdges(result.edges);
+    if (edges.some((edge) => edge.source === nodeId && edge.target === targetId)) {
+      reportInfo('这两个节点之间已经有这条连线了');
+      return;
+    }
+    record(`connect:${nodeId}:${outletKey}`);
+    setEdges((all) =>
+      addEdge<CanvasEdge>(
+        {
+          id: newEdgeId(),
+          source: nodeId,
+          target: targetId,
+          sourceHandle: `out-${outletKey}`,
+          label: outlet.label,
+          data: { outlet: outletKey },
+        },
+        all,
+      ),
+    );
     setDirty(true);
   };
 
@@ -651,7 +704,11 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
       }
 
       if (event.key === 'Escape') {
-        // 依次收起：校验浮层 → 右键菜单 → 取消选中
+        // 依次收起：待连线 → 校验浮层 → 右键菜单 → 取消选中
+        if (pendingLink !== null) {
+          setPendingLink(null);
+          return;
+        }
         setValOpen(false);
         setMenu(null);
         setSelectedId(null);
@@ -688,7 +745,7 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [deleteSelected, redo, undo, copyNode, pasteNode]);
+  }, [deleteSelected, redo, undo, copyNode, pasteNode, pendingLink]);
 
   const handleApi = React.useCallback((next: CanvasApi): void => {
     canvasApiRef.current = next;
@@ -1035,7 +1092,19 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
             onEdgesChange={handleEdgesChange}
             onConnect={onConnect}
             onReconnect={onReconnect}
-            onSelect={setSelectedId}
+            onSelect={(id) => {
+              if (id === null) {
+                setPendingLink(null);
+                setSelectedId(null);
+                return;
+              }
+              if (pendingLink !== null) {
+                completeOutletLink(id);
+                return;
+              }
+              setSelectedId(id);
+            }}
+            onOutletClick={startOutletLink}
             onMoveNode={() => setDirty(true)}
             onDragNode={() => record()}
             onPaneMenu={(screen, flowPoint) => setMenu({ kind: 'pane', x: screen.x, y: screen.y, at: flowPoint })}
@@ -1051,6 +1120,20 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
             onApi={handleApi}
           />
         </Boundary>
+        {pendingLink !== null && (
+          <div className="wf-connect-hint">
+            <span>
+              已选出口「
+              {nodes.find((node) => node.id === pendingLink.nodeId)?.data.outlets?.find(
+                (outlet) => outlet.key === pendingLink.outletKey,
+              )?.label ?? pendingLink.outletKey}
+              」：点一个目标节点完成连接，或按 Esc 取消
+            </span>
+            <button type="button" className="wf-btn" onClick={() => setPendingLink(null)}>
+              取消
+            </button>
+          </div>
+        )}
         <div
           className="wf-splitter"
           data-dragging={resizing ? 'true' : 'false'}
@@ -1081,7 +1164,6 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
             onPatch={patchNode}
             onDelete={deleteNode}
             onCondition={setCondition}
-            onGateTarget={setGateTarget}
             onSetEntry={() => {
               if (selectedId !== null) setEntryId(selectedId);
             }}

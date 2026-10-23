@@ -20,12 +20,28 @@ import flowCss from '@xyflow/react/dist/style.css?inline';
 import { spreadSourceHandles, typeLabel, type CanvasEdge, type CanvasNode } from './model.js';
 import { editorCss } from './styles.js';
 
+/** 点卡片右侧的出口名字 = 开始连一条线（再点目标节点完成），回调由页面给 */
+const OutletClickContext = React.createContext<(nodeId: string, outletKey: string) => void>(() => {});
+
 function WfNode({ id, data, selected }: NodeProps<CanvasNode>): React.ReactElement {
-  // 出边数量决定右侧画几个出口：一个分支一个点，从上到下排开
+  // 没有声明出口的节点（非卡点）：出边数量决定右侧画几个点，一个分支一个
   const outCount = useStore(
     (state) => state.edges.reduce((total, edge) => (edge.source === id ? total + 1 : total), 0),
   );
-  const slots = Math.max(outCount, 1);
+  // 哪些出口已经连上线了：用字符串订阅，状态没变就不重建
+  const wired = useStore((state) =>
+    state.edges
+      .filter((edge) => edge.source === id && typeof edge.data?.outlet === 'string')
+      .map((edge) => edge.data?.outlet)
+      .join('|'),
+  );
+  const onOutletClick = React.useContext(OutletClickContext);
+  const declared = data.outlets ?? [];
+  const slots: Array<{ key: string; label: string | undefined }> =
+    declared.length > 0
+      ? declared.map((outlet) => ({ key: outlet.key, label: outlet.label }))
+      : Array.from({ length: Math.max(outCount, 1) }, (_, index) => ({ key: String(index), label: undefined }));
+  const wiredKeys = new Set(wired === '' ? [] : wired.split('|'));
   return (
     <div className="wf-node" data-kind={data.kind} data-selected={selected ? 'true' : 'false'}>
       {/* 入口没有入线：不渲染 target handle，避免把线连进起点 */}
@@ -36,14 +52,35 @@ function WfNode({ id, data, selected }: NodeProps<CanvasNode>): React.ReactEleme
       </div>
       <div className="wf-node-title">{data.title}</div>
       {data.detail !== '' && <div className="wf-node-detail">{data.detail}</div>}
-      {Array.from({ length: slots }, (_, index) => (
-        <Handle
-          key={index}
-          id={`out-${index}`}
-          type="source"
-          position={Position.Right}
-          style={{ top: `${((index + 1) / (slots + 1)) * 100}%` }}
-        />
+      {slots.map((slot, index) => (
+        <React.Fragment key={slot.key}>
+          <Handle
+            id={`out-${slot.key}`}
+            type="source"
+            position={Position.Right}
+            style={{ top: `${((index + 1) / (slots.length + 1)) * 100}%` }}
+          />
+          {/* 没连线的出口：名字挂在卡片右侧外面，点它开始连线 */}
+          {slot.label !== undefined && !wiredKeys.has(slot.key) && (
+            <span
+              className="wf-outlet-tag"
+              data-node={id}
+              data-outlet={slot.key}
+              style={{ top: `${((index + 1) / (slots.length + 1)) * 100}%` }}
+              title="点击后再点目标节点即可连上；也可以直接从圆点拖线"
+              onPointerDown={(event) => {
+                // 别让点名字变成拖节点
+                event.stopPropagation();
+              }}
+              onClick={(event) => {
+                event.stopPropagation();
+                onOutletClick(id, slot.key);
+              }}
+            >
+              {slot.label}
+            </span>
+          )}
+        </React.Fragment>
       ))}
     </div>
   );
@@ -79,6 +116,8 @@ export interface FlowCanvasProps {
   onPaneMenu: (screen: Point, flow: Point) => void;
   onNodeMenu: (screen: Point, id: string) => void;
   onEdgeMenu: (screen: Point, id: string) => void;
+  /** 点了卡片右侧的出口名字：页面记下来，等下一次点目标节点 */
+  onOutletClick: (nodeId: string, outletKey: string) => void;
   onApi: (api: CanvasApi) => void;
 }
 
@@ -87,8 +126,19 @@ function CanvasFlow(props: FlowCanvasProps): React.ReactElement {
   const wrapRef = React.useRef<HTMLDivElement | null>(null);
   const apiSink = React.useRef(props.onApi);
   apiSink.current = props.onApi;
-  // 同一节点的多条出边分到不同出口（out-0 / out-1 …），只在渲染层做，state 里的边不动
-  const renderedEdges = React.useMemo(() => spreadSourceHandles(props.edges), [props.edges]);
+  // 出边挂到正确的出口：声明了出口的节点（卡点）按 outlet 匹配，其余按顺序 out-0 / out-1 …
+  const outletKeys = React.useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const node of props.nodes) {
+      const outlets = node.data.outlets ?? [];
+      if (outlets.length > 0) map.set(node.id, outlets.map((outlet) => outlet.key));
+    }
+    return map;
+  }, [props.nodes]);
+  const renderedEdges = React.useMemo(
+    () => spreadSourceHandles(props.edges, outletKeys),
+    [props.edges, outletKeys],
+  );
 
   React.useEffect(() => {
     apiSink.current({
@@ -115,38 +165,40 @@ function CanvasFlow(props: FlowCanvasProps): React.ReactElement {
   // deleteKeyCode 置 null：删除交给 page.tsx 统一处理（要同时清 bodies、修入口并记进撤销栈）
   return (
     <div className="wf-flow" ref={wrapRef}>
-      <ReactFlow
-        nodes={props.nodes}
-        edges={renderedEdges}
-        nodeTypes={nodeTypes}
-        edgeTypes={edgeTypes}
-        onNodesChange={props.onNodesChange}
-        onEdgesChange={props.onEdgesChange}
-        onConnect={props.onConnect}
-        onReconnect={(oldEdge, connection) => props.onReconnect(oldEdge, connection)}
-        onNodeClick={(_, node) => props.onSelect(node.id)}
-        onPaneClick={() => props.onSelect(null)}
-        onNodeDragStart={() => props.onDragNode()}
-        onNodeDragStop={() => props.onMoveNode()}
-        onPaneContextMenu={openPaneMenu}
-        onNodeContextMenu={(event, node) => {
-          event.preventDefault();
-          props.onSelect(node.id);
-          props.onNodeMenu({ x: event.clientX, y: event.clientY }, node.id);
-        }}
-        onEdgeContextMenu={(event, edge) => {
-          event.preventDefault();
-          props.onEdgeMenu({ x: event.clientX, y: event.clientY }, edge.id);
-        }}
-        deleteKeyCode={null}
-        fitView
-        fitViewOptions={{ padding: 0.25 }}
-        minZoom={0.3}
-        proOptions={{ hideAttribution: false }}
-      >
-        <Background gap={18} size={1} />
-        <Controls showInteractive={false} />
-      </ReactFlow>
+      <OutletClickContext.Provider value={props.onOutletClick}>
+        <ReactFlow
+          nodes={props.nodes}
+          edges={renderedEdges}
+          nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
+          onNodesChange={props.onNodesChange}
+          onEdgesChange={props.onEdgesChange}
+          onConnect={props.onConnect}
+          onReconnect={(oldEdge, connection) => props.onReconnect(oldEdge, connection)}
+          onNodeClick={(_, node) => props.onSelect(node.id)}
+          onPaneClick={() => props.onSelect(null)}
+          onNodeDragStart={() => props.onDragNode()}
+          onNodeDragStop={() => props.onMoveNode()}
+          onPaneContextMenu={openPaneMenu}
+          onNodeContextMenu={(event, node) => {
+            event.preventDefault();
+            props.onSelect(node.id);
+            props.onNodeMenu({ x: event.clientX, y: event.clientY }, node.id);
+          }}
+          onEdgeContextMenu={(event, edge) => {
+            event.preventDefault();
+            props.onEdgeMenu({ x: event.clientX, y: event.clientY }, edge.id);
+          }}
+          deleteKeyCode={null}
+          fitView
+          fitViewOptions={{ padding: 0.25 }}
+          minZoom={0.3}
+          proOptions={{ hideAttribution: false }}
+        >
+          <Background gap={18} size={1} />
+          <Controls showInteractive={false} />
+        </ReactFlow>
+      </OutletClickContext.Provider>
     </div>
   );
 }

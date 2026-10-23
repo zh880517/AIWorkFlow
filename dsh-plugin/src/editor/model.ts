@@ -9,6 +9,14 @@ export interface CanvasNodeData extends Record<string, unknown> {
   detail: string;
   /** 入口节点：卡片上打「入口」标记，也用来拦住连进入口的线 */
   isEntry: boolean;
+  /** 卡片右侧显式画出来的出口（卡点=每个选项一个）；空数组=按出边数量动态画 */
+  outlets: CanvasOutlet[];
+}
+
+export interface CanvasOutlet {
+  /** handle 后缀：卡点用选项 id，`out-<key>` 就是 React Flow 的 handle id */
+  key: string;
+  label: string;
 }
 
 export type CanvasNode = Node<CanvasNodeData, 'wf'>;
@@ -75,13 +83,25 @@ export function makeNode(type: NodeType, id: string): FlowNode {
   }
 }
 
+/** 卡片右侧要画的出口：卡点一个选项一个，其余类型交给出边数量决定 */
+export function outletsOf(node: FlowNode): CanvasOutlet[] {
+  if (node.type !== 'gate') return [];
+  return (node.options ?? []).map((option) => ({ key: option.id, label: option.label }));
+}
+
 export function canvasOf(flow: Flow): { nodes: CanvasNode[]; edges: CanvasEdge[] } {
   const positions = flow._ui?.positions ?? {};
   const nodes: CanvasNode[] = flow.nodes.map((node, index) => ({
     id: node.id,
     type: 'wf',
     position: positions[node.id] ?? autoPosition(index),
-    data: { title: node.title?.trim() || node.id, kind: node.type, detail: detailOf(node), isEntry: node.id === flow.entry },
+    data: {
+      title: node.title?.trim() || node.id,
+      kind: node.type,
+      detail: detailOf(node),
+      isEntry: node.id === flow.entry,
+      outlets: outletsOf(node),
+    },
   }));
   const known = new Set(nodes.map((node) => node.id));
   const edges: CanvasEdge[] = [];
@@ -116,17 +136,26 @@ function uniqueBranchId(preferred: string, used: Set<string>): string {
 }
 
 /**
- * 画布渲染用：同一节点的多条出边按顺序挂到不同的 source handle（out-0 / out-1 …），
- * 让分支出口从上到下排开，而不是全挤在右边同一个点上。
+ * 画布渲染用：把每条出边挂到正确的 source handle 上。
+ * - 节点声明了出口（卡点：一个选项一个）→ 按 `edge.data.outlet` 找 `out-<选项 id>`，出口名字就挂在卡片右侧；
+ * - 没声明出口（其他类型）→ 按出边顺序 `out-0 / out-1 …`，一个分支一个点。
  * 只影响渲染；保存用的还是 page.tsx 里那份 edges 状态（不含 handle 绑定）。
  */
-export function spreadSourceHandles(edges: CanvasEdge[]): CanvasEdge[] {
+export function spreadSourceHandles(edges: CanvasEdge[], outletKeys?: Map<string, string[]>): CanvasEdge[] {
   const counters = new Map<string, number>();
   let changed = false;
   const next = edges.map((edge) => {
     const index = counters.get(edge.source) ?? 0;
     counters.set(edge.source, index + 1);
-    const handle = `out-${index}`;
+    const keys = outletKeys?.get(edge.source);
+    const bound = keys === undefined ? -1 : keys.indexOf(edge.data?.outlet ?? '');
+    // 绑定了选项就用那个出口；没绑定（老图）按顺序落到第 index 个出口，位置至少稳定。
+    // 边比选项还多（老图脏数据）时全部挂到最后一个出口，至少能画出来并被校验器拦下。
+    const key =
+      keys === undefined
+        ? String(index)
+        : (keys[bound >= 0 ? bound : Math.min(index, keys.length - 1)] ?? String(index));
+    const handle = `out-${key}`;
     if (edge.sourceHandle === handle) return edge;
     changed = true;
     return { ...edge, sourceHandle: handle };
@@ -134,72 +163,6 @@ export function spreadSourceHandles(edges: CanvasEdge[]): CanvasEdge[] {
   return changed ? next : edges;
 }
 
-/**
- * 卡点选项 -> 出边。面板里直接给选项挑目标节点，等于在画布上连一条线；
- * 选空串就是断开（删掉这条出边）。返回新数组，出错时原样返回并带原因。
- */
-export function bindGateTarget(
-  edges: CanvasEdge[],
-  gateId: string,
-  optionId: string,
-  optionLabel: string,
-  targetId: string,
-): { edges: CanvasEdge[]; error?: string } {
-  const bound = edges.find((edge) => edge.source === gateId && edge.data?.outlet === optionId);
-  if (targetId === '') {
-    return { edges: bound === undefined ? edges : edges.filter((edge) => edge !== bound) };
-  }
-  if (targetId === gateId) return { edges, error: '卡点不能连回自己' };
-  if (bound?.target === targetId) return { edges };
-  if (bound !== undefined) {
-    // 同一个卡点两条出边指向同一个节点：画布上会重叠，引擎里也没法区分，先拦住
-    if (edges.some((edge) => edge.source === gateId && edge.id !== bound.id && edge.target === targetId)) {
-      return { edges, error: '这个卡点已经有一条出边指向该节点了，先改那条边的归属' };
-    }
-    return {
-      edges: edges.map((edge) =>
-        edge.id === bound.id ? { ...edge, target: targetId, label: optionLabel } : edge,
-      ),
-    };
-  }
-  // 画布上先拉了线、还没归属选项：直接认领，不再重复长一条
-  const orphan = edges.find(
-    (edge) => edge.source === gateId && edge.target === targetId && edge.data?.outlet === undefined,
-  );
-  if (orphan !== undefined) {
-    return {
-      edges: edges.map((edge) =>
-        edge.id === orphan.id
-          ? { ...edge, label: optionLabel, data: { ...(edge.data ?? {}), outlet: optionId } }
-          : edge,
-      ),
-    };
-  }
-  // 目标已经有这个卡点的出边（且刚没认领掉）：说明它属于别的选项，别连第二条
-  if (edges.some((edge) => edge.source === gateId && edge.target === targetId)) {
-    return { edges, error: '这个卡点已经有一条出边指向该节点了，先改那条边的归属' };
-  }
-  const usedBranches = new Set(
-    edges
-      .filter((edge) => edge.source === gateId)
-      .map((edge) => edge.data?.branchId)
-      .filter((id): id is string => typeof id === 'string'),
-  );
-  let branchIndex = 1;
-  while (usedBranches.has(`b${branchIndex}`)) branchIndex += 1;
-  return {
-    edges: [
-      ...edges,
-      {
-        id: `e-${gateId}-out-${optionId}`,
-        source: gateId,
-        target: targetId,
-        label: optionLabel,
-        data: { branchId: `b${branchIndex}`, outlet: optionId },
-      },
-    ],
-  };
-}
 
 export function buildFlow(
   base: Flow,

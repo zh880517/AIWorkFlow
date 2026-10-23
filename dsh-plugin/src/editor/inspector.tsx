@@ -19,8 +19,6 @@ export interface InspectorProps {
   onPatch: (patch: Record<string, unknown>) => void;
   onDelete: () => void;
   onCondition: (edgeId: string, value: string) => void;
-  /** 卡点：这个选项走哪个节点（''=断开，等于删除这条出边） */
-  onGateTarget: (optionId: string, targetId: string) => void;
   onSetEntry: () => void;
 }
 
@@ -358,48 +356,33 @@ export function Inspector(props: InspectorProps): React.ReactElement {
         </Section>
       )}
 
-      {body.type === 'gate' && options.length > 0 ? (
+      {body.type === 'gate' && options.length > 0 && (
         <Section title="出口分支">
           <div className="wf-hint">
-            每个选项一条出边：在这里给它挑目标节点，等于在画布上连一条线；选「未连线」等于删掉那条线。
+            一个选项一个出口：没有连线的出口名字显示在节点右侧，从它的圆点拖线（或点名字再点目标节点）就能连上。
           </div>
           {options.map((option) => {
             const bound = props.edges.filter((edge) => edge.data?.outlet === option.id);
-            const edge = bound[0];
-            const known = edge !== undefined && others.some((node) => node.id === edge.target);
             return (
-              <Field
-                key={option.id}
-                label={`选项「${option.label}」`}
-                hint={edge === undefined ? '还没连线：人工选这个选项时 run 会判失败' : `→ ${edge.target}`}
-              >
-                <select
-                  className="wf-input"
-                  value={edge?.target ?? ''}
-                  onChange={(event) => props.onGateTarget(option.id, event.target.value)}
-                >
-                  <option value="">（未连线）</option>
-                  {others.map((node) => (
-                    <option key={node.id} value={node.id}>
-                      {nodeLabel(node)}
-                    </option>
-                  ))}
-                  {edge !== undefined && !known && <option value={edge.target}>（节点 {edge.target} 已不存在）</option>}
-                </select>
-              </Field>
+              <div className="wf-outlet-row" key={option.id}>
+                <span className="wf-outlet-name">{option.label}</span>
+                <span className="wf-hint">
+                  {bound.length === 0 ? '未连接' : `→ ${bound.map((edge) => edge.target).join('、')}`}
+                </span>
+              </div>
             );
           })}
           {loose.length > 0 && (
             <div className="wf-hint wf-hint-warn">
-              还有 {loose.length} 条出边没有归属选项（{loose.map((edge) => `→ ${edge.target}`).join('、')}）：
-              随便给上面某个选项挑这个目标就能认领它，或者到画布上删掉。
+              还有 {loose.length} 条出边没有绑定选项（{loose.map((edge) => `→ ${edge.target}`).join('、')}
+              ）：在画布上删掉重连，从对应的出口拖线即可；保存时会按选项顺序兜底。
             </div>
           )}
         </Section>
-      ) : null}
+      )}
 
       {body.type === 'gate' && options.length === 0 && props.edges.length > 0 && (
-        <div className="wf-hint wf-hint-warn">这个卡点还没有选项：先在「人工卡点」里加选项，再给每个选项挑目标节点。</div>
+        <div className="wf-hint wf-hint-warn">这个卡点还没有选项：先在「人工卡点」里加选项，出口会出现在卡片右侧。</div>
       )}
 
       {body.type !== 'gate' && multi && (
