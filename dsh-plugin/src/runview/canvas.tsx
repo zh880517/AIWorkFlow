@@ -6,16 +6,22 @@ import {
   Handle,
   Position,
   ReactFlow,
+  useStore,
   type NodeProps,
   type NodeTypes,
 } from '@xyflow/react';
 import flowCss from '@xyflow/react/dist/style.css?inline';
-import type { CanvasEdge } from '../editor/model.js';
+import { spreadSourceHandles, type CanvasEdge } from '../editor/model.js';
 import { runCss } from './styles.js';
 import type { RunCanvasNode } from './model.js';
 
-function RunNode({ data, selected }: NodeProps<RunCanvasNode>): React.ReactElement {
+function RunNode({ id, data, selected }: NodeProps<RunCanvasNode>): React.ReactElement {
   const shown = data.detail.length > 64 ? `${data.detail.slice(0, 64)}…` : data.detail;
+  // 一个分支一个出口：出边多时从上到下排开，别全挤在右边同一点
+  const outCount = useStore(
+    (state) => state.edges.reduce((total, edge) => (edge.source === id ? total + 1 : total), 0),
+  );
+  const slots = Math.max(outCount, 1);
   return (
     <div className="awr-node" data-state={data.state} data-selected={selected ? 'true' : 'false'}>
       <Handle type="target" position={Position.Left} isConnectable={false} />
@@ -26,7 +32,16 @@ function RunNode({ data, selected }: NodeProps<RunCanvasNode>): React.ReactEleme
       </div>
       <div className="awr-node-title">{data.title}</div>
       {shown !== '' && <div className="awr-node-detail">{shown}</div>}
-      <Handle type="source" position={Position.Right} isConnectable={false} />
+      {Array.from({ length: slots }, (_, index) => (
+        <Handle
+          key={index}
+          id={`out-${index}`}
+          type="source"
+          position={Position.Right}
+          isConnectable={false}
+          style={{ top: `${((index + 1) / (slots + 1)) * 100}%` }}
+        />
+      ))}
     </div>
   );
 }
@@ -46,6 +61,7 @@ export function RunCanvas({ nodes, edges, selectedId, onSelect }: RunCanvasProps
     () => nodes.map((node) => ({ ...node, selected: node.id === selectedId })),
     [nodes, selectedId],
   );
+  const renderedEdges = React.useMemo(() => spreadSourceHandles(edges), [edges]);
 
   return (
     <div className="awr-canvas">
@@ -53,7 +69,7 @@ export function RunCanvas({ nodes, edges, selectedId, onSelect }: RunCanvasProps
       <style>{runCss}</style>
       <ReactFlow
         nodes={shown}
-        edges={edges}
+        edges={renderedEdges}
         nodeTypes={nodeTypes}
         nodesDraggable={false}
         nodesConnectable={false}

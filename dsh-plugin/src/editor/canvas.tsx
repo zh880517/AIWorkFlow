@@ -8,6 +8,7 @@ import {
   ReactFlow,
   ReactFlowProvider,
   useReactFlow,
+  useStore,
   type Connection,
   type EdgeTypes,
   type NodeProps,
@@ -16,10 +17,15 @@ import {
   type OnNodesChange,
 } from '@xyflow/react';
 import flowCss from '@xyflow/react/dist/style.css?inline';
-import { typeLabel, type CanvasEdge, type CanvasNode } from './model.js';
+import { spreadSourceHandles, typeLabel, type CanvasEdge, type CanvasNode } from './model.js';
 import { editorCss } from './styles.js';
 
-function WfNode({ data, selected }: NodeProps<CanvasNode>): React.ReactElement {
+function WfNode({ id, data, selected }: NodeProps<CanvasNode>): React.ReactElement {
+  // 出边数量决定右侧画几个出口：一个分支一个点，从上到下排开
+  const outCount = useStore(
+    (state) => state.edges.reduce((total, edge) => (edge.source === id ? total + 1 : total), 0),
+  );
+  const slots = Math.max(outCount, 1);
   return (
     <div className="wf-node" data-kind={data.kind} data-selected={selected ? 'true' : 'false'}>
       {/* 入口没有入线：不渲染 target handle，避免把线连进起点 */}
@@ -30,7 +36,15 @@ function WfNode({ data, selected }: NodeProps<CanvasNode>): React.ReactElement {
       </div>
       <div className="wf-node-title">{data.title}</div>
       {data.detail !== '' && <div className="wf-node-detail">{data.detail}</div>}
-      <Handle type="source" position={Position.Right} />
+      {Array.from({ length: slots }, (_, index) => (
+        <Handle
+          key={index}
+          id={`out-${index}`}
+          type="source"
+          position={Position.Right}
+          style={{ top: `${((index + 1) / (slots + 1)) * 100}%` }}
+        />
+      ))}
     </div>
   );
 }
@@ -73,6 +87,8 @@ function CanvasFlow(props: FlowCanvasProps): React.ReactElement {
   const wrapRef = React.useRef<HTMLDivElement | null>(null);
   const apiSink = React.useRef(props.onApi);
   apiSink.current = props.onApi;
+  // 同一节点的多条出边分到不同出口（out-0 / out-1 …），只在渲染层做，state 里的边不动
+  const renderedEdges = React.useMemo(() => spreadSourceHandles(props.edges), [props.edges]);
 
   React.useEffect(() => {
     apiSink.current({
@@ -101,7 +117,7 @@ function CanvasFlow(props: FlowCanvasProps): React.ReactElement {
     <div className="wf-flow" ref={wrapRef}>
       <ReactFlow
         nodes={props.nodes}
-        edges={props.edges}
+        edges={renderedEdges}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         onNodesChange={props.onNodesChange}

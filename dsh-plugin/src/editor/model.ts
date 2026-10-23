@@ -115,6 +115,25 @@ function uniqueBranchId(preferred: string, used: Set<string>): string {
   }
 }
 
+/**
+ * 画布渲染用：同一节点的多条出边按顺序挂到不同的 source handle（out-0 / out-1 …），
+ * 让分支出口从上到下排开，而不是全挤在右边同一个点上。
+ * 只影响渲染；保存用的还是 page.tsx 里那份 edges 状态（不含 handle 绑定）。
+ */
+export function spreadSourceHandles(edges: CanvasEdge[]): CanvasEdge[] {
+  const counters = new Map<string, number>();
+  let changed = false;
+  const next = edges.map((edge) => {
+    const index = counters.get(edge.source) ?? 0;
+    counters.set(edge.source, index + 1);
+    const handle = `out-${index}`;
+    if (edge.sourceHandle === handle) return edge;
+    changed = true;
+    return { ...edge, sourceHandle: handle };
+  });
+  return changed ? next : edges;
+}
+
 export function buildFlow(
   base: Flow,
   bodies: Record<string, FlowNode>,

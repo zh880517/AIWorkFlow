@@ -64,6 +64,8 @@ export function RunGraphPage({ onExit, sessionId }: RunGraphPageProps): React.Re
 
   const selectedRef = React.useRef<string | null>(null);
   selectedRef.current = selected;
+  /** 上一轮的数据指纹：轮询没变化就不 setState，避免每 2 秒重渲染一次导致边标签抖动 */
+  const lastKeyRef = React.useRef<string>('');
 
   // 切会话时清掉选中：上一个会话的 run id 在新会话里不存在，留着会一直请求一个无效详情
   React.useEffect(() => {
@@ -95,8 +97,17 @@ export function RunGraphPage({ onExit, sessionId }: RunGraphPageProps): React.Re
           setError(`读取失败（HTTP ${response.status}）`);
           return;
         }
-        setData(body);
         setError(null);
+        // generatedAt 每轮都变，不能拿来比较；只用业务数据做指纹
+        const key = JSON.stringify({
+          active: body.active,
+          recent: body.recent,
+          selectedId: body.selectedId,
+          detail: body.detail,
+        });
+        if (key === lastKeyRef.current) return;
+        lastKeyRef.current = key;
+        setData(body);
         if (selectedRef.current === null && typeof body.selectedId === 'string') setSelected(body.selectedId);
       } catch (cause) {
         if (!cancelled && !controller.signal.aborted) setError(`无法连接插件 Host 半：${errorText(cause)}`);
@@ -115,7 +126,7 @@ export function RunGraphPage({ onExit, sessionId }: RunGraphPageProps): React.Re
   }, [selected, tick, sessionId]);
 
   const detail = data?.detail ?? null;
-  const graph = detail === null ? null : buildRunGraph(detail);
+  const graph = React.useMemo(() => (detail === null ? null : buildRunGraph(detail)), [detail]);
   const runs = data === null ? [] : dedupe([...data.active, ...data.recent]);
   const phase = detail === null ? null : phaseOf(detail);
   const executions = detail === null ? [] : detail.executions;
