@@ -330,7 +330,7 @@ child run 调 `report_blocked` 时，该 child 置为 `failed`，随后由 7.5 �
 
 ### 8.1 宿主身份注入 hook（唯一允许的 hook 用途）
 
-宿主配置 PreToolUse hook 匹配 `mcp__aiworkflow__.*`，执行 `aiworkflow hook <host>`（`node <安装路径>/dist/cli.js hook claude-code|codex`）。它读 stdin 的事件 JSON，输出：
+宿主配置 PreToolUse hook 匹配 `mcp__aiworkflow__.*`，执行 `aiworkflow hook <host>`（`node <安装路径>/dist/src/cli.js hook claude-code|codex`）。它读 stdin 的事件 JSON，输出：
 
 ```json
 { "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "allow",
@@ -348,11 +348,11 @@ child run 调 `report_blocked` 时，该 child 置为 `failed`，随后由 7.5 �
 ```jsonc
 // Claude Code — ~/.claude/settings.json
 { "hooks": { "PreToolUse": [ { "matcher": "mcp__aiworkflow__.*",
-  "hooks": [ { "type": "command", "command": "node <安装路径>/dist/cli.js hook claude-code", "timeout": 15 } ] } ] } }
+  "hooks": [ { "type": "command", "command": "node <安装路径>/dist/src/cli.js hook claude-code", "timeout": 15 } ] } ] } }
 
 // Codex — ~/.codex/hooks.json（command 型 handler，stdin 收 JSON）
 { "PreToolUse": [ { "matcher": "mcp__aiworkflow__.*",
-  "hooks": [ { "type": "command", "command": "node <安装路径>/dist/cli.js hook codex", "timeout": 15 } ] } ] }
+  "hooks": [ { "type": "command", "command": "node <安装路径>/dist/src/cli.js hook codex", "timeout": 15 } ] } ] }
 ```
 
 ### 8.2 薄 Skill

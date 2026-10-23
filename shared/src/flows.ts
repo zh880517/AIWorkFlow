@@ -1,10 +1,10 @@
-// 公用层：flow 图的读写（与 src/core/flowStore.ts 同一套语义）。
-// 先落 SQLite，再刷 flows/*.json 派生镜像；校验复用主工程的 validateFlow。
+// 公用层：flow 图的读写（主工程 src/core/flowStore.ts 与本文件同一套语义）。
+// 先落 SQLite，再刷 flows/*.json 派生镜像；校验走同目录的 validateFlow。
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Flow } from './types.js';
 import type { SqlDatabase, SqlStatement } from './sql.js';
-import { validateFlow, type ValidationResult } from '../../src/core/validate.js';
+import { validateFlow, type ValidationResult } from './validate.js';
 
 export interface FlowMeta {
   id: string;

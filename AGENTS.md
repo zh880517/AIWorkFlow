@@ -9,10 +9,13 @@
 ## 目录结构
 
 ```
-src/core/    # 纯逻辑层：DSL 类型、校验、SQLite、flow 存储、快照、执行引擎（不依赖 HTTP）
+shared/src/  # 公用层（依赖最底层）：DSL 类型、校验、快照、执行引擎、路径/建表、SQL/进度/格式化。
+             # 主工程 src/ 与 DSH 插件 dsh-plugin/ 都从这里 import；这里**不得**反向 import src/
+src/core/    # 主工程自己的胶水：better-sqlite3 连接、flow 存储、run 查询；其余模块是从 shared/ 再导出的老路径
 src/server/  # HTTP 服务：MCP 端点、面板静态资源、SSE（Phase 2 起）
 src/cli/     # npx 入口（src/cli.ts，Phase 2 实现）
 src/web/     # React 面板源码，Vite 构建，产物进 dist-web/（Phase 4 起）
+dsh-plugin/  # DeepSeek Harness 插件（Host + Client 两半，构建成 index.js / client.js）
 tests/       # vitest 测试
 docs/        # 项目正式文档（长期保留）
 docs/dev/    # 开发临时文档：阶段验收后删除，结论回写正式文档
@@ -40,6 +43,8 @@ npm run build       # tsc → dist/
 ## 编码约定
 
 - TypeScript strict + ESM（`"type": "module"`，`module: Node16`）：相对导入**必须带 `.js` 扩展名**。
+- **依赖方向只能是 `src/` → `shared/`、`dsh-plugin/` → `shared/`**：插件（和 shared）里不准出现 `../../src/...` 引用；需要共用的逻辑放 `shared/src/`。`src/core/` 里被迁走的模块只剩一行再导出，别在上面加逻辑。
+- `shared/src/` 不得 import `src/server/` 或任何 HTTP 依赖；它要能同时给浏览器半（类型/纯函数）和 Host 半（用 `node:` 内建）用。
 - `src/core/` 不得 import `src/server/` 或任何 HTTP 依赖；core 层保持可单测（内存库 `openMemoryDb()`）。
 - 阶段开发流程：看 ROADMAP 对应阶段 → 实现 → 测试 + 阶段验收项跑通 → 在 ROADMAP 勾选并 git commit（每阶段一提交）。
 

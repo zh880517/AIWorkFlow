@@ -1,6 +1,6 @@
-// 执行引擎接线：直接用主工程的 core/engine（构建时内联进 Host bundle），
+// 执行引擎接线：直接用公用层的 engine（构建时内联进 Host bundle），
 // 因此 DSH 里不需要另起 `npx aiworkflow`，run 照样写同一个 SQLite。
-import { ExecutionEngine, type EngineDeps } from '../../src/core/engine.js';
+import { ExecutionEngine, type EngineDeps } from '@shared/engine.js';
 import type { Flow } from '@shared/index.js';
 import { getFlow, listFlows } from '@shared/flows.js';
 import { database } from './db.js';

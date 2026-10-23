@@ -1,6 +1,6 @@
 // Host 半：只读监控 + flow 图读写。
 // 监控走 node:sqlite 只读查询；图编辑直接写 SQLite（唯一事实源）并刷新 flows/*.json 镜像，
-// 校验复用主工程的 validateFlow，语义与 src/core/flowStore.ts 一致。
+// 校验走公用层的 validateFlow（shared/src/validate.ts，与主工程同一份）。
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import {

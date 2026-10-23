@@ -164,11 +164,13 @@ export function createApp(deps: ServerDeps): Hono {
   return app;
 }
 
-/** 查找面板构建产物目录：cwd/dist-web → 包根/dist-web */
+/** 查找面板构建产物目录：cwd/dist-web → 包根/dist-web（源码态与 dist/src 两种布局都试） */
 function resolveWebDir(): string | undefined {
+  const here = import.meta.dirname;
   const candidates = [
     path.join(process.cwd(), 'dist-web'),
-    path.join(path.resolve(import.meta.dirname, '..', '..'), 'dist-web'),
+    path.join(path.resolve(here, '..', '..'), 'dist-web'), // src/server → 包根
+    path.join(path.resolve(here, '..', '..', '..'), 'dist-web'), // dist/src/server → 包根
   ];
   return candidates.find((dir) => fs.existsSync(path.join(dir, 'index.html')));
 }

@@ -1,8 +1,11 @@
 # @aiworkflow/dsh-plugin
 
 只提供给 DeepSeek Harness 使用的 aiworkflow 界面。**不接入**仓库里已有的 `src/web` 面板，也不要求先起 `npx aiworkflow` 服务：
-Host 半用 `node:sqlite` 直接打开 `~/.aiworkflow/aiworkflow.db`（缺库会建库并跑主工程同一份迁移），
-执行引擎也复用主工程 `core/engine`（构建时内联），因此 DSH 里既能画图、也能真跑流程。
+Host 半用 `node:sqlite` 直接打开 `~/.aiworkflow/aiworkflow.db`（缺库会建库并跑公用层同一份迁移），
+执行引擎也复用公用层 `shared/src/engine.ts`（构建时内联），因此 DSH 里既能画图、也能真跑流程。
+
+依赖方向：插件源码只 import `@shared/*`（别名指到 `shared/src/`）与自己的 `./*`，**不引用 `src/`**；
+两边都要用的逻辑放 `shared/src/`，主工程再从那里 import。
 
 ## 三块界面
 

@@ -1,8 +1,8 @@
 // 数据目录与单条连接：HTTP 路由与 Agent 工具共用（WAL 下避免多句柄竞争写锁）。
-// 路径与表结构都复用主工程（core/paths.ts、core/schema.ts），插件不再自带一份。
+// 路径与表结构都在公用层（shared/src/paths.ts、schema.ts），插件与主工程共用一份。
 import { join } from 'node:path';
-import { ensureLayout, flowsDir as coreFlowsDir, homeDir } from '../../src/core/paths.js';
-import { migrateSchema } from '../../src/core/schema.js';
+import { ensureLayout, flowsDir as coreFlowsDir, homeDir } from '@shared/paths.js';
+import { migrateSchema } from '@shared/schema.js';
 import { NodeSqliteDb } from './sqlite.js';
 
 interface OpenDatabase {

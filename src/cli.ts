@@ -15,7 +15,7 @@ import { installClaudeCode, installCodex, type InstallPaths } from './install.js
 const argv = process.argv.slice(2);
 
 if (argv[0] === 'hook') {
-  // 宿主 PreToolUse hook：node <pkg>/dist/cli.js hook <claude-code|codex>
+  // 宿主 PreToolUse hook：node <pkg>/dist/src/cli.js hook <claude-code|codex>
   // 必须在 openDb 等任何服务副作用之前分派——hook 不依赖也不启动服务
   const host = argv[1] ?? '';
   if (host === '') {
@@ -25,7 +25,8 @@ if (argv[0] === 'hook') {
   }
 } else if (argv[0] === 'install') {
   // 宿主集成（§8）：Skill / prompts / hooks 配置。幂等，可重复执行
-  const pkgRoot = path.resolve(import.meta.dirname, '..');
+  // dist/src/cli.js → 两级上到包根（assets/、dist/ 都在这下面）
+  const pkgRoot = path.resolve(import.meta.dirname, '..', '..');
   const paths: InstallPaths = {
     claudeHome: path.join(os.homedir(), '.claude'),
     codexHome: path.join(os.homedir(), '.codex'),

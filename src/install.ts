@@ -10,7 +10,7 @@ export type Host = 'claude-code' | 'codex';
 export interface InstallPaths {
   claudeHome: string;
   codexHome: string;
-  /** 包根（dist/cli.js 与 assets/ 在这下面） */
+  /** 包根（dist/src/cli.js 与 assets/ 在这下面） */
   pkgRoot: string;
 }
 
@@ -28,7 +28,7 @@ const MARK_START = '<!-- aiworkflow:start -->';
 const MARK_END = '<!-- aiworkflow:end -->';
 
 export function hookCommand(pkgRoot: string, host: Host): string {
-  return `node ${JSON.stringify(path.join(pkgRoot, 'dist', 'cli.js'))} hook ${host}`;
+  return `node ${JSON.stringify(path.join(pkgRoot, 'dist', 'src', 'cli.js'))} hook ${host}`;
 }
 
 export function installClaudeCode(p: InstallPaths): InstallResult {
