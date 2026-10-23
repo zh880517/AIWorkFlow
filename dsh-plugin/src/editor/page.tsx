@@ -28,6 +28,27 @@ const PAGE_STYLE: React.CSSProperties = {
 const HISTORY_LIMIT = 50;
 /** 同一个输入框连续敲字合并成一步撤销 */
 const MERGE_WINDOW_MS = 900;
+/** 右侧属性面板宽度：拖动分隔条调整，双击复位 */
+const INSPECTOR_MIN = 240;
+const INSPECTOR_MAX = 640;
+const INSPECTOR_DEFAULT = 312;
+/** 拖到最宽时也要给画布留出的最小宽度 */
+const CANVAS_MIN = 280;
+const INSPECTOR_WIDTH_KEY = 'aiworkflow.editor.inspectorWidth';
+
+function clampInspectorWidth(value: number, max = INSPECTOR_MAX): number {
+  return Math.min(Math.max(INSPECTOR_MIN, Math.round(value)), Math.max(INSPECTOR_MIN, max));
+}
+
+function readInspectorWidth(): number {
+  try {
+    const raw = window.localStorage.getItem(INSPECTOR_WIDTH_KEY);
+    const value = raw === null ? Number.NaN : Number(raw);
+    return Number.isFinite(value) ? clampInspectorWidth(value) : INSPECTOR_DEFAULT;
+  } catch {
+    return INSPECTOR_DEFAULT;
+  }
+}
 
 export function WorkflowPage({ onExit }: WorkflowPageProps = {}): React.ReactElement {
   const [flows, setFlows] = React.useState<api.FlowMeta[] | null>(null);
@@ -206,8 +227,14 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
   const [valOpen, setValOpen] = React.useState(false);
   /** 历史 run 学到的 payload 字段名（插值提示用） */
   const [payloadFields, setPayloadFields] = React.useState<Record<string, string[]>>({});
+  /** 右侧属性面板宽度：可拖动分隔条调整，记到 localStorage */
+  const [inspectorWidth, setInspectorWidth] = React.useState<number>(readInspectorWidth);
+  const [resizing, setResizing] = React.useState(false);
 
   const pageRef = React.useRef<HTMLDivElement | null>(null);
+  const bodyRef = React.useRef<HTMLDivElement | null>(null);
+  /** 拖动分隔条时的起点，避免每帧读 state */
+  const resizeRef = React.useRef<{ startX: number; startWidth: number; pointerId: number } | null>(null);
   const baseRef = React.useRef<Flow>(initial);
   const canvasApiRef = React.useRef<CanvasApi | null>(null);
   const clipboardRef = React.useRef<ClipboardEntry | null>(null);
@@ -735,6 +762,75 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, [dirty]);
 
+  React.useEffect(() => {
+    try {
+      window.localStorage.setItem(INSPECTOR_WIDTH_KEY, String(inspectorWidth));
+    } catch {
+      // 隐私模式 / 存储被禁用时忽略：只影响下次打开时的宽度记忆
+    }
+  }, [inspectorWidth]);
+
+  /** 面板最宽：画布至少留 CANVAS_MIN（再扣掉分隔条本身的宽度） */
+  const maxInspectorWidth = (): number => {
+    const total = bodyRef.current?.clientWidth ?? 0;
+    return total > 0 ? Math.min(INSPECTOR_MAX, total - CANVAS_MIN - 8) : INSPECTOR_MAX;
+  };
+
+  const startResize = (event: React.PointerEvent<HTMLDivElement>): void => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    resizeRef.current = { startX: event.clientX, startWidth: inspectorWidth, pointerId: event.pointerId };
+    setResizing(true);
+    // 拖出分隔条后也保持「改宽度」的手感，并避免顺手选中页面文字
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  };
+
+  const moveResize = (event: React.PointerEvent<HTMLDivElement>): void => {
+    const drag = resizeRef.current;
+    if (drag === null) return;
+    // 分隔条往左拖 = 面板变宽
+    setInspectorWidth(clampInspectorWidth(drag.startWidth + (drag.startX - event.clientX), maxInspectorWidth()));
+  };
+
+  const endResize = (event: React.PointerEvent<HTMLDivElement>): void => {
+    const drag = resizeRef.current;
+    if (drag === null) return;
+    resizeRef.current = null;
+    setResizing(false);
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    try {
+      event.currentTarget.releasePointerCapture(drag.pointerId);
+    } catch {
+      // 指针已经释放
+    }
+  };
+
+  // 拖动中途被卸载时把 body 上的临时样式还回去
+  React.useEffect(
+    () => () => {
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    },
+    [],
+  );
+
+  const onSplitterKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
+    const step = event.shiftKey ? 48 : 16;
+    if (event.key === 'ArrowLeft') {
+      event.preventDefault();
+      setInspectorWidth((width) => clampInspectorWidth(width + step, maxInspectorWidth()));
+    } else if (event.key === 'ArrowRight') {
+      event.preventDefault();
+      setInspectorWidth((width) => clampInspectorWidth(width - step, maxInspectorWidth()));
+    } else if (event.key === 'Home') {
+      event.preventDefault();
+      setInspectorWidth(INSPECTOR_DEFAULT);
+    }
+  };
+
   const menuItems = React.useMemo<MenuItem[]>(() => {
     if (menu === null) return [];
     if (menu.kind === 'pane') {
@@ -886,7 +982,7 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
           )}
         </div>
       )}
-      <div className="wf-body">
+      <div className="wf-body" ref={bodyRef}>
         <Boundary label="画布">
           <FlowCanvas
             nodes={nodes}
@@ -911,7 +1007,25 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
             onApi={handleApi}
           />
         </Boundary>
-        <aside className="wf-inspector">
+        <div
+          className="wf-splitter"
+          data-dragging={resizing ? 'true' : 'false'}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="调整属性面板宽度"
+          aria-valuemin={INSPECTOR_MIN}
+          aria-valuemax={INSPECTOR_MAX}
+          aria-valuenow={inspectorWidth}
+          tabIndex={0}
+          title="拖动调整属性面板宽度；双击复位"
+          onPointerDown={startResize}
+          onPointerMove={moveResize}
+          onPointerUp={endResize}
+          onPointerCancel={endResize}
+          onDoubleClick={() => setInspectorWidth(INSPECTOR_DEFAULT)}
+          onKeyDown={onSplitterKeyDown}
+        />
+        <aside className="wf-inspector" style={{ width: inspectorWidth }}>
           <Inspector
             body={selected}
             canvasNode={selectedCanvas}

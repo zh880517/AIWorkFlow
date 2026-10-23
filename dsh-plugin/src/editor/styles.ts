@@ -39,8 +39,15 @@ export const editorCss = `
   --xy-controls-box-shadow:0 0 0 1px var(--dsw-alias-border-l1);
   --xy-attribution-background-color:transparent}
 .wf-flow{width:100%;height:100%}
-.wf-inspector{width:312px;flex:none;border-left:1px solid var(--dsw-alias-border-l1);overflow-y:auto;
+.wf-inspector{flex:none;min-width:0;overflow-y:auto;
   padding:12px;background:var(--dsw-alias-bg-layer-1);display:flex;flex-direction:column;gap:12px}
+/* 画布 / 属性面板之间的分隔条：拖动改宽度，双击复位 */
+.wf-splitter{flex:none;width:7px;cursor:col-resize;position:relative;background:transparent;
+  touch-action:none;user-select:none;outline:none}
+.wf-splitter::after{content:'';position:absolute;left:3px;top:0;bottom:0;width:1px;
+  background:var(--dsw-alias-border-l1);transition:background .12s,width .12s,left .12s}
+.wf-splitter:hover::after,.wf-splitter:focus-visible::after,
+.wf-splitter[data-dragging="true"]::after{left:2px;width:2px;background:var(--dsw-alias-brand-primary)}
 .wf-field{display:flex;flex-direction:column;gap:5px}
 /* 字段名加粗、用主文字色；说明文字单独一行（.wf-hint），不再和 label 混在一句里 */
 .wf-label{font-size:12px;font-weight:700;color:var(--dsw-alias-label-primary);letter-spacing:.01em;line-height:1.3}
