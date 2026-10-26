@@ -20,12 +20,19 @@ function git(...args) {
 const commit = git('rev-parse', 'HEAD');
 const commitTime = Number(git('show', '-s', '--format=%ct', 'HEAD'));
 
-/** origin 可能是 git@github.com:user/repo.git 或 https://github.com/user/repo.git */
+/** origin 可能是 git@github.com:user/repo.git、https://github.com/user/repo.git，或本地路径（克隆自本地时） */
 function repositoryUrl() {
+  const override = process.env.AIWORKFLOW_REPO_URL;
+  if (override !== undefined && override !== '') return override.replace(/\.git$/, '');
   const remote = git('remote', 'get-url', 'origin');
   const https = remote
     .replace(/^git@([^:]+):/, 'https://$1/')
     .replace(/\.git$/, '');
+  if (!/^https?:\/\//.test(https)) {
+    throw new Error(
+      `origin 不是 http(s) 地址（${https}）。克隆自本地目录时，设置 AIWORKFLOW_REPO_URL=https://github.com/<用户>/<仓库> 再跑。`,
+    );
+  }
   return https;
 }
 

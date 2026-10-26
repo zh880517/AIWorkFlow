@@ -1,11 +1,12 @@
-// 一键生成发布物料：构建插件 → 提交产物 → 刷新市场索引 → 提交索引 → 打印安装方式。
+// 一键生成发布物料：构建插件 → 提交源码+产物 → 刷新市场索引 → 提交索引 → 打印安装方式。
 //
-//   npm run release:plugin            构建 + 提交 + 索引 + 提交
-//   npm run release:plugin -- --dry-run   只构建和暂存，打印将要提交什么，不动 git 历史
-//   npm run release:plugin -- --no-commit 只构建，不提交也不生成索引（自己手动来）
+//   npm run release:plugin               构建 + 提交 + 索引 + 提交
+//   npm run release:plugin -- --dry-run  只构建和暂存，打印会做什么，不动 git 历史
+//   npm run release:plugin -- --no-commit 只构建，不提交也不生成索引
 //
-// 为什么要提交两笔：市场索引必须钉在一个「已包含构建产物」的 commit 上，
-// 所以先提交产物、再用新的 HEAD 生成索引、再提交索引。两笔都只碰插件自己的文件。
+// 为什么提交两笔：市场索引必须钉在一个「已包含构建产物」的 commit 上，
+// 所以先把源码与产物一起提交，再用新的 HEAD 生成索引并提交索引。
+// 两笔都只带 dsh-plugin/ 里的文件（索引单独一笔），工作区其它改动不动。
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -20,12 +21,16 @@ const noCommit = flags.has('--no-commit') || dryRun;
 
 const ARTIFACTS = ['dsh-plugin/index.js', 'dsh-plugin/client.js'];
 const INDEX = 'dsh-plugin/market/index.json';
+// 第一笔提交的范围：插件目录里的源码与产物，索引留到第二笔
+const PLUGIN = ['dsh-plugin', ':(exclude)dsh-plugin/market/index.json'];
+
+const sha256 = (data) => createHash('sha256').update(data).digest('hex');
 
 function git(...args) {
   return execFileSync('git', args, { cwd: repo, encoding: 'utf8' }).trim();
 }
 
-function changed(paths) {
+function dirty(paths) {
   return git('status', '--porcelain', '--', ...paths) !== '';
 }
 
@@ -37,6 +42,7 @@ function runScript(script) {
   }
 }
 
+/** 只提交给定路径；有改动才提交，返回是否真的提交了 */
 function commit(paths, message) {
   git('add', '--', ...paths);
   let staged = true;
@@ -49,7 +55,6 @@ function commit(paths, message) {
   }
   if (!staged) return false;
   try {
-    // 只提交这些路径：工作区里其它改动（包括别人的暂存）不动
     git('commit', '-m', message, '--', ...paths);
   } catch (error) {
     console.error(`\n提交失败：${error instanceof Error ? error.message : String(error)}`);
@@ -59,22 +64,20 @@ function commit(paths, message) {
   return true;
 }
 
-const sha256 = (data) => createHash('sha256').update(data).digest('hex');
-
-/** 某个提交里这个文件的内容；不存在返回 null */
-function fileAt(commit, relative) {
-  try {
-    return execFileSync('git', ['show', `${commit}:${relative}`], { cwd: repo });
-  } catch {
-    return null;
-  }
-}
-
 function readIndex() {
   try {
     return JSON.parse(readFileSync(path.join(repo, INDEX), 'utf8'));
   } catch {
     return undefined;
+  }
+}
+
+/** 某个提交里这个文件的内容；不存在返回 null */
+function fileAt(commitSha, relative) {
+  try {
+    return execFileSync('git', ['show', `${commitSha}:${relative}`], { cwd: repo });
+  } catch {
+    return null;
   }
 }
 
@@ -89,15 +92,27 @@ function indexStillValid(current) {
   return true;
 }
 
+// 0) 防呆：shared/ 同时影响主工程，必须先进版本库，否则产物对不上任何提交
+if (!noCommit && dirty(['shared/src'])) {
+  console.error('shared/src/ 有未提交改动：先提交它（主工程也用这份代码），再跑一键生成。');
+  process.exit(1);
+}
+
 // 1) 构建（build.mjs 自己会断言 Host 产物只依赖 node: 内建）
 console.log('\n[1/4] 构建插件产物…');
 runScript(path.join(here, 'build.mjs'));
 
-// 2) 提交产物
-console.log('[2/4] 提交构建产物…');
+// 2) 提交源码 + 产物（同一笔，保证这个提交里产物和源码一致）
+const nonArtifactChanged = dirty([
+  'dsh-plugin',
+  ':(exclude)dsh-plugin/index.js',
+  ':(exclude)dsh-plugin/client.js',
+  ':(exclude)dsh-plugin/market/index.json',
+]);
+console.log('[2/4] 提交源码与构建产物…');
 const artifactsCommitted = noCommit
   ? false
-  : commit(ARTIFACTS, 'build(plugin): 更新构建产物');
+  : commit(PLUGIN, nonArtifactChanged ? 'chore(plugin): 更新插件文件与构建产物' : 'build(plugin): 更新构建产物');
 
 // 3) 生成市场索引（钉在刚提交的 HEAD 上；现有索引仍然有效就跳过，避免无谓提交）
 let indexSkipped = false;
@@ -129,7 +144,7 @@ const slug = repoUrl.replace(/^https?:\/\/[^/]+\//, '');
 
 console.log('\n—— 生成结果 ——');
 console.log(`包        ${pkg.name}@${version?.version ?? pkg.version}`);
-console.log(`产物      ${noCommit ? '仅构建/暂存（未提交）' : artifactsCommitted ? '已提交' : '无变化'}`);
+console.log(`提交      ${noCommit ? '仅工作区（未提交）' : artifactsCommitted ? '已提交源码与产物' : '无变化'}`);
 console.log(
   `索引      ${
     noCommit ? '未生成' : indexCommitted ? '已提交' : indexSkipped ? '无变化（已指向当前产物）' : '无变化'
@@ -154,7 +169,7 @@ if (noCommit) {
     ahead = '';
   }
   if (ahead !== '' && ahead !== '0') console.log(`\n还有 ${ahead} 个提交没推送：git push origin ${branch}`);
-  if (changed(['dsh-plugin/index.js', 'dsh-plugin/client.js', INDEX])) {
-    console.log('\n提醒：工作区里这几个文件仍有未提交改动，装之前先确认提交完整。');
+  if (dirty(PLUGIN)) {
+    console.log('\n提醒：dsh-plugin/ 里还有未提交改动，装之前先确认提交完整。');
   }
 }
