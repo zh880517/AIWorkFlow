@@ -102,7 +102,7 @@ npm run build            # tsc → dist/，vite → dist-web/
 npm start                # 或 node dist/src/cli.js
 ```
 
-启动后打印三个地址（token 每次启动随机，可用 `AIWORKFLOW_TOKEN` 固定）：
+启动后打印面板 / MCP / 建图 MCP 三个地址（另有 `/api` 只读接口）；token 每次启动随机，可用 `AIWORKFLOW_TOKEN` 固定：
 
 | 地址 | 用途 |
 |---|---|
@@ -136,7 +136,7 @@ claude mcp add aiworkflow --transport http "http://127.0.0.1:4123/mcp?k=<token>"
   "name": "发版检查",
   "entry": "n1",
   "nodes": [
-    { "id": "n1", "type": "prompt", "title": "看 diff", "instruction": "列出这次改动的风险点" },
+    { "id": "n1", "type": "prompt", "title": "看 diff", "instruction": "列出这次改动的风险点", "next": "n2" },
     { "id": "n2", "type": "tool", "title": "跑测试", "toolName": "Bash",
       "params": { "command": "npm test" },
       "iterationLimit": 3, "onLimitExceeded": "n_fail",
