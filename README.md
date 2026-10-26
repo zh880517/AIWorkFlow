@@ -17,8 +17,7 @@
 git+https://github.com/zh880517/AIWorkFlow.git#main&path:/dsh-plugin
 ```
 
-- `#main` 是跟随主分支最新提交；想要固定版本就把它换成某个 commit（`git rev-parse HEAD`），例如
-  `git+https://github.com/zh880517/AIWorkFlow.git#ff4bd1a52cc61ab4cdd671ed06e4f7133eb75b80&path:/dsh-plugin`；
+- `#main` 是跟随主分支最新提交；想要固定版本就把它换成某个 commit（`git rev-parse HEAD`）。**注意**：只能钉在包含构建产物的提交上（f57374a 及其之后都可以），早期提交里没有 `index.js`；
 - `&path:/dsh-plugin` 告诉包管理器「插件在这个子目录里」；
 - 装完插件会自动进入 profile 的 bundle 列表并启用，重开 DSH 即可看到侧栏的「可视化工作流」。
 
