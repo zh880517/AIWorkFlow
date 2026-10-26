@@ -1,0 +1,52 @@
+{
+  "format": 1,
+  "title": {
+    "en": "aiworkflow for DeepSeek Harness",
+    "zh": "aiworkflow 工作流插件"
+  },
+  "description": {
+    "en": "Flowchart-driven agent workflows inside DSH: progress pill, floating panel, run graph, and a visual flow editor.",
+    "zh": "在 DSH 里跑流程图驱动的 Agent 工作流：进度胶囊、浮动画板、运行图，以及可视化流程编辑器。"
+  },
+  "plugins": [
+    {
+      "name": "@aiworkflow/dsh-plugin",
+      "title": {
+        "en": "aiworkflow",
+        "zh": "AI 工作流"
+      },
+      "description": {
+        "en": "Run aiworkflow flows in a DSH session, watch the run graph, and edit flows on a canvas.",
+        "zh": "在 DSH 会话里发起 aiworkflow 流程、查看运行图，并在画布上编辑流程图。"
+      },
+      "icon": "../icon.svg",
+      "author": "zh880517",
+      "homepage": "https://github.com/zh880517/AIWorkFlow",
+      "repository": {
+        "url": "https://github.com/zh880517/AIWorkFlow",
+        "directory": "dsh-plugin"
+      },
+      "metadata": {
+        "keywords": [
+          "workflow",
+          "flowchart",
+          "agent",
+          "mermaidless",
+          "editor"
+        ]
+      },
+      "versions": [
+        {
+          "version": "0.1.0",
+          "publishTimestamp": 1792757513,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/zh880517/AIWorkFlow",
+            "commit": "ff4bd1a52cc61ab4cdd671ed06e4f7133eb75b80",
+            "path": "dsh-plugin"
+          }
+        }
+      ]
+    }
+  ]
+}

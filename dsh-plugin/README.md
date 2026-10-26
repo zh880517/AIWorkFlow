@@ -7,6 +7,27 @@ Host 半用 `node:sqlite` 直接打开 `~/.aiworkflow/aiworkflow.db`（缺库会
 依赖方向：插件源码只 import `@shared/*`（别名指到 `shared/src/`）与自己的 `./*`，**不引用 `src/`**；
 两边都要用的逻辑放 `shared/src/`，主工程再从那里 import。
 
+## 安装（从 GitHub，不用 clone 或构建）
+
+构建产物 `index.js`、`client.js` 已随仓库提交，装的时候不会被构建。
+
+**DSH 侧栏 Plugins → Add plugin**，把下面这行粘进输入框：
+
+```
+git+https://github.com/zh880517/AIWorkFlow.git#main&path:/dsh-plugin
+```
+
+`#main` 跟最新提交；要钉版本就换成 commit SHA（`git rev-parse HEAD`）。`&path:/dsh-plugin` 指定包在仓库子目录里。
+装完会自动加进 profile 的 bundle 列表并启用，重开 DSH 生效。
+
+也可以让 Agent 代装：`plugin_manager` 的 `install_bundle`，`target` 用同一串 spec。
+
+可选：启用插件市场（Discover）实验 bundle 后，在索引来源里加
+`https://raw.githubusercontent.com/zh880517/AIWorkFlow/main/dsh-plugin/market/index.json`，市场里搜 aiworkflow 直接装。
+
+升级没有原地升级：重新安装新的 commit（或先 Remove 再装）。本地开发时 `npm run build:plugin` 后填本机绝对路径
+（例如 `D:/GitHub/AIWorkFlow/dsh-plugin`），改完重新构建再让条目重新加载。
+
 ## 三块界面
 
 1. **可视化工作流页（全局主面板）**：左侧栏的「可视化工作流」图标进入。流程库（列出 / 新建 / 删除）→ 画布编辑器：
@@ -62,7 +83,7 @@ Host 半在 `ctx.tools` 上注册 8 个工具，和面板改的是同一份 SQLi
 两个差异值得注意：
 
 - **会话身份**：原 MCP 靠宿主 hook 往入参注入 `_host`/`_sid`；这里直接取工具执行上下文里的 `exec.agent.id`，写成 `dsh:<sessionId>` 存进 `runs.host_session`，`get_current_step` / `complete_step` 不需要再传 `runId`。
-- **执行引擎**：`aiworkflow_run` 直接调用主工程 `ExecutionEngine`（`src/core/engine.ts`，构建时内联），所以 run 的推进、快照、卡点、子 Agent 派发语义与 CLI 完全一致，没有第二套实现。快照仍写 `flow_snapshots` 与 `cache/`。
+- **执行引擎**：`aiworkflow_run` 直接调用公用层的 `ExecutionEngine`（`shared/src/engine.ts`，构建时内联），所以 run 的推进、快照、卡点、子 Agent 派发语义与 CLI 完全一致，没有第二套实现。快照仍写 `flow_snapshots` 与 `cache/`。
 
 原先“建图五件套”（`list_flows` / `get_flow` / `validate_flow` / `create_flow` / `update_flow`）合并进了 `aiworkflow_flow` 的 `action` 参数：模型侧少背 4 个 schema，行为不变。
 
@@ -71,8 +92,13 @@ Host 半在 `ctx.tools` 上注册 8 个工具，和面板改的是同一份 SQLi
 ## 目录
 
 ```
-shared/src/          公用层（主工程与插件共享的契约与纯逻辑）
-  types.ts           DSL 类型的只读视图（type-only 再导出 src/core/types.ts）
+shared/src/          公用层（主工程与插件共享）
+  types.ts           DSL 类型定义（唯一定义处，src/core/types.ts 只是再导出）
+  engine.ts          执行引擎（主工程与插件共用同一份实现）
+  validate.ts        validateFlow（保存前校验）
+  snapshot.ts        run 快照（copy-on-run）
+  paths.ts           数据目录 ~/.aiworkflow/
+  schema.ts          建表与迁移
   runTypes.ts        run 只读 DTO
   sql.ts             只读 SQL：listRuns / getRunDetail / readMonitorState
   progress.ts        进度语义：phase、路径合并、执行色调
@@ -81,7 +107,7 @@ dsh-plugin/
   src/host.ts        Host 半：ctx.webServer 同源路由（进度读取 + 图读写）
   src/db.ts          数据目录与单条 SQLite 连接（路由与工具共用）
   src/sqlite.ts      node:sqlite → 引擎要的数据库形状（补 BEGIN/SAVEPOINT 事务）
-  src/engine.ts      执行引擎接线（复用主工程 core/engine）
+  src/engine.ts      执行引擎接线（复用 shared/src/engine）
   src/tools.ts       Agent 工具：context / flow / 6 个执行类
   src/client.tsx     Client 半入口：注册胶囊 / 浮动面板 / 工作流主面板 / 运行图浮层
   src/runview/       运行图：只读画布（节点状态着色 + 走过的边）+ 轨迹栏 + 浮层壳
@@ -91,17 +117,20 @@ dsh-plugin/
   src/i18n.ts        文案注册（zh / en）
   src/styles.tsx     仅用 --dsw-alias-* 主题 token 的样式
   build.mjs          构建：index.js（Node ESM）+ client.js（宿主 lazy-CJS factory）
+  market/            插件市场索引（format 1）+ 生成脚本
 ```
 
-## 构建 / 安装
+## 构建 / 发布
 
 ```bash
-node dsh-plugin/build.mjs        # 或 npm run build:plugin
+npm run build:plugin        # 生成 index.js 与 client.js
+npm run release:plugin      # 构建并把两个产物 git add
+npm run market:plugin       # 用当前 HEAD 刷新 market/index.json（先提交产物，再跑它）
 ```
 
-然后用 `plugin_manager` 的 `install_bundle` 指向本目录绝对路径安装；安装是 profile 级的，对所有 session 生效。
-修改 Host 半（`index.js`）后需要让该条目重新加载：`plugin_manager` 先 `set_plugin` 关掉再打开即可；
-只改 Client 半（`client.js`）时，宿主 HMR 会自己换新模块。
+**`index.js` / `client.js` 必须和源码一起提交**：别人按 GitHub spec 安装时不会在本机构建，装到的就是 git 树里的这两个文件。
+
+装到本机 profile 后，改 Host 半需要让条目重新加载（`plugin_manager` 先关再开）；只改 Client 半时宿主 HMR 会自己换新模块。
 
 ## 边界
 
