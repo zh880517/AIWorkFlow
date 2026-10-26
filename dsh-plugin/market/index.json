@@ -31,18 +31,18 @@
           "workflow",
           "flowchart",
           "agent",
-          "mermaidless",
+          "dsh",
           "editor"
         ]
       },
       "versions": [
         {
           "version": "0.1.0",
-          "publishTimestamp": 1792757513,
+          "publishTimestamp": 1792983434,
           "source": {
             "type": "git",
             "url": "https://github.com/zh880517/AIWorkFlow",
-            "commit": "ff4bd1a52cc61ab4cdd671ed06e4f7133eb75b80",
+            "commit": "f57374abf67b50acb20212eeb52d0b0a0985c57a",
             "path": "dsh-plugin"
           }
         }
