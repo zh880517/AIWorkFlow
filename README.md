@@ -46,7 +46,7 @@ npm run build:plugin          # 生成 dsh-plugin/index.js 与 client.js
 
 然后在 Plugins → Add plugin 里填本机绝对路径，例如 `D:/GitHub/AIWorkFlow/dsh-plugin`；改完代码重新 `npm run build:plugin` 后重载插件。
 
-**升级**：插件目前没有原地升级，重新安装一次新 commit（或先 Remove 再装）。`npm run release:plugin` 会把构建产物一并 `git add`，发布前记得它和源码一起提交。
+**升级**：插件目前没有原地升级，重新安装一次新 commit（或先 Remove 再装）。`npm run release:plugin` 会构建、暂存产物并校验；`npm run check:plugin` 可随时确认「仓库里的产物 == 一次全新构建」。
 
 ## 主工程（不装 DSH 也能用）
 

@@ -123,12 +123,18 @@ dsh-plugin/
 ## 构建 / 发布
 
 ```bash
-npm run build:plugin        # 生成 index.js 与 client.js
-npm run release:plugin      # 构建并把两个产物 git add
+npm run build:plugin        # 生成 index.js 与 client.js（本机构建，提交进仓库）
+npm run release:plugin      # 构建 + 把两个产物 git add + 校验
+npm run check:plugin        # 重新构建，与暂存区里的产物比哈希（提交前 / CI 用）
 npm run market:plugin       # 用当前 HEAD 刷新 market/index.json（先提交产物，再跑它）
 ```
 
-**`index.js` / `client.js` 必须和源码一起提交**：别人按 GitHub spec 安装时不会在本机构建，装到的就是 git 树里的这两个文件。
+**`index.js` / `client.js` 是本地构建后提交的**：别人按 GitHub spec 安装时不会在本机构建，装到的就是 git 树里的这两个文件。
+不改成「安装时构建」的原因：pnpm 11 默认拦下依赖包的 `prepare` 脚本，装的时候会弹「允许脚本并重试」，
+多一步人工确认；仓库里带产物则是零构建、零脚本。
+
+代价是产物可能忘提交/过期，所以有 `check:plugin`：它重建一遍再跟**暂存区**比对，不一致就失败。
+本地每次提交前跑一下；要接 CI 的话，在 workflow 里跑 `npm run check:plugin` 即可（构建是确定性的、不含机器路径/时间戳）。
 
 装到本机 profile 后，改 Host 半需要让条目重新加载（`plugin_manager` 先关再开）；只改 Client 半时宿主 HMR 会自己换新模块。
 
