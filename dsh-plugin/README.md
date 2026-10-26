@@ -124,10 +124,15 @@ dsh-plugin/
 
 ```bash
 npm run build:plugin        # 生成 index.js 与 client.js（本机构建，提交进仓库）
-npm run release:plugin      # 构建 + 把两个产物 git add + 校验
+npm run release:plugin      # 一键：构建 → 提交产物 → 刷新市场索引 → 提交索引 → 打印安装链接
+npm run release:plugin -- --dry-run    # 只看会做什么，不动 git 历史
+npm run release:plugin -- --no-commit  # 只构建，不提交也不动索引
 npm run check:plugin        # 重新构建，与暂存区里的产物比哈希（提交前 / CI 用）
-npm run market:plugin       # 用当前 HEAD 刷新 market/index.json（先提交产物，再跑它）
+npm run market:plugin       # 只刷新 market/index.json（索引钉在 HEAD 上）
 ```
+
+`release:plugin` 会提交**两笔**：先提交产物，再用新的 HEAD 生成索引并提交索引——索引必须钉在包含产物的提交上。
+两笔提交都只带 `dsh-plugin` 自己的文件，不动你工作区里其它改动。索引已指向当前产物时会自动跳过，不产生空提交。
 
 **`index.js` / `client.js` 是本地构建后提交的**：别人按 GitHub spec 安装时不会在本机构建，装到的就是 git 树里的这两个文件。
 不改成「安装时构建」的原因：pnpm 11 默认拦下依赖包的 `prepare` 脚本，装的时候会弹「允许脚本并重试」，
