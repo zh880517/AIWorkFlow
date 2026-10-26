@@ -14115,7 +14115,7 @@ function WorkflowPickerButton(props) {
 		};
 		pickerStore.set(true);
 	};
-	return /* @__PURE__ */ react.createElement("button", {
+	return /* @__PURE__ */ react.createElement(react.Fragment, null, /* @__PURE__ */ react.createElement(Styles, null), /* @__PURE__ */ react.createElement("button", {
 		type: "button",
 		className: "awp-pickerbtn",
 		onClick,
@@ -14154,7 +14154,7 @@ function WorkflowPickerButton(props) {
 		rx: "1.4",
 		fill: "currentColor",
 		opacity: "0.9"
-	})), /* @__PURE__ */ react.createElement("span", null, "工作流"));
+	})), /* @__PURE__ */ react.createElement("span", null, "工作流")));
 }
 /** 选择弹层（shell.overlay） */
 function WorkflowPickerDialog({ onStarted }) {
@@ -14230,7 +14230,7 @@ function WorkflowPickerDialog({ onStarted }) {
 			setBusy(null);
 		}
 	};
-	return /* @__PURE__ */ react.createElement("div", {
+	return /* @__PURE__ */ react.createElement(react.Fragment, null, /* @__PURE__ */ react.createElement(Styles, null), /* @__PURE__ */ react.createElement("div", {
 		className: "awp-modal-backdrop",
 		onClick: () => pickerStore.set(false),
 		role: "presentation"
@@ -14252,7 +14252,7 @@ function WorkflowPickerDialog({ onStarted }) {
 		className: "awp-pick-item",
 		disabled: busy !== null,
 		onClick: () => void start(flow)
-	}, /* @__PURE__ */ react.createElement("span", { className: "awp-pick-name" }, flow.name), /* @__PURE__ */ react.createElement("span", { className: "awp-pick-meta" }, busy === flow.id ? "启动中…" : `${flow.id} · ${relTime(flow.updatedAt)}`)))))));
+	}, /* @__PURE__ */ react.createElement("span", { className: "awp-pick-name" }, flow.name), /* @__PURE__ */ react.createElement("span", { className: "awp-pick-meta" }, busy === flow.id ? "启动中…" : `${flow.id} · ${relTime(flow.updatedAt)}`))))))));
 }
 //#endregion
 //#region dsh-plugin/src/store.ts

@@ -3,6 +3,7 @@
 import * as React from 'react';
 import { relTime } from '@shared/index.js';
 import { resolveEndpoint } from './endpoint.js';
+import { Styles } from './styles.js';
 
 interface FlowItem {
   id: string;
@@ -58,21 +59,25 @@ export function WorkflowPickerButton(props: any): React.ReactElement {
     pickerStore.set(true);
   };
   return (
-    <button type="button" className="awp-pickerbtn" onClick={onClick} title="启动一个工作流">
-      <svg width="13" height="13" viewBox="0 0 24 24" aria-hidden="true">
-        <path
-          d="M5 7h5m4 0h5M7.5 9v6m9-6v6"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.8"
-          strokeLinecap="round"
-        />
-        <rect x="3" y="4" width="5" height="5" rx="1.4" fill="currentColor" />
-        <rect x="16" y="4" width="5" height="5" rx="1.4" fill="currentColor" opacity="0.55" />
-        <rect x="9.5" y="15" width="5" height="5" rx="1.4" fill="currentColor" opacity="0.9" />
-      </svg>
-      <span>工作流</span>
-    </button>
+    <React.Fragment>
+      {/* 胶囊/面板没跑过流程时不渲染（各自也不渲染 <Styles />），这里自己带一份，避免按钮和弹层裸样式 */}
+      <Styles />
+      <button type="button" className="awp-pickerbtn" onClick={onClick} title="启动一个工作流">
+        <svg width="13" height="13" viewBox="0 0 24 24" aria-hidden="true">
+          <path
+            d="M5 7h5m4 0h5M7.5 9v6m9-6v6"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+          />
+          <rect x="3" y="4" width="5" height="5" rx="1.4" fill="currentColor" />
+          <rect x="16" y="4" width="5" height="5" rx="1.4" fill="currentColor" opacity="0.55" />
+          <rect x="9.5" y="15" width="5" height="5" rx="1.4" fill="currentColor" opacity="0.9" />
+        </svg>
+        <span>工作流</span>
+      </button>
+    </React.Fragment>
   );
 }
 
@@ -164,51 +169,54 @@ export function WorkflowPickerDialog({ onStarted }: WorkflowPickerDialogProps): 
   };
 
   return (
-    <div className="awp-modal-backdrop" onClick={() => pickerStore.set(false)} role="presentation">
-      <div className="awp-modal" role="dialog" aria-label="启动工作流" onClick={(event) => event.stopPropagation()}>
-        <header className="awp-modal-head">
-          <span>启动工作流</span>
-          <span className="awp-modal-sub">选中即创建 run；输入框里的内容会一并带给 Agent</span>
-          <span className="awp-spacer" />
-          <button type="button" className="awp-iconbtn" onClick={() => pickerStore.set(false)}>
-            ✕
-          </button>
-        </header>
-        <div className="awp-modal-body">
-          {error !== null && (
-            <div className="awp-banner" data-kind="error">
-              {error}
-            </div>
-          )}
-          {flows === null ? (
-            <div className="awp-empty">
-              <b>读取中…</b>
-            </div>
-          ) : flows.length === 0 ? (
-            <div className="awp-empty">
-              <b>还没有流程图</b>
-              <p>先去左侧「可视化工作流」建一张，再回来选。</p>
-            </div>
-          ) : (
-            <div className="awp-pick-list">
-              {flows.map((flow) => (
-                <button
-                  type="button"
-                  key={flow.id}
-                  className="awp-pick-item"
-                  disabled={busy !== null}
-                  onClick={() => void start(flow)}
-                >
-                  <span className="awp-pick-name">{flow.name}</span>
-                  <span className="awp-pick-meta">
-                    {busy === flow.id ? '启动中…' : `${flow.id} · ${relTime(flow.updatedAt)}`}
-                  </span>
-                </button>
-              ))}
-            </div>
-          )}
+    <React.Fragment>
+      <Styles />
+      <div className="awp-modal-backdrop" onClick={() => pickerStore.set(false)} role="presentation">
+        <div className="awp-modal" role="dialog" aria-label="启动工作流" onClick={(event) => event.stopPropagation()}>
+          <header className="awp-modal-head">
+            <span>启动工作流</span>
+            <span className="awp-modal-sub">选中即创建 run；输入框里的内容会一并带给 Agent</span>
+            <span className="awp-spacer" />
+            <button type="button" className="awp-iconbtn" onClick={() => pickerStore.set(false)}>
+              ✕
+            </button>
+          </header>
+          <div className="awp-modal-body">
+            {error !== null && (
+              <div className="awp-banner" data-kind="error">
+                {error}
+              </div>
+            )}
+            {flows === null ? (
+              <div className="awp-empty">
+                <b>读取中…</b>
+              </div>
+            ) : flows.length === 0 ? (
+              <div className="awp-empty">
+                <b>还没有流程图</b>
+                <p>先去左侧「可视化工作流」建一张，再回来选。</p>
+              </div>
+            ) : (
+              <div className="awp-pick-list">
+                {flows.map((flow) => (
+                  <button
+                    type="button"
+                    key={flow.id}
+                    className="awp-pick-item"
+                    disabled={busy !== null}
+                    onClick={() => void start(flow)}
+                  >
+                    <span className="awp-pick-name">{flow.name}</span>
+                    <span className="awp-pick-meta">
+                      {busy === flow.id ? '启动中…' : `${flow.id} · ${relTime(flow.updatedAt)}`}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
-    </div>
+    </React.Fragment>
   );
 }
