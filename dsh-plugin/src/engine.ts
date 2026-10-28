@@ -1,6 +1,6 @@
 // 执行引擎接线：直接用公用层的 engine（构建时内联进 Host bundle），
-// 因此 DSH 里不需要另起 `npx aiworkflow`，run 照样写同一个 SQLite。
-import { ExecutionEngine, type EngineDeps } from '@shared/engine.js';
+// run 写插件自己的 SQLite，不依赖任何外部服务。
+import { ExecutionEngine } from '@shared/engine.js';
 import type { Flow } from '@shared/index.js';
 import { getFlow, listFlows } from '@shared/flows.js';
 import { database } from './db.js';
@@ -21,10 +21,7 @@ export function resolveFlow(name: string): Flow | undefined {
 export function workflowEngine(): ExecutionEngine {
   const db = database();
   if (engine !== null && engineDb === db) return engine;
-  engine = new ExecutionEngine({
-    db: db as unknown as EngineDeps['db'],
-    resolveFlow,
-  });
+  engine = new ExecutionEngine({ db, resolveFlow });
   engineDb = db;
   return engine;
 }

@@ -1,6 +1,6 @@
 // Host 半：只读监控 + flow 图读写。
 // 监控走 node:sqlite 只读查询；图编辑直接写 SQLite（唯一事实源）并刷新 flows/*.json 镜像，
-// 校验走公用层的 validateFlow（shared/src/validate.ts，与主工程同一份）。
+// 校验走公用层的 validateFlow（shared/src/validate.ts，面板与 Agent 工具同一份）。
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import {
@@ -9,7 +9,7 @@ import {
   type RunDetail,
   type RunListItem,
 } from '@shared/index.js';
-import { deleteFlow, getFlow, listFlows, saveFlow, validateFlowOnly, type FlowWriter } from '@shared/flows.js';
+import { deleteFlow, getFlow, listFlows, saveFlow, validateFlowOnly } from '@shared/flows.js';
 import { closeDatabase, database, databasePath, flowsDir } from './db.js';
 import { workflowEngine } from './engine.js';
 import { registerTools } from './tools.js';
@@ -146,7 +146,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
           send(res, 400, { ok: false, error: { code: 'id-mismatch', message: '图 id 与 URL 不一致' } });
           return;
         }
-        const result = saveFlow(database() as unknown as FlowWriter, flow as never, flowsDir());
+        const result = saveFlow(database(), flow as never, flowsDir());
         if (!result.ok) {
           send(res, 200, { ok: false, errors: result.errors, warnings: result.warnings });
           return;
@@ -155,7 +155,7 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
         return;
       }
       if (method === 'DELETE') {
-        const deleted = deleteFlow(database() as unknown as FlowWriter, flowId, flowsDir());
+        const deleted = deleteFlow(database(), flowId, flowsDir());
         send(res, 200, { ok: true, deleted });
         return;
       }
@@ -333,7 +333,7 @@ function trimDetail(detail: RunDetail): RunDetail {
 function describeDatabaseError(error: unknown, file: string): string {
   const code = (error as { code?: string } | null)?.code;
   if (code === 'ENOENT' || code === 'SQLITE_CANTOPEN') {
-    return `未找到 ${file}：先运行 npx aiworkflow，面板会自动出现数据。`;
+    return `未找到 ${file}：先在「可视化工作流」里新建并保存一张图，插件会自动建库。`;
   }
   return `读取 ${file} 失败：${errorText(error)}`;
 }

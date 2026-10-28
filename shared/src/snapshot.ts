@@ -2,8 +2,8 @@
 // - 启动 run 时把图定义钉死一份，run 全程只对快照执行，原图改动不影响进行中的 run
 // - flowRef 引用的子图递归一起快照
 // - 内容 hash 去重，存 SQLite（flow_snapshots），cache/ 里的 JSON 是派生镜像
-import type Database from 'better-sqlite3';
 import type { Flow, FlowSnapshot } from './types.js';
+import type { SqlDatabase, SqlWriter } from './sql.js';
 import { contentHash } from './canonical.js';
 import { cacheDir } from './paths.js';
 import fs from 'node:fs';
@@ -77,10 +77,7 @@ export function snapshotHash(snapshot: FlowSnapshot): string {
 }
 
 /** 落库（内容寻址去重），并写 cache/ 派生镜像。返回 hash。 */
-export function persistSnapshot(
-  db: Database.Database,
-  snapshot: FlowSnapshot,
-): string {
+export function persistSnapshot(db: SqlWriter, snapshot: FlowSnapshot): string {
   const hash = snapshotHash(snapshot);
   const content = JSON.stringify(snapshot);
   db.prepare(
@@ -91,7 +88,7 @@ export function persistSnapshot(
   return hash;
 }
 
-export function loadSnapshot(db: Database.Database, hash: string): FlowSnapshot | undefined {
+export function loadSnapshot(db: SqlDatabase, hash: string): FlowSnapshot | undefined {
   const row = db
     .prepare('SELECT content FROM flow_snapshots WHERE hash = ?')
     .get(hash) as { content: string } | undefined;

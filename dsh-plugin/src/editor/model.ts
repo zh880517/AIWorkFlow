@@ -1,5 +1,5 @@
 // 画布 <-> DSL 的双向映射。画布只持有布局与标题，节点本体（instruction/options/...）保存在 bodies 里，
-// 保存时按边重建 next/branches，其余字段原样保留（不丢掉主工程编辑器写的 outlets/params 等）。
+// 保存时按边重建 next/branches，其余字段原样保留（不丢掉其它工具写入的 outlets/params 等）。
 import type { Branch, Flow, FlowNode, NodeType } from '@shared/index.js';
 import type { Edge, Node } from '@xyflow/react';
 

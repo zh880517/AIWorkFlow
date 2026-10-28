@@ -400,8 +400,9 @@ function saveFlow(db, flow, jsonDir) {
 function deleteFlow(db, flowId, jsonDir) {
 	const info = db.prepare("DELETE FROM flows WHERE id = ?").run(flowId);
 	const mirror = path.join(jsonDir, `${flowId}.json`);
-	if (info.changes > 0 && fs.existsSync(mirror)) fs.rmSync(mirror);
-	return info.changes > 0;
+	const changes = Number(info.changes);
+	if (changes > 0 && fs.existsSync(mirror)) fs.rmSync(mirror);
+	return changes > 0;
 }
 //#endregion
 //#region shared/src/paths.ts
@@ -495,12 +496,15 @@ var MIGRATIONS = [
   `,
 	`
   ALTER TABLE runs ADD COLUMN fanout_item TEXT;
+  `,
+	`
+  ALTER TABLE runs DROP COLUMN mcp_session_id;
   `
 ];
 /** 逐级迁移；库版本高于程序支持版本时拒绝启动，避免旧代码写坏新库 */
 function migrateSchema(db) {
 	const version = db.userVersion();
-	if (version > MIGRATIONS.length) throw new Error(`数据库版本 ${version} 高于当前程序支持的 ${MIGRATIONS.length}，请升级 aiworkflow（或 DSH 插件）后再试。`);
+	if (version > MIGRATIONS.length) throw new Error(`数据库版本 ${version} 高于当前程序支持的 ${MIGRATIONS.length}，请升级 aiworkflow DSH 插件后再试。`);
 	for (let v = version; v < MIGRATIONS.length; v++) db.transaction(() => {
 		db.exec(MIGRATIONS[v]);
 		db.setUserVersion(v + 1);
@@ -527,7 +531,7 @@ var NodeSqliteDb = class {
 	setUserVersion(version) {
 		this.raw.exec(`PRAGMA user_version = ${version}`);
 	}
-	/** 与 better-sqlite3 的 transaction 语义一致：返回可调用函数，嵌套时退化为 SAVEPOINT */
+	/** transaction 语义：返回可调用函数，嵌套时退化为 SAVEPOINT */
 	transaction(fn) {
 		return () => {
 			const depth = this.depth + 1;
@@ -568,7 +572,7 @@ function databasePath() {
 function flowsDir() {
 	return flowsDir$1();
 }
-/** 库不存在时创建并建表：插件自己就能开场，不依赖先跑一次 npx aiworkflow */
+/** 库不存在时创建并建表：插件自己就能开场，不依赖任何外部命令 */
 function database() {
 	const file = databasePath();
 	if (opened !== null && opened.path === file) return opened.db;
@@ -723,8 +727,8 @@ var ExecutionEngine = class {
 		const runId = `run_${crypto.randomBytes(4).toString("hex")}`;
 		const now = (/* @__PURE__ */ new Date()).toISOString();
 		this.db.prepare(`INSERT INTO runs (id, root_run_id, flow_id, flow_snapshot_hash, entry_node, current_node,
-           status, cwd, project_name, host_session, mcp_session_id, steps_used, last_activity, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, 0, ?, ?)`).run(runId, runId, flow.id, hash, flow.entry, flow.entry, params.cwd ?? null, params.projectName ?? null, params.hostSession ?? null, params.mcpSessionId ?? null, now, now);
+           status, cwd, project_name, host_session, steps_used, last_activity, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, 0, ?, ?)`).run(runId, runId, flow.id, hash, flow.entry, flow.entry, params.cwd ?? null, params.projectName ?? null, params.hostSession ?? null, now, now);
 		this.emit({
 			type: "run_started",
 			runId,
@@ -752,15 +756,15 @@ var ExecutionEngine = class {
 	/** 幂等。返回"我在哪、要干啥"；上下文压缩后的恢复入口。
 	*  例外（§7.5）：主 Agent 在派发步上（waiting_children）调用即触发汇聚——
 	*  前提是宿主的 Task 调用已返回，此时 children 该完成的都完成了，没完成的按"未回报"处理。 */
-	getCurrentStep(ref, mcpSessionId) {
-		const run = this.resolveRun(ref, mcpSessionId);
+	getCurrentStep(ref) {
+		const run = this.resolveRun(ref);
 		if (run === null) return selfHeal(ref.childToken !== void 0 ? "这个 childToken 没有对应的 run（可能已过期或写错）。" : "没有找到你正在进行的 run。", "主 Agent 调 start_run 开始一个流程；如果上下文被压缩过、不确定自己在哪，这个结果就是答案的来源——先 start_run 或问用户该跑哪张图。");
 		if (run.status === "waiting_children") return this.gatherChildren(run);
 		return this.resultForRun(run, "get_current_step");
 	}
 	/** 推进一格：校验 → 落库 → 定位后继（含迭代上限逃生）→ 渲染插值 → 返回下一步 */
-	completeStep(params, mcpSessionId) {
-		const run = this.resolveRun(params, mcpSessionId);
+	completeStep(params) {
+		const run = this.resolveRun(params);
 		if (run === null) return selfHeal(params.childToken !== void 0 ? "这个 childToken 没有对应的 run（可能已过期或写错）。" : "没有找到你正在进行的 run，没法提交结果。", "调 start_run 开始一个流程；如果你只是想看当前进度，调 get_current_step。");
 		if (run.status === "waiting_gate") return selfHeal("run 正挂在人工卡点上等确认，complete_step 推不动它。", "调 await_gate(gateId) 等用户答复（每轮 60 秒）；用户已在聊天里答复就调 answer_gate(gateId, optionId) 代填。gateId 和选项见下面这一步。", this.currentRef(run));
 		if (run.status === "waiting_children") return selfHeal("这一步是子 Agent 派发步，完成由子任务回报驱动，不用 complete_step。", "把每个 child 的 preamble 原样放进子任务开头派出；等全部子任务返回后调 get_current_step()，服务端会汇聚结果给出下一步。", this.currentRef(run));
@@ -821,11 +825,11 @@ var ExecutionEngine = class {
 		return this.resultForPlan(run.id, snapshot, plan);
 	}
 	/** 干不下去了（§7.8）：落 blocked 轨迹，三级出口 onLimitExceeded → default 分支 → run 判失败。不做自动重试 */
-	reportBlocked(params, mcpSessionId) {
-		const run = this.resolveRun(params, mcpSessionId);
+	reportBlocked(params) {
+		const run = this.resolveRun(params);
 		if (run === null) return selfHeal(params.childToken !== void 0 ? "这个 childToken 没有对应的 run（可能已过期或写错）。" : "没有找到你正在进行的 run，没法上报阻塞。", "调 start_run 开始一个流程；如果你只是想看当前进度，调 get_current_step。");
 		if (run.status === "waiting_gate") return selfHeal("run 正挂在人工卡点上等确认，这不是阻塞，不需要 report_blocked。", "调 await_gate(gateId) 等用户答复；用户已在聊天里答复就调 answer_gate(gateId, optionId) 代填。", this.currentRef(run));
-		if (run.status === "waiting_children") return selfHeal("这一步是子 Agent 派发步，不是阻塞点。", "等全部子任务返回后调 get_current_step() 汇聚；确实派不出去（宿主不支持派子 Agent）就请用户改图，去掉 subagent 节点后重跑。", this.currentRef(run));
+		if (run.status === "waiting_children") return selfHeal("这一步是子 Agent 派发步，不是阻塞点。", "等全部子任务返回后调 get_current_step() 汇聚；确实派不出去（例如 DSH 侧没有可用的子 Agent）就请用户改图，去掉 subagent 节点后重跑。", this.currentRef(run));
 		if (run.status !== "running") return this.resultForRun(run, "report_blocked");
 		if (params.reason === void 0 || params.reason.trim() === "") return selfHeal("report_blocked 必须带 reason：一句话说清干不下去的原因，给人看的。", `重新调 report_blocked，带上 reason。当前节点是 ${run.current_node}。`, this.currentRef(run));
 		const snapshot = this.snapshotOf(run);
@@ -881,9 +885,9 @@ var ExecutionEngine = class {
 		this.advanceTransaction(run, snapshot, plan, blockedRow, now);
 		return this.resultForPlan(run.id, snapshot, plan);
 	}
-	/** 卡点放行（§7.6）：面板点选（source: panel）或 Agent 代填聊天答复（source: chat）。
+	/** 卡点放行（§7.6）：source 记录来源；当前插件走 chat，panel 保留给后续面板点选接入。
 	*  决策记 gate_decisions（含来源），并落一条 completed 轨迹（payload 带选项与来源）供插值与回看。 */
-	answerGate(params, source, mcpSessionId) {
+	answerGate(params, source) {
 		let run = null;
 		let row = params.gateId !== void 0 ? this.pendingGateById(params.gateId) : null;
 		if (row !== null) run = this.runById(row.run_id);
@@ -896,7 +900,7 @@ var ExecutionEngine = class {
 			return selfHeal(`gateId 无效：「${params.gateId}」不对应任何卡点。`, "gateId 从 gate 步骤的下发内容里取；也可以省略 gateId，按当前 run 的挂起卡点作答。", null);
 		}
 		if (row === null) {
-			run = this.resolveRun(params, mcpSessionId);
+			run = this.resolveRun(params);
 			if (run === null) return selfHeal(params.childToken !== void 0 ? "这个 childToken 没有对应的 run（可能已过期或写错）。" : "没有找到你正在进行的 run，没有可作答的卡点。", "调 start_run 开始一个流程；不确定在哪就先调 get_current_step。");
 			if (run.current_node !== null) row = this.pendingDecisionOf(run.id, run.current_node);
 			if (row === null) return selfHeal(`run ${run.id} 当前不在人工卡点上（状态 ${run.status}），没有可作答的问题。`, "调 get_current_step() 看当前这一步是什么。", this.currentOf(run));
@@ -976,11 +980,11 @@ var ExecutionEngine = class {
 		return this.resultForPlan(run.id, snapshot, plan);
 	}
 	/** 长轮询等卡点答复（§7.6）：上限默认 60 秒，到点返回"仍在等待，请再调一次"；已答复（或已不在卡点）返回当前状态 */
-	async awaitGate(params, mcpSessionId, timeoutMs = 6e4) {
+	async awaitGate(params, timeoutMs = 6e4) {
 		const deadline = Date.now() + timeoutMs;
 		for (;;) {
 			let row = params.gateId !== void 0 ? this.pendingGateById(params.gateId) : null;
-			let run = row !== null ? this.runById(row.run_id) : this.resolveRun(params, mcpSessionId);
+			let run = row !== null ? this.runById(row.run_id) : this.resolveRun(params);
 			if (row !== null && run === null) return selfHeal(`卡点 ${row.id} 所属的 run 不存在（${row.run_id}），数据异常。`, "这是服务端数据问题，请把这条错误原样反馈给用户。", null);
 			if (run === null) return selfHeal(params.childToken !== void 0 ? "这个 childToken 没有对应的 run（可能已过期或写错）。" : "没有找到你正在进行的 run，也没有可等待的卡点。", "先调 start_run 开始流程，或 get_current_step 确认状态。");
 			if (row === null && run.status === "waiting_gate" && run.current_node !== null) row = this.pendingDecisionOf(run.id, run.current_node);
@@ -1373,22 +1377,18 @@ var ExecutionEngine = class {
 	completedCount(runId) {
 		return this.db.prepare("SELECT COUNT(*) AS c FROM node_executions WHERE run_id = ? AND status = 'completed'").get(runId).c;
 	}
-	/** run 定位顺序：childToken（子 Agent）→ runId（显式）→ hostSession（宿主会话，hook 注入）→ mcpSessionId（传输层兜底） */
-	resolveRun(ref, mcpSessionId) {
+	/** run 定位顺序：childToken（子 Agent）→ runId（显式）→ hostSession（DSH 会话绑定） */
+	resolveRun(ref) {
 		if (ref.childToken !== void 0) return this.runBy("child_token = ?", ref.childToken);
 		if (ref.runId !== void 0) return this.runBy("id = ?", ref.runId);
-		if (ref.hostSession !== void 0) {
-			const run = this.latestRunBy("host_session", ref.hostSession);
-			if (run !== null) return run;
-		}
-		if (mcpSessionId !== void 0) return this.latestRunBy("mcp_session_id", mcpSessionId);
+		if (ref.hostSession !== void 0) return this.latestRunByHostSession(ref.hostSession);
 		return null;
 	}
-	/** 按会话列定位：优先活跃 run；没有时回落到最近的 run（已终结也能答"跑完了"而不是"找不到"）。rowid 决胜同一毫秒的建 run */
-	latestRunBy(column, value) {
-		const active = this.db.prepare(`SELECT * FROM runs WHERE ${column} = ? AND status IN ('running', 'waiting_gate', 'waiting_children') ORDER BY created_at DESC, rowid DESC LIMIT 1`).get(value);
+	/** 按 DSH 会话定位：优先活跃 run；没有时回落到最近的 run（已终结也能答"跑完了"而不是"找不到"）。rowid 决胜同一毫秒的建 run */
+	latestRunByHostSession(hostSession) {
+		const active = this.db.prepare(`SELECT * FROM runs WHERE host_session = ? AND status IN ('running', 'waiting_gate', 'waiting_children') ORDER BY created_at DESC, rowid DESC LIMIT 1`).get(hostSession);
 		if (active !== void 0) return active;
-		return this.db.prepare(`SELECT * FROM runs WHERE ${column} = ? ORDER BY created_at DESC, rowid DESC LIMIT 1`).get(value) ?? null;
+		return this.db.prepare(`SELECT * FROM runs WHERE host_session = ? ORDER BY created_at DESC, rowid DESC LIMIT 1`).get(hostSession) ?? null;
 	}
 	runBy(where, arg) {
 		return this.db.prepare(`SELECT * FROM runs WHERE ${where}`).get(arg) ?? null;
@@ -1630,7 +1630,7 @@ function selfHeal(what, guidance, current = null) {
 		current
 	};
 }
-/** await_gate 轮询间隔让出事件循环（better-sqlite3 同步查询本身不阻塞） */
+/** await_gate 轮询间隔让出事件循环（SQLite 同步查询本身不阻塞） */
 function sleep(ms) {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -1818,7 +1818,7 @@ function flowTool() {
 		}
 	};
 }
-/** 执行类工具：与 /mcp 端点同名同义，只是名字加了 aiworkflow_ 前缀 */
+/** 执行类工具：与引擎方法同名同义，DSH 里加 aiworkflow_ 前缀避免撞名 */
 function runTools(ctx) {
 	const hostSessionOf = (exec) => typeof exec?.agent?.id === "string" ? `dsh:${exec.agent.id}` : void 0;
 	const childTokenOf = (args) => typeof args?.childToken === "string" && args.childToken !== "" ? args.childToken : void 0;
@@ -1829,7 +1829,7 @@ function runTools(ctx) {
 	return [
 		{
 			name: "aiworkflow_start_run",
-			description: "按流程名开始一个 run（服务端纪律文本里的 start_run）。返回循环纪律 + 第一步。flowName 可以是流程 id 或展示名（先调 aiworkflow_flow action=list 查）。之后每步做完必须调 aiworkflow_complete_step 回报。",
+			description: "按流程名开始一个 run（引擎纪律文本里的 start_run）。返回循环纪律 + 第一步。flowName 可以是流程 id 或展示名（先调 aiworkflow_flow action=list 查）。之后每步做完必须调 aiworkflow_complete_step 回报。",
 			parameters: {
 				type: "object",
 				properties: {
@@ -1887,7 +1887,7 @@ function runTools(ctx) {
 				render: (_args, value) => textResult(value)
 			},
 			async execute(args, exec) {
-				return jsonSafe(workflowEngine().getCurrentStep(refOf(args, exec), void 0));
+				return jsonSafe(workflowEngine().getCurrentStep(refOf(args, exec)));
 			}
 		},
 		{
@@ -1935,12 +1935,12 @@ function runTools(ctx) {
 					payload: isPlainObject(args?.payload) ? args.payload : void 0,
 					branchId: optionalString(args?.branchId),
 					nodeId: optionalString(args?.nodeId)
-				}, void 0));
+				}));
 			}
 		},
 		{
 			name: "aiworkflow_report_blocked",
-			description: "当前这一步干不下去了（缺依赖、没权限、分支全不满足且没有默认出口）时如实上报（= report_blocked）。服务端按节点的逃生出口推进；没有任何出口则 run 判失败。不会自动重试。",
+			description: "当前这一步干不下去了（缺依赖、没权限、分支全不满足且没有默认出口）时如实上报（= report_blocked）。引擎按节点的逃生出口推进；没有任何出口则 run 判失败。不会自动重试。",
 			parameters: {
 				type: "object",
 				properties: {
@@ -1972,7 +1972,7 @@ function runTools(ctx) {
 					...refOf(args, exec),
 					reason: requiredString(args?.reason, "reason", "report_blocked 需要 reason（一句话说清卡在哪）。"),
 					nodeId: optionalString(args?.nodeId)
-				}, void 0));
+				}));
 			}
 		},
 		{
@@ -2004,12 +2004,12 @@ function runTools(ctx) {
 				return jsonSafe(await workflowEngine().awaitGate({
 					...refOf(args, exec),
 					gateId: optionalString(args?.gateId)
-				}, void 0));
+				}));
 			}
 		},
 		{
 			name: "aiworkflow_answer_gate",
-			description: "用户在对话里答复了人工卡点（gate）的问题时，代填他的选择（= answer_gate）。面板点选会记 source: panel，这里记 source: chat，事后回看轨迹可分辨该卡点是在哪个场景放行的。",
+			description: "用户在对话里答复了人工卡点（gate）的问题时，代填他的选择（= answer_gate）。这里记 source: chat，事后回看轨迹可分辨这是对话代填的决策。",
 			parameters: {
 				type: "object",
 				properties: {
@@ -2046,13 +2046,13 @@ function runTools(ctx) {
 					gateId: optionalString(args?.gateId),
 					optionId: requiredString(args?.optionId, "optionId", "answer_gate 需要 optionId（从 options 里选一个）。"),
 					note: optionalString(args?.note)
-				}, "chat", void 0));
+				}, "chat"));
 			}
 		}
 	];
 }
 /**
-* 引擎结果里存在 `note: undefined` 这类字段（MCP 侧 JSON.stringify 会直接丢掉），
+* 引擎结果里存在 `note: undefined` 这类字段（JSON.stringify 会直接丢掉），
 * 宿主工具返回值要求可无损 JSON 化，所以统一过一遍序列化。
 */
 function jsonSafe(value) {
@@ -2090,7 +2090,7 @@ async function currentDirectory(ctx, exec) {
 }
 function describeDatabaseError$1(error) {
 	const code = error?.code;
-	if (code === "ENOENT" || code === "SQLITE_CANTOPEN") return `还没有 aiworkflow 数据库（${databasePath()}）。先在 DSH 的「可视化工作流」里新建并保存一张图，或在项目里运行一次 npx aiworkflow 建库。`;
+	if (code === "ENOENT" || code === "SQLITE_CANTOPEN") return `还没有 aiworkflow 数据库（${databasePath()}）。先在 DSH 的「可视化工作流」里新建并保存一张图，插件会自动建库。`;
 	return `读取 ${databasePath()} 失败：${error instanceof Error ? error.message : String(error)}`;
 }
 //#endregion
@@ -2435,7 +2435,7 @@ function trimDetail(detail) {
 }
 function describeDatabaseError(error, file) {
 	const code = error?.code;
-	if (code === "ENOENT" || code === "SQLITE_CANTOPEN") return `未找到 ${file}：先运行 npx aiworkflow，面板会自动出现数据。`;
+	if (code === "ENOENT" || code === "SQLITE_CANTOPEN") return `未找到 ${file}：先在「可视化工作流」里新建并保存一张图，插件会自动建库。`;
 	return `读取 ${file} 失败：${errorText(error)}`;
 }
 async function readJson(req) {

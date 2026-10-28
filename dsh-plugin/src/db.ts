@@ -1,5 +1,5 @@
 // 数据目录与单条连接：HTTP 路由与 Agent 工具共用（WAL 下避免多句柄竞争写锁）。
-// 路径与表结构都在公用层（shared/src/paths.ts、schema.ts），插件与主工程共用一份。
+// 路径与表结构都在公用层（shared/src/paths.ts、schema.ts），面板与工具共用一份。
 import { join } from 'node:path';
 import { ensureLayout, flowsDir as coreFlowsDir, homeDir } from '@shared/paths.js';
 import { migrateSchema } from '@shared/schema.js';
@@ -24,7 +24,7 @@ export function flowsDir(): string {
   return coreFlowsDir();
 }
 
-/** 库不存在时创建并建表：插件自己就能开场，不依赖先跑一次 npx aiworkflow */
+/** 库不存在时创建并建表：插件自己就能开场，不依赖任何外部命令 */
 export function database(): NodeSqliteDb {
   const file = databasePath();
   if (opened !== null && opened.path === file) return opened.db;

@@ -113,7 +113,7 @@ export function Inspector(props: InspectorProps): React.ReactElement {
               className="wf-area"
               value={body.instruction ?? ''}
               onChange={(event) => patch({ instruction: event.target.value })}
-              placeholder="例如：读 docs/ROADMAP.md，列出阶段 8 的验收项"
+              placeholder="例如：读 docs/README.md，列出必读文档"
             />
             <InterpHints
               nodes={others}
@@ -126,7 +126,7 @@ export function Inspector(props: InspectorProps): React.ReactElement {
 
       {body.type === 'tool' && (
         <Section title="工具调用">
-          <Field label="工具名" hint="MCP 工具名，例如 web_search、read">
+          <Field label="工具名" hint="Agent 可调用的工具名，例如 web_search、read">
             <input className="wf-input" value={body.toolName ?? ''} onChange={(event) => patch({ toolName: event.target.value })} />
           </Field>
           <Field label="参数" hint="键值对；值能按 JSON 解析就当 JSON，否则按字符串。会作为 view.tool.params 下发给 Agent">
@@ -166,7 +166,7 @@ export function Inspector(props: InspectorProps): React.ReactElement {
           </Field>
           {body.mode === 'subflow' && (
             <div className="wf-hint wf-hint-warn">
-              当前节点是 subflow 模式，但面板暂不支持编辑内嵌子图；保存会被校验器拒绝（缺少子图）。请用 MCP 建图工具或主工程编辑器改它。
+              当前节点是 subflow 模式，但面板暂不支持编辑内嵌子图；保存会被校验器拒绝（缺少子图）。请用 aiworkflow_flow 工具改它。
             </div>
           )}
           {body.mode === 'flowRef' && (

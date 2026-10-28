@@ -1,8 +1,8 @@
-// Host 半：把插件的操作暴露给 Agent（原 aiworkflow MCP 的建图五件套 + 会话信息）。
+// Host 半：把插件的操作暴露给 Agent（建图五件套 + 执行类工具 + 会话信息）。
 // 与面板 UI 走同一套 Host 函数（shared/flows + 同一个 SQLite 连接），不另写一份逻辑。
 import { readMonitorState } from '@shared/index.js';
 import type { Flow } from '@shared/index.js';
-import { getFlow, listFlows, saveFlow, validateFlowOnly, type FlowWriter } from '@shared/flows.js';
+import { getFlow, listFlows, saveFlow, validateFlowOnly } from '@shared/flows.js';
 import { database, databasePath, flowsDir } from './db.js';
 import { workflowEngine } from './engine.js';
 
@@ -170,7 +170,7 @@ function flowTool(): AgentTool {
         throw new Error(`未知 action「${action}」：只支持 ${FLOW_ACTIONS.join(' / ')}。`);
       }
 
-      const saved = saveFlow(db as unknown as FlowWriter, flow, flowsDir());
+      const saved = saveFlow(db, flow, flowsDir());
       if (!saved.ok) {
         return {
           ok: false,
@@ -187,7 +187,7 @@ function flowTool(): AgentTool {
   };
 }
 
-/** 执行类工具：与 /mcp 端点同名同义，只是名字加了 aiworkflow_ 前缀 */
+/** 执行类工具：与引擎方法同名同义，DSH 里加 aiworkflow_ 前缀避免撞名 */
 function runTools(ctx: any): AgentTool[] {
   const hostSessionOf = (exec: any): string | undefined =>
     typeof exec?.agent?.id === 'string' ? `dsh:${exec.agent.id}` : undefined;
@@ -198,7 +198,7 @@ function runTools(ctx: any): AgentTool[] {
   const start: AgentTool = {
     name: 'aiworkflow_start_run',
     description:
-      '按流程名开始一个 run（服务端纪律文本里的 start_run）。返回循环纪律 + 第一步。' +
+      '按流程名开始一个 run（引擎纪律文本里的 start_run）。返回循环纪律 + 第一步。' +
       'flowName 可以是流程 id 或展示名（先调 aiworkflow_flow action=list 查）。之后每步做完必须调 aiworkflow_complete_step 回报。',
     parameters: {
       type: 'object',
@@ -240,7 +240,7 @@ function runTools(ctx: any): AgentTool[] {
     },
     output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => textResult(value) },
     async execute(args, exec) {
-      return jsonSafe(workflowEngine().getCurrentStep(refOf(args, exec), undefined));
+      return jsonSafe(workflowEngine().getCurrentStep(refOf(args, exec)));
     },
   };
 
@@ -268,16 +268,13 @@ function runTools(ctx: any): AgentTool[] {
     output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => textResult(value) },
     async execute(args, exec) {
       return jsonSafe(
-        workflowEngine().completeStep(
-          {
-            ...refOf(args, exec),
-            summary: requiredString(args?.summary, 'summary', 'complete_step 需要 summary（一句话说清这一步做了什么）。'),
-            payload: isPlainObject(args?.payload) ? (args.payload as Record<string, unknown>) : undefined,
-            branchId: optionalString(args?.branchId),
-            nodeId: optionalString(args?.nodeId),
-          },
-          undefined,
-        ),
+        workflowEngine().completeStep({
+          ...refOf(args, exec),
+          summary: requiredString(args?.summary, 'summary', 'complete_step 需要 summary（一句话说清这一步做了什么）。'),
+          payload: isPlainObject(args?.payload) ? (args.payload as Record<string, unknown>) : undefined,
+          branchId: optionalString(args?.branchId),
+          nodeId: optionalString(args?.nodeId),
+        }),
       );
     },
   };
@@ -286,7 +283,7 @@ function runTools(ctx: any): AgentTool[] {
     name: 'aiworkflow_report_blocked',
     description:
       '当前这一步干不下去了（缺依赖、没权限、分支全不满足且没有默认出口）时如实上报（= report_blocked）。' +
-      '服务端按节点的逃生出口推进；没有任何出口则 run 判失败。不会自动重试。',
+      '引擎按节点的逃生出口推进；没有任何出口则 run 判失败。不会自动重试。',
     parameters: {
       type: 'object',
       properties: {
@@ -300,14 +297,11 @@ function runTools(ctx: any): AgentTool[] {
     output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => textResult(value) },
     async execute(args, exec) {
       return jsonSafe(
-        workflowEngine().reportBlocked(
-          {
-            ...refOf(args, exec),
-            reason: requiredString(args?.reason, 'reason', 'report_blocked 需要 reason（一句话说清卡在哪）。'),
-            nodeId: optionalString(args?.nodeId),
-          },
-          undefined,
-        ),
+        workflowEngine().reportBlocked({
+          ...refOf(args, exec),
+          reason: requiredString(args?.reason, 'reason', 'report_blocked 需要 reason（一句话说清卡在哪）。'),
+          nodeId: optionalString(args?.nodeId),
+        }),
       );
     },
   };
@@ -328,12 +322,7 @@ function runTools(ctx: any): AgentTool[] {
     output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => textResult(value) },
     timeoutMs: 90_000,
     async execute(args, exec) {
-      return jsonSafe(
-        await workflowEngine().awaitGate(
-          { ...refOf(args, exec), gateId: optionalString(args?.gateId) },
-          undefined,
-        ),
-      );
+      return jsonSafe(await workflowEngine().awaitGate({ ...refOf(args, exec), gateId: optionalString(args?.gateId) }));
     },
   };
 
@@ -341,7 +330,7 @@ function runTools(ctx: any): AgentTool[] {
     name: 'aiworkflow_answer_gate',
     description:
       '用户在对话里答复了人工卡点（gate）的问题时，代填他的选择（= answer_gate）。' +
-      '面板点选会记 source: panel，这里记 source: chat，事后回看轨迹可分辨该卡点是在哪个场景放行的。',
+      '这里记 source: chat，事后回看轨迹可分辨这是对话代填的决策。',
     parameters: {
       type: 'object',
       properties: {
@@ -364,7 +353,6 @@ function runTools(ctx: any): AgentTool[] {
             note: optionalString(args?.note),
           },
           'chat',
-          undefined,
         ),
       );
     },
@@ -374,7 +362,7 @@ function runTools(ctx: any): AgentTool[] {
 }
 
 /**
- * 引擎结果里存在 `note: undefined` 这类字段（MCP 侧 JSON.stringify 会直接丢掉），
+ * 引擎结果里存在 `note: undefined` 这类字段（JSON.stringify 会直接丢掉），
  * 宿主工具返回值要求可无损 JSON 化，所以统一过一遍序列化。
  */
 function jsonSafe<T>(value: T): T {
@@ -428,7 +416,7 @@ function describeDatabaseError(error: unknown): string {
   if (code === 'ENOENT' || code === 'SQLITE_CANTOPEN') {
     return (
       `还没有 aiworkflow 数据库（${databasePath()}）。` +
-      '先在 DSH 的「可视化工作流」里新建并保存一张图，或在项目里运行一次 npx aiworkflow 建库。'
+      '先在 DSH 的「可视化工作流」里新建并保存一张图，插件会自动建库。'
     );
   }
   return `读取 ${databasePath()} 失败：${error instanceof Error ? error.message : String(error)}`;

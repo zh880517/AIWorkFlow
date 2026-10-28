@@ -1,52 +1,37 @@
 {
   "name": "aiworkflow",
   "version": "0.1.0",
-  "description": "Flowchart-driven AI Agent execution engine — step-disclosure workflow guidance over HTTP MCP",
+  "private": true,
+  "description": "DeepSeek Harness 插件：流程图驱动的分步执行（DSH 单宿主）",
   "type": "module",
-  "bin": {
-    "aiworkflow": "dist/src/cli.js"
-  },
-  "main": "dist/src/cli.js",
   "scripts": {
-    "build": "tsc && vite build",
-    "build:web": "vite build",
+    "build": "node dsh-plugin/build.mjs",
     "build:plugin": "node dsh-plugin/build.mjs",
     "check:plugin": "node dsh-plugin/check-bundles.mjs",
     "market:plugin": "node dsh-plugin/market/build.mjs",
     "release:plugin": "node dsh-plugin/release.mjs",
+    "typecheck": "npm run typecheck:plugin",
     "typecheck:plugin": "tsc -p shared/tsconfig.json --noEmit && tsc -p dsh-plugin/tsconfig.json --noEmit",
-    "dev:web": "vite",
-    "start": "node dist/src/cli.js",
     "test": "vitest run",
-    "test:watch": "vitest",
-    "typecheck": "tsc --noEmit && tsc -p tsconfig.web.json --noEmit"
+    "test:watch": "vitest"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.12"
   },
   "keywords": [
-    "mcp",
-    "agent",
+    "deepseek-harness",
+    "dsh-plugin",
     "workflow",
     "flowchart"
   ],
   "license": "MIT",
-  "dependencies": {
-    "@hono/node-server": "^2.1.1",
-    "@modelcontextprotocol/sdk": "^1.30.0",
-    "@xyflow/react": "^12.11.6",
-    "better-sqlite3": "^13.0.3",
-    "hono": "^4.13.5",
-    "react": "^19.2.8",
-    "react-dom": "^19.2.8",
-    "zod": "^4.5.4"
-  },
   "devDependencies": {
-    "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^26.4.1",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.5",
-    "@vitejs/plugin-react": "^6.1.1",
+    "@xyflow/react": "^12.11.6",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
     "typescript": "^7.0.2",
     "vite": "^8.2.2",
     "vitest": "^4.1.11"

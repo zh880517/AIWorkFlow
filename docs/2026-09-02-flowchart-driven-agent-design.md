@@ -1,13 +1,14 @@
 # 流程图驱动的 AI Agent 执行引擎 — 设计文档
 
 日期：2026-09-02
-状态：已评审，待生成实现计划
+最后修订：2026-10-28（收缩为 DeepSeek Harness 单宿主）
+状态：已评审，当前实现依据
 
 ---
 
 ## 1. 定位
 
-一个通过 npm 启动的本地服务，向 AI 编码 Agent 提供**逐步披露式**的任务流程引导。用户在 Web 面板上画流程图，Agent 通过 HTTP MCP 一次只领取当前一步的指令，做完回报结果后才领到下一步。
+一个 **DeepSeek Harness（DSH）插件**，向 AI 编码 Agent 提供**逐步披露式**的任务流程引导。用户在插件面板上画流程图，Agent 通过 DSH 工具一次只领取当前一步的指令，做完回报结果后才领到下一步。
 
 **核心价值不是约束 Agent，而是管理它的注意力预算。**
 
@@ -18,40 +19,39 @@
 
 因此：**Agent 能不能看到全图，是次要问题。默认不给它看是为了降噪，不是为了保密。**
 
+### 1.1 只支持 DSH
+
+本插件只面向 DeepSeek Harness：不提供独立 HTTP MCP 服务、CLI、Skill 安装器或 hook；也不适配其它 Agent 宿主。
+所有 Agent 交互都通过 DSH 的 `ctx.tools` 注册的工具完成，所有界面都在 DSH 的 Web 视图里。
+
 ## 2. 设计原则
 
 1. **逐步披露** — 每次只下发当前节点的指令、当前岔路口的条件，不下发图结构。
 2. **引导而非约束** — 唯一硬性要求是"每步做完必须回报"（否则链条断裂，是机制必需）。节点执行过程中 Agent 想多读文件、多跑命令，完全放开。
 3. **SQLite 是唯一事实源** — JSON 文件全部是派生的、可删的、能从 SQLite 重建。任何写入先落 SQLite 再刷 JSON，永不只写 JSON。
 4. **报错必须自愈** — 所有拒绝路径都返回"错在哪 + 正确姿势 + 当前这一步是什么"，让一次往返就能修好，而不是卡死。
-5. **不依赖宿主特定机制** — 纯 HTTP MCP + 一份入场文件。Claude Code 与 Codex 是首批验证目标，不是耦合对象；任何 MCP 客户端都应可用。
+5. **只服务 DSH** — 宿主抽象只保留 DSH 一层：身份取 DSH 工具执行上下文，界面用 DSH 插槽，不引入 hook、MCP 会话 id 或其它宿主的兼容层。
 6. **不静默截断** — 任何被丢弃的工作（fan-out 超出 max、子 Agent 失败后放弃）都必须在面板上显性列出。
 
 ## 3. 架构总览
 
-单进程，`npx aiworkflow` 启动，同时提供两个端点：
+插件分 Host / Client 两半，跑在 DSH 进程里：
 
-| 端点 | 用途 |
+| 半边 | 职责 |
 |---|---|
-| `http://127.0.0.1:4123/mcp?k=<token>` | Streamable HTTP MCP，宿主按 URL 配置接入 |
-| `http://127.0.0.1:4123/?k=<token>` | Web 面板（编辑器 + 监控） |
+| Host | `node:sqlite` 打开 `~/.aiworkflow/aiworkflow.db`；执行引擎、建图/执行类工具、进度与图读写 HTTP 路由（`ctx.webServer`） |
+| Client | React + React Flow 界面：流程库/编辑器、进度胶囊与浮动面板、只读运行图 |
 
-`<token>` 为进程启动时生成的随机串，仅绑 `127.0.0.1`。否则本机任意进程都能驱动用户的 Agent。
-
-选择 HTTP 传输而非 stdio 的后果：
-
-- **收益**：单进程独占 SQLite，无多进程 WAL 争用、无端口抢占、无守护进程接管问题；人工卡点可用进程内 promise + SSE 实现，无需轮询数据库；面板天然是跨会话全局视图。
-- **收益（关键）**：MCP Streamable HTTP 协议中服务端可在 `initialize` 响应下发 `Mcp-Session-Id`，客户端后续每个请求必须携带。**这是传输层字段，模型看不到，因此模型不可能丢失它。** 但它只能作兜底锚点：Codex 侧会话过期后重新握手会更换 id（源码 `reinitialize_after_session_expiry`，2026-09-08 证实）。主 Agent 身份的首要锚点由宿主 hook 注入的会话 id 承担（§8.1）。
-- **代价**：服务端不再知道 Agent 的工作目录。`start_run` 必须显式传入 `cwd` 与 `projectName`，这不是可选项。
+没有独立服务、端口、token 或 MCP 端点。Host 半只在 DSH 提供 `webServer` 与 `tools` 服务时激活；数据目录固定 `~/.aiworkflow/`，测试用 `AIWORKFLOW_HOME` 重定向。
 
 ### 身份模型
 
 | 角色 | 身份来源 | 丢失风险 |
 |---|---|---|
-| 主 Agent | 宿主会话 id `_sid`（PreToolUse hook 注入，§8.1）；未装 hook 时退回 `Mcp-Session-Id` | 无（模型不接触） |
+| 主 Agent | DSH 工具执行上下文 `exec.agent.id`，写成 `dsh:<sessionId>` 存进 `runs.host_session` | 无（模型不接触） |
 | 子 Agent | `childToken`（服务端签发，写在 preamble 里） | 低（子 Agent 上下文短、生命周期短） |
 
-run 定位顺序：**childToken → runId → hostSession（hook 注入的 `"<host>:<sid>"`）→ `Mcp-Session-Id`（兜底）**。`Mcp-Session-Id` 在客户端重连时可能更换（Codex 会话过期重握手即换），因此不作为唯一锚点：run 记录同时绑定 `cwd`，且 `get_current_step` 幂等可随时取回状态。
+run 定位顺序：**childToken → runId → hostSession（`dsh:<sessionId>`）**。`get_current_step` 幂等，可随时取回状态；面板按 `host_session` 过滤，只显示本会话的 run。
 
 ## 4. 流程 DSL 与数据模型
 
@@ -153,33 +153,36 @@ run 定位顺序：**childToken → runId → hostSession（hook 注入的 `"<ho
 
 | 表 | 关键列 |
 |---|---|
-| `runs` | `id`, `parent_run_id`, `root_run_id`, `flow_id`, `flow_snapshot_hash`, `entry_node`, `current_node`, `status`, `cwd`, `project_name`, `mcp_session_id`, `child_token`, `steps_used`, `last_activity`, `created_at`, `finished_at` |
+| `runs` | `id`, `parent_run_id`, `root_run_id`, `flow_id`, `flow_snapshot_hash`, `entry_node`, `current_node`, `status`, `cwd`, `project_name`, `host_session`, `child_token`, `steps_used`, `last_activity`, `created_at`, `finished_at` |
 | `flow_snapshots` | `hash`, `content`（内容寻址去重） |
 | `node_executions` | `run_id`, `node_id`, `iteration`, `status`, `summary`, `payload`, `branch_id`, `started_at`, `finished_at` |
 | `gate_decisions` | `id`, `run_id`, `node_id`, `question`, `option_id`, `note`, `source`（`panel` \| `chat`）, `decided_at` |
 
 `runs.status`：`running` │ `waiting_gate` │ `waiting_children` │ `completed` │ `failed` │ `stale`
 
-## 6. MCP 接口契约
+## 6. Agent 工具契约
 
 ### 6.1 工具清单
 
+插件在 DSH 的 `ctx.tools` 上注册 8 个工具（DSH 侧统一带 `aiworkflow_` 前缀），和面板改同一份 SQLite。
+
 **执行类**
 
-| tool | 签名 | 说明 |
+| DSH 工具 | 签名 | 说明 |
 |---|---|---|
-| `start_run` | `{ flowName, cwd, projectName, inputs? }` | 建 run（含快照），返回纪律文本 + 第一步 |
-| `get_current_step` | `{ childToken? }` | **幂等**。返回"我在哪、要干啥"。上下文压缩后的恢复入口 |
-| `complete_step` | `{ summary, payload?, branchId, childToken? }` | 推进一格，返回下一步 |
-| `report_blocked` | `{ reason, childToken? }` | 干不下去，见 7.8 的处理规则 |
-| `await_gate` | `{ gateId }` | 长轮询上限 60 秒，超时返回"仍在等待，请再调一次" |
-| `answer_gate` | `{ gateId, optionId, note? }` | 代填用户在聊天中的答复，记 `source: 'chat'` |
+| `aiworkflow_start_run` | `{ flowName, cwd?, projectName? }` | 建 run（含快照），返回纪律文本 + 第一步 |
+| `aiworkflow_get_current_step` | `{ childToken? }` | **幂等**。返回"我在哪、要干啥"。上下文压缩后的恢复入口 |
+| `aiworkflow_complete_step` | `{ summary, payload?, branchId?, nodeId?, childToken? }` | 推进一格，返回下一步 |
+| `aiworkflow_report_blocked` | `{ reason, nodeId?, childToken? }` | 干不下去，见 7.8 的处理规则 |
+| `aiworkflow_await_gate` | `{ gateId?, childToken? }` | 长轮询上限 60 秒，超时返回"仍在等待，请再调一次" |
+| `aiworkflow_answer_gate` | `{ gateId?, optionId, note?, childToken? }` | 代填用户在聊天中的答复，记 `source: 'chat'` |
 
-**建图类**：`list_flows`、`get_flow`、`create_flow`、`update_flow`、`validate_flow`
+**建图类**：合并为 `aiworkflow_flow` 的 `action` 参数——`list` / `get` / `validate` / `create` / `update`。模型侧少背 4 个 schema，行为不变。
+另有只读的 `aiworkflow_context`（当前 DSH 会话、工作目录、库路径、流程与 run 计数）。
 
-**建图类挂在独立端点 `/mcp-build`（与执行端点 `/mcp` 分开，2026-09-08 决定）**：两套工具集互不可见——执行的 Agent 不被建图工具污染注意力，建图的 AI 也只拿到建图五件套。宿主里注册为两个 MCP server（建议名 `aiworkflow` 与 `aiworkflow-build`）。执行端的 `list_flows` 保留（薄 Skill 的入场链路依赖它），两端各有一份不冲突。
+**工具注册即入场，不需要 Skill 文件或安装器。** DSH 启动插件时 Host 半注册工具；Agent 在会话里直接看到它们。
 
-**建图类不做任何模式隔离，run 期间也可自由调用。** 运行时快照已保证 `update_flow` 不会打乱正在跑的 run；而阻止 `get_flow` 读图既拦不住有意为之的人（Agent 有文件工具），也与"引导而非约束"的定位矛盾。
+**建图类不做任何模式隔离，run 期间也可自由调用。** 运行时快照已保证 `update` 不会打乱正在跑的 run；而阻止 `get` 读图既拦不住有意为之的人（Agent 有文件工具），也与"引导而非约束"的定位矛盾。
 
 ### 6.2 单步返回结构
 
@@ -221,9 +224,9 @@ run 定位顺序：**childToken → runId → hostSession（hook 注入的 `"<ho
 
 所有拒绝路径均返回三段式：**错在哪 + 正确姿势 + 当前这一步是什么**。适用于 `branchId` 非法、`childToken` 过期、节点不匹配、跳步等情况。目标是一次往返修复，而非返回裸 error 导致卡死。
 
-### 6.4 纪律文本由服务端下发
+### 6.4 纪律文本由引擎下发
 
-完整的循环纪律**不写在 Skill 文件里**，而由 `start_run` 返回值下发。理由：Skill 文件装到宿主目录后不会跟随服务端升级，版本一漂就失配（服务端改了 tool 签名，Skill 仍在教旧用法）。
+完整的循环纪律**不写进静态说明文件**，而由 `start_run` 返回值下发。理由：静态文件不会跟随插件升级，版本一漂就失配（引擎改了工具签名，说明仍在教旧用法）。插件工具的描述只保留"什么时候用它"的短句，循环纪律始终以服务端返回为准。
 
 下发文本要点（引导语气）：
 
@@ -286,17 +289,17 @@ run 定位顺序：**childToken → runId → hostSession（hook 注入的 `"<ho
 
 ### 7.6 人工卡点
 
-`gate` 节点将 run 置为 `waiting_gate` 并写一条 pending `gate_decisions`。两个通道均可解决：
+`gate` 节点将 run 置为 `waiting_gate` 并写一条 pending `gate_decisions`。当前插件提供对话通道：
 
-- 面板直接点选（`source: 'panel'`）
-- Agent 调 `answer_gate` 代填用户在聊天中的答复（`source: 'chat'`）
+- 用户在对话里答复；Agent 调 `answer_gate` 代填（`source: 'chat'`）。
+- 引擎仍保留 `source: 'panel'` 的写入能力，供以后面板点选接入；当前插件面板只读展示待决卡点，不提供点选。
 
-两者都必须记录 `source`，否则事后回看轨迹无法分辨该卡点是在什么场景下放过的。
+放行时必须记录 `source`，否则事后回看轨迹无法分辨该卡点是在什么场景下放过的。
 
 实现落点（阶段 5 实测后补记）：
 
 - 下发给 Agent 的 gate 步只带 `gateId / question / options`，**不带 `branches`**——选项即出口，出口由人工选择，分支条件对 Agent 是噪音。
-- `gateId` 即 pending `gate_decisions` 行 id（数字串）；pending 期 `source` 置占位值 `pending`，放行时更新为 `panel` / `chat`。
+- `gateId` 即 pending `gate_decisions` 行 id（数字串）；pending 期 `source` 置占位值 `pending`，放行时更新为 `chat`（引擎也接受 `panel`，供后续 UI 接入）。
 - 放行时除更新决策行外，还落一条 `node_executions`（`completed`，payload 含 optionId / optionLabel / note / source）：后续节点可用 `{{gateId节点.payload.optionId}}` 插值，面板轨迹也天然能看到"谁在什么场景放的行"。
 - 选项按分支的 `outlet`（其次分支 id 同名）对应出口；**选项未连线时决策保留、run 判失败**（校验器存图时以警告档 `W_GATE_OPTION_UNWIRED` 提醒）；无任何分支与 `next` 的裸卡点记录决策即隐式收尾。
 - `await_gate` 是 400ms 粒度的 DB 轮询（上限 60 秒），不依赖进程内事件——与"事件只是刷新信号"的定位一致。
@@ -319,54 +322,24 @@ run 定位顺序：**childToken → runId → hostSession（hook 注入的 `"<ho
 
 child run 调 `report_blocked` 时，该 child 置为 `failed`，随后由 7.5 的失败处理接管。
 
-## 8. Skill 引导层与宿主集成
+## 8. DSH 插件接入
 
-**hook 只允许一种用途：身份注入**（2026-09-08 修订；原"不使用任何 hook"收窄，见 §8.1）。曾设计过的另两类 hook 仍然禁止：
+插件不引入任何 hook、Skill 安装器或状态注入层，Agent 侧只做两件事：
 
-- 拦截层（PreToolUse deny / 审批）与"引导而非约束"矛盾，且收益为负（Agent 在节点执行中顺手多读一个文件本是好事，拦下来纯属妨碍）
-- 状态注入层（往上下文塞提醒）仍然不做：注入层被砍后，业务语义不依赖任何宿主特定机制，可在任意 MCP 客户端运行
+1. **注册工具**：Host 半在 `ctx.tools` 上注册 §6.1 的 8 个工具；工具描述只说"什么时候用"，循环纪律由 `start_run` 返回值下发。
+2. **注册同源路由**：Host 半在 `ctx.webServer` 上挂 `/aiworkflow` 前缀路由，供 Client 半读取进度、读写流程图；不另起端口、不要 token。
 
-**代价与缓解**：上下文压缩后无人提醒，Agent 可能悄然脱离流程、按自己的方式完成任务。三层缓解——每个 tool 返回值复述状态、`get_current_step` 幂等可随时取回、纪律文本明确写"不记得就调它"。真正的兜底是面板的停滞检测。按"引导"定位，脱离流程本身不算灾难，只是失去逐步披露的收益。
+**激活条件**：插件声明 `inject: ['webServer', 'tools']`，缺少任一服务的 DSH 组合里 Host 半不激活，Client 界面也不会出现。
 
-### 8.1 宿主身份注入 hook（唯一允许的 hook 用途）
+**上下文压缩的缓解**：压缩后没有外部提醒，Agent 可能悄然脱离流程。三层缓解——每个工具返回值复述状态、`get_current_step` 幂等可随时取回、纪律文本明确写"不记得就调它"。按"引导"定位，脱离流程本身不算灾难，只是失去逐步披露的收益。
 
-宿主配置 PreToolUse hook 匹配 `mcp__aiworkflow__.*`，执行 `aiworkflow hook <host>`（`node <安装路径>/dist/src/cli.js hook claude-code|codex`）。它读 stdin 的事件 JSON，输出：
+### 8.1 会话身份
 
-```json
-{ "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "allow",
-  "updatedInput": { "…原 tool_input 原样回显…", "_host": "claude-code", "_sid": "<宿主会话id>", "_aid": "<agent_id，子 Agent 时才有>" } } }
-```
+主 Agent 的身份**只从 DSH 工具执行上下文取**：`exec.agent.id` 写成 `dsh:<sessionId>`，存进 `runs.host_session`。
+`get_current_step` / `complete_step` 等执行类工具不需要 Agent 传 `runId`；子 Agent 用服务端签发的 `childToken` 定位。
+不引入 `_host`/`_sid` 入参、MCP 会话 id 或 hook；模型不需要书写身份，也没有第二套身份来源。
 
-- **两端都支持**：Claude Code（settings.json hooks，command 型）与 Codex（hooks.json，command 型）的 PreToolUse 都支持 `allow + updatedInput` 整体替换工具入参，载荷公共字段都带稳定的会话级 `session_id`（Claude Code 为对话 UUID，Codex 为 thread id）。
-- **为什么它比 `Mcp-Session-Id` 可靠**：宿主会话 id 由 hook 注入、模型不书写也就不可能丢失；整场对话稳定，而传输层 id 在 Codex 上会因会话过期重握手而更换。服务端把 `_host:_sid` 组成 hostSession 绑定 run（§3 身份模型）。
-- **约束**：纯本地 stdin→stdout，不访问网络、不依赖服务进程；永不 deny（拦截层禁令适用）；任何解析失败静默放行（exit 0 无输出）。`allow` 顺带免确认本服务工具（本机 127.0.0.1 + token 鉴权，可接受；Codex 也不支持 ask）。`updatedInput` 必须完整回显原 tool_input（宿主语义是整体替换），hook 对已存在的 `_sid` 一律覆盖——注入的唯一权威。
-- **信任级别**：`_sid` 与 runId / childToken 同级，是身份提示而非安全边界（模型理论上可伪造，但 hook 每次调用都覆盖）。
-- **`_aid`**：子 Agent 的 agent_id（仅 Claude Code 携带）。阶段 6 前服务端不消费，仅透传剥离，为子 Agent 流量区分预留。
-- **未装 hook 时零破坏**：定位顺序里 hostSession 缺位自动落到 `Mcp-Session-Id`，行为与旧版一致。
-- **安装**：手动配置片段如下；`npx aiworkflow install` 自动写入是阶段 9 的任务。
-
-```jsonc
-// Claude Code — ~/.claude/settings.json
-{ "hooks": { "PreToolUse": [ { "matcher": "mcp__aiworkflow__.*",
-  "hooks": [ { "type": "command", "command": "node <安装路径>/dist/src/cli.js hook claude-code", "timeout": 15 } ] } ] } }
-
-// Codex — ~/.codex/hooks.json（command 型 handler，stdin 收 JSON）
-{ "PreToolUse": [ { "matcher": "mcp__aiworkflow__.*",
-  "hooks": [ { "type": "command", "command": "node <安装路径>/dist/src/cli.js hook codex", "timeout": 15 } ] } ] }
-```
-
-### 8.2 薄 Skill
-
-Skill 只管入场：列出可用流程、确认用哪个、调 `start_run`。几十行，很少变动。
-
-`npx aiworkflow install` 检测已安装的宿主并写入对应位置：
-
-| 宿主 | 入场文件位置 | hook 配置（§8.1） |
-|---|---|---|
-| Claude Code | Skill 目录 | `~/.claude/settings.json` 的 hooks 段 |
-| Codex | `~/.codex/prompts/` 自定义 prompt + AGENTS.md 片段 | `~/.codex/hooks.json` |
-
-### 8.3 子 Agent preamble
+### 8.2 子 Agent preamble
 
 `subagent` 节点下发时给出一段**必须原样前置、不许改写或摘要**的文本：
 
@@ -408,56 +381,33 @@ Skill 只管入场：列出可用流程、确认用哪个、调 `start_run`。�
 - 走过的路径高亮，**环要能看出绕了几圈**——同一节点多次执行时，侧栏按迭代次序列出每一次结果
 - 点节点 → 侧栏显示该次的 `summary`、`payload`、耗时、迭代序号
 - 子 Agent 按 run 树折叠展示；fan-out 的 N 个并排；**被 `max` 截断丢掉的显性列出**
-- 人工卡点可直接在此回答（按钮即 `options`）
+- 人工卡点在此只读展示问题与选项；用户在对话里回复选项，Agent 代填后这里自动继续
 - **停滞检测（已移除，2026-09-08 用户决定）**：原设计为 15 分钟标黄、24 小时自动标 `stale`。移除原因：AI 在执行中长时间暂停是常态（长任务、等待用户），按超时判异常会产生误导。系统不基于时间做任何状态改写；`stale` 状态仅作为历史遗留兼容展示。
 
-### 9.3 实时通道
+### 9.3 刷新方式
 
-**SSE，不用 WebSocket。** 推送是单向的（服务端 → 面板），面板的写操作（回答卡点、废弃 run）走普通 POST。少一个依赖、少一套重连逻辑。
+**Client 半轮询 Host 路由**（打开时 2 秒、收起时 6 秒，页面隐藏暂停），不使用 WebSocket 或 SSE。
+读走 `GET /aiworkflow/state`，写（建 run、图读写）走普通 POST/PUT/DELETE；卡点答复走 Agent 工具而不是 HTTP 路由。没有长连接，也不需要重连逻辑。
+`EngineEvent` 仍保留在引擎层，供进程内消费者使用；插件不把它接到网络通道。
 
-事件：`run_started` / `step_completed` / `gate_pending` / `child_spawned` / `run_finished`
+## 10. 验证方式
 
-## 10. 待实测的前提
-
-三个前提均已有一手答案（2026-09-08，官方文档 + Codex 源码 + 用户实机确认），剩余动作只是实机复核、与阶段验收合并做：
-
-1. ~~Claude Code / Codex 的 HTTP MCP 客户端是否遵循 `Mcp-Session-Id`？~~ **两端均按 Streamable HTTP 规范携带；Codex 会话过期后重新握手会更换 id**（源码 `reinitialize_after_session_expiry`）。该风险已被 §8.1 宿主会话注入消解：身份不再依赖传输层 id 的稳定性。
-2. ~~子 Agent 的调用是否复用父会话的同一 `Mcp-Session-Id`？~~ **是。** 两端子 Agent 的工具调用触发 hook 时都沿用父会话 id（Claude Code 另带 `agent_id` 区分，Codex 内部共享 `Arc<McpManager>`）。`childToken` 设计维持；hook 注入的 `_aid` 为阶段 6 提供额外区分手段。
-3. ~~Codex 是否具备子 Agent 派发能力、能否并行？~~ **已确认（2026-09-08，用户实机确认）：Claude CLI 与 Codex CLI 都支持子 Agent 并行。** `subagent` 节点与 fan-out 在两个宿主上都可用，原"不能并行则降级串行"的预案不再需要。
+- **引擎 / 校验 / 存储 / 迁移**：`vitest`，数据库用内存 `node:sqlite`，覆盖六种节点、分支/环/迭代上限、gate、子 Agent、fan-out、快照以及 v5→v6 迁移。
+- **类型与打包**：`npm run typecheck`（shared + 插件）与 `npm run build:plugin`；Host 产物必须只外置 `node:` 内建。
+- **DSH 实机**：在 `dsh web` 或桌面版里装载插件，跑一张含 gate 与 subagent 的图，验证工具注册、会话隔离、面板与运行图。
 
 ## 11. v1 范围外
 
 明确不做，但架构上不堵路：
 
-- **服务端直连执行 MCP 工具节点** — 若 `tool` 节点的目标本身是 MCP 工具，服务端可作为 MCP 客户端直接执行，使该节点成为真确定性。v1 不做，`tool` 节点仍由 Agent 执行并回报
+- **服务端直连执行 `tool` 节点** — 若目标工具可由 Host 半直接调用，可让该节点成为真确定性。v1 不做，`tool` 节点仍由 Agent 执行并回报
 - **从项目目录加载图** — 使流程可随项目提交进 git、与同事共享
 - **图的版本管理与 diff**
-- **拦截类与状态注入类 hook**（身份注入除外——那是 §8.1 唯一放行的用途；deny / 审批 / 往上下文塞提醒仍然不做）
+- **拦截类或状态注入类机制**（审批、往上下文塞提醒）——与"引导而非约束"矛盾
 
 ## 12. 已知局限
 
-1. **流程是建议性的。** MCP 是拉取式协议，服务端无中断能力。Agent 跳步或脱离流程只能事后发现并自愈返回，无法阻止。这是机制层面的性质，不是待修的缺陷——设计已按此前提展开。
+1. **流程是建议性的。** DSH 工具是拉取式接口，引擎没有中断能力。Agent 跳步或脱离流程只能事后发现并自愈返回，无法阻止。这是机制层面的性质，不是待修的缺陷——设计已按此前提展开。
 2. **"Agent 看不到图"是默认行为，不是安全边界。** Agent 有文件工具，可直接读 `~/.aiworkflow/flows/*.json`。该机制挡住的是"顺手读图"这一真实且高频的失效模式，而非有意为之的行为。
 3. **分支判断非确定性。** 条件是自然语言、由 Agent 判断。同样输入可能选不同分支。
 4. **图无法随项目共享。** 见 5.1。
-5. **Codex 并行能力。** 已确认 Claude CLI 与 Codex CLI 都支持子 Agent 并行（2026-09-08，见第 10 节第 3 项），fan-out 无需按宿主降级。
-
-## 13. 建议实现顺序
-
-本文档覆盖的范围偏大，实现计划应分阶段推进，每阶段结束时应有可实际运行、可验证的产物：
-
-| 阶段 | 内容 | 阶段末可验证的事 |
-|---|---|---|
-| 0 | 第 10 节的探针 | `Mcp-Session-Id` 行为、子 Agent 共享连接、Codex 并行能力三个前提有明确答案 |
-| 1 | SQLite 层 + 图 DSL 校验 + 快照机制 | 能手写一张图 JSON、存取、校验硬拒/警告正确 |
-| 2 | 执行引擎（串行：`prompt` / `tool` / `end`）+ MCP 执行类工具 + 薄 Skill | 能在 Claude Code 里真跑通一条无分支直线流程 |
-| 2.5 | 宿主身份注入 hook（§8.1：PreToolUse `updatedInput` 注入 `_host`/`_sid`） | 宿主装上 hook 后，MCP 会话失效（重连换 id）也不影响盲调 get_current_step 定位 |
-| 3 | 分支求值 + 环与迭代上限 + `report_blocked` | 能跑通含分支、含"测试失败回退重试"的环 |
-| 4 | 监控面板（run 列表 + 详情 + SSE） | 能在浏览器里看到第 2、3 阶段的执行轨迹 |
-| 5 | `gate` 节点 + 双通道回答 | 流程能挂起等人工确认，面板和聊天两条路都能放行 |
-| 6 | `subagent` 节点（`inline` / `subflow` / `flowRef`）+ `join` | 能跑通单个子 Agent 的派发与汇聚 |
-| 7 | fan-out 并行 + 部分失败重试 | 能跑通"按模块数派 N 个子 Agent"并正确汇聚，失败重试与标黄可见 |
-| 8 | 图编辑器（React Flow） | 不写 JSON 也能建图 |
-| 9 | 建图类 MCP 工具 + `npx aiworkflow install` | AI 能自己建图；安装命令能装到两个宿主 |
-
-阶段 8 刻意排在很后面：编辑器是最耗工时但风险最低的部分，而前 7 个阶段可以靠手写图 JSON 完成验证。把不确定性高的引擎语义先跑通，避免编辑器围着一个还在变的 DSL 反复改。

@@ -11681,14 +11681,14 @@ function Inspector(props) {
 		className: "wf-area",
 		value: body.instruction ?? "",
 		onChange: (event) => patch({ instruction: event.target.value }),
-		placeholder: "例如：读 docs/ROADMAP.md，列出阶段 8 的验收项"
+		placeholder: "例如：读 docs/README.md，列出必读文档"
 	}), /* @__PURE__ */ react.createElement(InterpHints, {
 		nodes: others,
 		payloadFields: props.payloadFields,
 		areaRef: instrRef
 	}))), body.type === "tool" && /* @__PURE__ */ react.createElement(Section, { title: "工具调用" }, /* @__PURE__ */ react.createElement(Field, {
 		label: "工具名",
-		hint: "MCP 工具名，例如 web_search、read"
+		hint: "Agent 可调用的工具名，例如 web_search、read"
 	}, /* @__PURE__ */ react.createElement("input", {
 		className: "wf-input",
 		value: body.toolName ?? "",
@@ -11722,7 +11722,7 @@ function Inspector(props) {
 	}, /* @__PURE__ */ react.createElement("option", { value: "inline" }, "inline — 同一会话内执行"), /* @__PURE__ */ react.createElement("option", { value: "flowRef" }, "flowRef — 引用另一张图"), /* @__PURE__ */ react.createElement("option", {
 		value: "subflow",
 		disabled: true
-	}, "subflow — 内嵌子图（面板暂不支持）"))), body.mode === "subflow" && /* @__PURE__ */ react.createElement("div", { className: "wf-hint wf-hint-warn" }, "当前节点是 subflow 模式，但面板暂不支持编辑内嵌子图；保存会被校验器拒绝（缺少子图）。请用 MCP 建图工具或主工程编辑器改它。"), body.mode === "flowRef" && /* @__PURE__ */ react.createElement(Field, {
+	}, "subflow — 内嵌子图（面板暂不支持）"))), body.mode === "subflow" && /* @__PURE__ */ react.createElement("div", { className: "wf-hint wf-hint-warn" }, "当前节点是 subflow 模式，但面板暂不支持编辑内嵌子图；保存会被校验器拒绝（缺少子图）。请用 aiworkflow_flow 工具改它。"), body.mode === "flowRef" && /* @__PURE__ */ react.createElement(Field, {
 		label: "引用的图",
 		hint: "目标图必须已保存；run 启动时按 id 递归解析"
 	}, /* @__PURE__ */ react.createElement("select", {
@@ -13156,10 +13156,10 @@ var ZH = {
 	trace: "执行轨迹",
 	"trace.empty": "还没有执行记录",
 	"gate.title": "等待人工确认",
-	"gate.hint": "在 aiworkflow 面板中点选后，这里会自动继续。",
+	"gate.hint": "在对话里回复选项后，这里会自动继续。",
 	loading: "读取中…",
 	"empty.noDb": "还没有 aiworkflow 数据",
-	"empty.noDbHint": "在项目里运行 npx aiworkflow 后，这里会自动出现正在执行的流程。",
+	"empty.noDbHint": "先在「可视化工作流」里新建并保存一张图，这里会自动出现正在执行的流程。",
 	"empty.noRuns": "还没有 run",
 	"empty.noRunsHint": "等主 Agent 领取第一步后，进度就会出现在这里。",
 	"empty.dbPath": "数据库",
@@ -13193,10 +13193,10 @@ var EN = {
 	trace: "Trace",
 	"trace.empty": "No executions yet",
 	"gate.title": "Waiting for a decision",
-	"gate.hint": "Pick an option in the aiworkflow panel; this view follows automatically.",
+	"gate.hint": "Reply with an option in the conversation; this view follows automatically.",
 	loading: "Loading…",
 	"empty.noDb": "No aiworkflow data yet",
-	"empty.noDbHint": "Run npx aiworkflow in a project and this view starts following the run.",
+	"empty.noDbHint": "Create and save a flow in Visual Workflows and this view starts following the run.",
 	"empty.noRuns": "No runs yet",
 	"empty.noRunsHint": "Progress appears here once the main agent claims its first step.",
 	"empty.dbPath": "Database",

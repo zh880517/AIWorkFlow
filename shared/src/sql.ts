@@ -13,13 +13,27 @@ import type {
 
 export type SqlParam = string | number | null;
 
+/** 写入语句的返回值；两种 SQLite 驱动都返回 number 或 bigint */
+export interface SqlRunResult {
+  changes: number | bigint;
+  lastInsertRowid: number | bigint;
+}
+
 export interface SqlStatement {
   get(...params: SqlParam[]): unknown;
   all(...params: SqlParam[]): unknown[];
+  run(...params: SqlParam[]): SqlRunResult;
 }
 
+/** 只读连接需要的最小能力 */
 export interface SqlDatabase {
   prepare(sql: string): SqlStatement;
+}
+
+/** 可写连接需要的最小能力（node:sqlite 的 DatabaseSync 直接满足） */
+export interface SqlWriter extends SqlDatabase {
+  exec(sql: string): void;
+  transaction<T>(fn: () => T): () => T;
 }
 
 const ACTIVE_STATUSES = ['running', 'waiting_gate', 'waiting_children'] as const;

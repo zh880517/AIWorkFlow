@@ -1,8 +1,8 @@
-// 表结构与迁移（与驱动无关）。主的 CLI 用 better-sqlite3，DSH 插件用 node:sqlite，
-// 两边共用这一份 MIGRATIONS：唯一事实源的表结构不能被复制成两份。
+// 表结构与迁移（与驱动无关）。插件用 node:sqlite，测试用同一份 MIGRATIONS：
+// 唯一事实源的表结构不能被复制成两份。
 // 适配层只需实现 exec / userVersion / setUserVersion / transaction 四个动作。
 
-/** 迁移需要的最小连接能力（better-sqlite3 与 node:sqlite 各自适配） */
+/** 迁移需要的最小连接能力（node:sqlite 适配层实现） */
 export interface SchemaDb {
   exec(sql: string): void;
   userVersion(): number;
@@ -71,7 +71,7 @@ export const MIGRATIONS: string[] = [
   );
   CREATE INDEX IF NOT EXISTS idx_gates_run ON gate_decisions(run_id);
   `,
-  // v2：阶段 2.5 宿主身份注入——run 绑定宿主会话 id（"<host>:<sid>"，由 PreToolUse hook 注入）
+  // v2：run 绑定 DSH 会话 id（"dsh:<sessionId>"，来自工具执行上下文）
   `
   ALTER TABLE runs ADD COLUMN host_session TEXT;
   CREATE INDEX IF NOT EXISTS idx_runs_host_session ON runs(host_session);
@@ -91,6 +91,10 @@ export const MIGRATIONS: string[] = [
   `
   ALTER TABLE runs ADD COLUMN fanout_item TEXT;
   `,
+  // v6：移除 MCP 会话锚点——只支持 DSH 插件，run 的会话身份统一由 host_session 承担
+  `
+  ALTER TABLE runs DROP COLUMN mcp_session_id;
+  `,
 ];
 
 /** 逐级迁移；库版本高于程序支持版本时拒绝启动，避免旧代码写坏新库 */
@@ -98,7 +102,7 @@ export function migrateSchema(db: SchemaDb): void {
   const version = db.userVersion();
   if (version > MIGRATIONS.length) {
     throw new Error(
-      `数据库版本 ${version} 高于当前程序支持的 ${MIGRATIONS.length}，请升级 aiworkflow（或 DSH 插件）后再试。`,
+      `数据库版本 ${version} 高于当前程序支持的 ${MIGRATIONS.length}，请升级 aiworkflow DSH 插件后再试。`,
     );
   }
   for (let v = version; v < MIGRATIONS.length; v++) {

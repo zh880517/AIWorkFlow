@@ -1,6 +1,6 @@
 // 公用层：把 run 详情折叠成界面要的"进度语义"（纯函数，无 IO）。
 //
-// 主工程面板和 DSH 插件都用它，保证两边对"第几步 / 走到哪 / 卡在哪个节点"的理解一致。
+// 面板与 Agent 工具都用它，保证对"第几步 / 走到哪 / 卡在哪个节点"的理解一致。
 import type { Flow, FlowSnapshot } from './types.js';
 import type { RunDetail, RunExecutionItem, RunListItem } from './runTypes.js';
 

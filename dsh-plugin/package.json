@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "在 DeepSeek Harness 里就地查看 aiworkflow 流程图的执行进度",
+  "description": "在 DeepSeek Harness 里画流程图、发起 run 并查看执行进度",
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",

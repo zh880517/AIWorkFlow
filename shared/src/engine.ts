@@ -6,8 +6,8 @@
 // - 降噪下发：branches 剥离 to、progress 不含总数；每个响应复述 runId + nodeId
 // - 自愈式报错：所有拒绝路径返回三段式（错在哪 + 正确姿势 + 当前这一步）
 import crypto from 'node:crypto';
-import type Database from 'better-sqlite3';
 import type { Flow, FlowNode, FlowSnapshot, GateNode, JoinNode, NodeType, SubagentNode } from './types.js';
+import type { SqlWriter } from './sql.js';
 import { buildSnapshot, buildSubSnapshot, loadSnapshot, persistSnapshot } from './snapshot.js';
 import { validateFlow } from './validate.js';
 
@@ -89,17 +89,15 @@ export interface StartRunParams {
   cwd?: string;
   projectName?: string;
   inputs?: Record<string, unknown>;
-  /** 宿主会话 id（"<host>:<sid>"，PreToolUse hook 注入），主 Agent 的首要身份锚点，重连不变 */
+  /** DSH 会话绑定（`dsh:<sessionId>`），主 Agent 的身份锚点 */
   hostSession?: string;
-  /** 宿主 MCP 会话 id（Mcp-Session-Id），传输层兜底锚点；Codex 侧会话过期重握手会更换 */
-  mcpSessionId?: string;
 }
 
-/** run 定位：子 Agent 用 childToken；主 Agent 用 runId 或会话绑定 */
+/** run 定位：子 Agent 用 childToken；主 Agent 用 runId 或 DSH 会话绑定 */
 export interface RunRef {
   runId?: string;
   childToken?: string;
-  /** 宿主会话 id（hook 注入），优先于 mcpSessionId */
+  /** DSH 会话绑定（`dsh:<sessionId>`） */
   hostSession?: string;
 }
 
@@ -117,7 +115,7 @@ export interface ReportBlockedParams extends RunRef {
   nodeId?: string;
 }
 
-/** answer_gate（§7.6）：代填用户在聊天中的答复（source: chat）；面板点选走 HTTP 端点（source: panel） */
+/** answer_gate（§7.6）：代填用户在聊天中的答复（source: chat）；source: panel 保留给面板点选接入，当前插件未提供该 UI */
 export interface AnswerGateParams extends RunRef {
   /** 卡点 id（gate 步骤下发里的 gateId）；省略则按 run 定位当前挂起卡点 */
   gateId?: string;
@@ -130,7 +128,7 @@ export interface AwaitGateParams extends RunRef {
   gateId?: string;
 }
 
-/** 引擎事件（§9.3 SSE 的数据源）。core 层只回调不落地传输——HTTP/SSE 由 server 层接线 */
+/** 引擎事件（§9.3 面板刷新的数据源）。核心层只回调不落地传输——由插件决定怎么消费 */
 export type EngineEvent =
   | { type: 'run_started'; runId: string; flowId: string; at: string }
   | { type: 'step_completed'; runId: string; nodeId: string; status: 'completed' | 'blocked' | 'limit_exceeded'; at: string }
@@ -198,15 +196,16 @@ interface GateDecisionRow {
 }
 
 export interface EngineDeps {
-  db: Database.Database;
+  /** 可写 SQLite 连接（插件用 node:sqlite，测试用内存库） */
+  db: SqlWriter;
   /** 按图 id 或展示名解析（start_run 的 flowName） */
   resolveFlow(flowName: string): Flow | undefined;
-  /** 引擎事件回调（SSE 数据源，§9.3）；不传则丢弃 */
+  /** 引擎事件回调（§9.3）；不传则丢弃 */
   onEvent?: (event: EngineEvent) => void;
 }
 
 export class ExecutionEngine {
-  private readonly db: Database.Database;
+  private readonly db: SqlWriter;
   private readonly resolveFlow: (name: string) => Flow | undefined;
   private readonly emit: (event: EngineEvent) => void;
 
@@ -257,10 +256,10 @@ export class ExecutionEngine {
     this.db
       .prepare(
         `INSERT INTO runs (id, root_run_id, flow_id, flow_snapshot_hash, entry_node, current_node,
-           status, cwd, project_name, host_session, mcp_session_id, steps_used, last_activity, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, 0, ?, ?)`,
+           status, cwd, project_name, host_session, steps_used, last_activity, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, 0, ?, ?)`,
       )
-      .run(runId, runId, flow.id, hash, flow.entry, flow.entry, params.cwd ?? null, params.projectName ?? null, params.hostSession ?? null, params.mcpSessionId ?? null, now, now);
+      .run(runId, runId, flow.id, hash, flow.entry, flow.entry, params.cwd ?? null, params.projectName ?? null, params.hostSession ?? null, now, now);
     this.emit({ type: 'run_started', runId, flowId: flow.id, at: now });
 
     // 入口即卡点：start 后直接挂起等人工（§7.6）
@@ -281,8 +280,8 @@ export class ExecutionEngine {
   /** 幂等。返回"我在哪、要干啥"；上下文压缩后的恢复入口。
    *  例外（§7.5）：主 Agent 在派发步上（waiting_children）调用即触发汇聚——
    *  前提是宿主的 Task 调用已返回，此时 children 该完成的都完成了，没完成的按"未回报"处理。 */
-  getCurrentStep(ref: RunRef, mcpSessionId?: string): StepOpResult {
-    const run = this.resolveRun(ref, mcpSessionId);
+  getCurrentStep(ref: RunRef): StepOpResult {
+    const run = this.resolveRun(ref);
     if (run === null) {
       return selfHeal(
         ref.childToken !== undefined
@@ -298,8 +297,8 @@ export class ExecutionEngine {
   }
 
   /** 推进一格：校验 → 落库 → 定位后继（含迭代上限逃生）→ 渲染插值 → 返回下一步 */
-  completeStep(params: CompleteStepParams, mcpSessionId?: string): StepOpResult {
-    const run = this.resolveRun(params, mcpSessionId);
+  completeStep(params: CompleteStepParams): StepOpResult {
+    const run = this.resolveRun(params);
     if (run === null) {
       return selfHeal(
         params.childToken !== undefined
@@ -417,8 +416,8 @@ export class ExecutionEngine {
   }
 
   /** 干不下去了（§7.8）：落 blocked 轨迹，三级出口 onLimitExceeded → default 分支 → run 判失败。不做自动重试 */
-  reportBlocked(params: ReportBlockedParams, mcpSessionId?: string): StepOpResult {
-    const run = this.resolveRun(params, mcpSessionId);
+  reportBlocked(params: ReportBlockedParams): StepOpResult {
+    const run = this.resolveRun(params);
     if (run === null) {
       return selfHeal(
         params.childToken !== undefined
@@ -437,7 +436,7 @@ export class ExecutionEngine {
     if (run.status === 'waiting_children') {
       return selfHeal(
         '这一步是子 Agent 派发步，不是阻塞点。',
-        '等全部子任务返回后调 get_current_step() 汇聚；确实派不出去（宿主不支持派子 Agent）就请用户改图，去掉 subagent 节点后重跑。',
+        '等全部子任务返回后调 get_current_step() 汇聚；确实派不出去（例如 DSH 侧没有可用的子 Agent）就请用户改图，去掉 subagent 节点后重跑。',
         this.currentRef(run),
       );
     }
@@ -516,9 +515,9 @@ export class ExecutionEngine {
     return this.resultForPlan(run.id, snapshot, plan);
   }
 
-  /** 卡点放行（§7.6）：面板点选（source: panel）或 Agent 代填聊天答复（source: chat）。
+  /** 卡点放行（§7.6）：source 记录来源；当前插件走 chat，panel 保留给后续面板点选接入。
    *  决策记 gate_decisions（含来源），并落一条 completed 轨迹（payload 带选项与来源）供插值与回看。 */
-  answerGate(params: AnswerGateParams, source: 'panel' | 'chat', mcpSessionId?: string): StepOpResult {
+  answerGate(params: AnswerGateParams, source: 'panel' | 'chat'): StepOpResult {
     // 定位挂起卡点：gateId 直查；省略则按 run ref 找当前挂起点
     let run: RunRow | null = null;
     let row: GateDecisionRow | null = params.gateId !== undefined ? this.pendingGateById(params.gateId) : null;
@@ -540,7 +539,7 @@ export class ExecutionEngine {
       );
     }
     if (row === null) {
-      run = this.resolveRun(params, mcpSessionId);
+      run = this.resolveRun(params);
       if (run === null) {
         return selfHeal(
           params.childToken !== undefined
@@ -641,11 +640,11 @@ export class ExecutionEngine {
   }
 
   /** 长轮询等卡点答复（§7.6）：上限默认 60 秒，到点返回"仍在等待，请再调一次"；已答复（或已不在卡点）返回当前状态 */
-  async awaitGate(params: AwaitGateParams, mcpSessionId?: string, timeoutMs = 60_000): Promise<StepOpResult> {
+  async awaitGate(params: AwaitGateParams, timeoutMs = 60_000): Promise<StepOpResult> {
     const deadline = Date.now() + timeoutMs;
     for (;;) {
       let row: GateDecisionRow | null = params.gateId !== undefined ? this.pendingGateById(params.gateId) : null;
-      let run: RunRow | null = row !== null ? this.runById(row.run_id) : this.resolveRun(params, mcpSessionId);
+      let run: RunRow | null = row !== null ? this.runById(row.run_id) : this.resolveRun(params);
       if (row !== null && run === null) {
         return selfHeal(`卡点 ${row.id} 所属的 run 不存在（${row.run_id}），数据异常。`, '这是服务端数据问题，请把这条错误原样反馈给用户。', null);
       }
@@ -1186,8 +1185,8 @@ private childFlowOf(run: RunRow, node: SubagentNode, snapshot: FlowSnapshot, fan
     ).c;
   }
 
-  /** run 定位顺序：childToken（子 Agent）→ runId（显式）→ hostSession（宿主会话，hook 注入）→ mcpSessionId（传输层兜底） */
-  private resolveRun(ref: RunRef, mcpSessionId?: string): RunRow | null {
+  /** run 定位顺序：childToken（子 Agent）→ runId（显式）→ hostSession（DSH 会话绑定） */
+  private resolveRun(ref: RunRef): RunRow | null {
     if (ref.childToken !== undefined) {
       return this.runBy('child_token = ?', ref.childToken);
     }
@@ -1195,27 +1194,23 @@ private childFlowOf(run: RunRow, node: SubagentNode, snapshot: FlowSnapshot, fan
       return this.runBy('id = ?', ref.runId);
     }
     if (ref.hostSession !== undefined) {
-      const run = this.latestRunBy('host_session', ref.hostSession);
-      if (run !== null) return run;
-    }
-    if (mcpSessionId !== undefined) {
-      return this.latestRunBy('mcp_session_id', mcpSessionId);
+      return this.latestRunByHostSession(ref.hostSession);
     }
     return null;
   }
 
-  /** 按会话列定位：优先活跃 run；没有时回落到最近的 run（已终结也能答"跑完了"而不是"找不到"）。rowid 决胜同一毫秒的建 run */
-  private latestRunBy(column: 'host_session' | 'mcp_session_id', value: string): RunRow | null {
+  /** 按 DSH 会话定位：优先活跃 run；没有时回落到最近的 run（已终结也能答"跑完了"而不是"找不到"）。rowid 决胜同一毫秒的建 run */
+  private latestRunByHostSession(hostSession: string): RunRow | null {
     const active = this.db
       .prepare(
-        `SELECT * FROM runs WHERE ${column} = ? AND status IN ('running', 'waiting_gate', 'waiting_children') ORDER BY created_at DESC, rowid DESC LIMIT 1`,
+        `SELECT * FROM runs WHERE host_session = ? AND status IN ('running', 'waiting_gate', 'waiting_children') ORDER BY created_at DESC, rowid DESC LIMIT 1`,
       )
-      .get(value) as RunRow | undefined;
+      .get(hostSession) as RunRow | undefined;
     if (active !== undefined) return active;
     return (
       (this.db
-        .prepare(`SELECT * FROM runs WHERE ${column} = ? ORDER BY created_at DESC, rowid DESC LIMIT 1`)
-        .get(value) as RunRow | undefined) ?? null
+        .prepare(`SELECT * FROM runs WHERE host_session = ? ORDER BY created_at DESC, rowid DESC LIMIT 1`)
+        .get(hostSession) as RunRow | undefined) ?? null
     );
   }
 
@@ -1501,7 +1496,7 @@ function selfHeal(
   return { error: true, what, guidance, current };
 }
 
-/** await_gate 轮询间隔让出事件循环（better-sqlite3 同步查询本身不阻塞） */
+/** await_gate 轮询间隔让出事件循环（SQLite 同步查询本身不阻塞） */
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }

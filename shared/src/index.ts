@@ -1,4 +1,4 @@
-// 公用层入口：DSH 插件的 Host/Client 两半与主工程面板共用这里的契约与纯逻辑。
+// 公用层入口：DSH 插件的 Host/Client 两半共用这里的契约与纯逻辑。
 export * from './types.js';
 export * from './runTypes.js';
 export * from './sql.js';

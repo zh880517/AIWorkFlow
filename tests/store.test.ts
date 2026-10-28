@@ -2,15 +2,15 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { openMemoryDb } from '../src/core/db.js';
-import { FlowStore } from '../src/core/flowStore.js';
+import { openMemoryDb } from './support/db.js';
+import { FlowStore } from './support/flowStore.js';
 import {
   buildSnapshot,
   loadSnapshot,
   persistSnapshot,
   snapshotHash,
-} from '../src/core/snapshot.js';
-import type { Flow } from '../src/core/types.js';
+} from '../shared/src/snapshot.js';
+import type { Flow } from '../shared/src/types.js';
 
 let tmpHome: string;
 

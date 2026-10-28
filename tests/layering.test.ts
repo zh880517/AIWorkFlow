@@ -1,5 +1,5 @@
-// 层次约束守门：公用层（shared/）是最底层，主工程（src/）与插件（dsh-plugin/）都只能单向依赖它。
-// 任何一边反向 import 都会在打包时把不该进包的东西拖进来（插件以前直接 import ../../src/core/engine）。
+// 层次约束守门：公用层（shared/）是最底层，插件（dsh-plugin/）只能单向依赖它。
+// 任何反向 import 都会在打包时把不该进包的东西拖进来。
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -37,39 +37,45 @@ function specifiers(text: string): string[] {
   return found;
 }
 
-/** 相对主工程源码的引用（src/core、src/server、src/web …） */
-function pointsAtMainSrc(specifier: string): boolean {
-  return /(^|\/)src\/(core|server|web|cli|install|hook)(\/|$)/.test(specifier);
+/** 相对说明符必须解析到指定目录内，挡住 `../../src` / `../../dsh-plugin` 这类越界 */
+function escapes(file: string, specifier: string, allowedDir: string): boolean {
+  if (!specifier.startsWith('.')) return false;
+  const resolved = path.resolve(path.dirname(file), specifier);
+  const rel = path.relative(allowedDir, resolved);
+  return rel === '' || rel.startsWith('..') || path.isAbsolute(rel);
 }
 
-describe('层次约束：插件与公用层不反向引用主工程 src/', () => {
-  it('dsh-plugin/src 只引用 @shared/* 与自身相对路径', () => {
+describe('层次约束：插件只依赖 shared/', () => {
+  const sharedSrc = path.join(root, 'shared', 'src');
+  const pluginSrc = path.join(root, 'dsh-plugin', 'src');
+
+  it('dsh-plugin/src 只引用 @shared/*、自身目录内的相对路径与 node: 内建', () => {
     const bad: string[] = [];
-    for (const file of walk(path.join(root, 'dsh-plugin', 'src'))) {
+    for (const file of walk(pluginSrc)) {
       for (const specifier of specifiers(fs.readFileSync(file, 'utf8'))) {
-        if (pointsAtMainSrc(specifier)) bad.push(`${path.relative(root, file)} → ${specifier}`);
+        if (specifier.startsWith('.')) {
+          if (escapes(file, specifier, pluginSrc)) bad.push(`${path.relative(root, file)} → ${specifier}`);
+          continue;
+        }
+        if (specifier.startsWith('@shared/') || specifier.startsWith('node:')) continue;
+        // 构建期第三方依赖（React / React Flow）允许
+        if (specifier === 'react' || specifier === 'react-dom' || specifier.startsWith('react/')) continue;
+        if (specifier.startsWith('@xyflow/')) continue;
+        bad.push(`${path.relative(root, file)} → ${specifier}`);
       }
     }
-    expect(bad, '插件里出现了 src/ 引用，把逻辑挪到 shared/src/ 并从 @shared/* import').toEqual([]);
+    expect(bad, '插件里出现了 shared/ 之外的依赖，把共用逻辑挪到 shared/src/').toEqual([]);
   });
 
-  it('shared/src 只引用自身相对路径与 node: 内建', () => {
+  it('shared/src 只引用自身目录内的相对路径与 node: 内建', () => {
     const bad: string[] = [];
-    for (const file of walk(path.join(root, 'shared', 'src'))) {
+    for (const file of walk(sharedSrc)) {
       for (const specifier of specifiers(fs.readFileSync(file, 'utf8'))) {
-        if (pointsAtMainSrc(specifier)) bad.push(`${path.relative(root, file)} → ${specifier}`);
+        if (specifier.startsWith('node:')) continue;
+        if (specifier.startsWith('.') && !escapes(file, specifier, sharedSrc)) continue;
+        bad.push(`${path.relative(root, file)} → ${specifier}`);
       }
     }
-    expect(bad, '公用层不能依赖主工程：把被依赖的逻辑也挪进 shared/src/').toEqual([]);
-  });
-
-  it('主工程 src/ 不引用插件实现（插件是消费方，不是依赖）', () => {
-    const bad: string[] = [];
-    for (const file of walk(path.join(root, 'src'))) {
-      for (const specifier of specifiers(fs.readFileSync(file, 'utf8'))) {
-        if (/(^|\/)dsh-plugin(\/|$)/.test(specifier)) bad.push(`${path.relative(root, file)} → ${specifier}`);
-      }
-    }
-    expect(bad).toEqual([]);
+    expect(bad, '公用层不能依赖插件：把被依赖的逻辑也挪进 shared/src/').toEqual([]);
   });
 });

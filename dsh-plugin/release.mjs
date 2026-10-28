@@ -92,9 +92,9 @@ function indexStillValid(current) {
   return true;
 }
 
-// 0) 防呆：shared/ 同时影响主工程，必须先进版本库，否则产物对不上任何提交
+// 0) 防呆：shared/ 会被内联进插件产物，必须先进版本库，否则产物对不上任何提交
 if (!noCommit && dirty(['shared/src'])) {
-  console.error('shared/src/ 有未提交改动：先提交它（主工程也用这份代码），再跑一键生成。');
+  console.error('shared/src/ 有未提交改动：先提交它（插件产物包含这份代码），再跑一键生成。');
   process.exit(1);
 }
 

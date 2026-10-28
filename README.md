@@ -5,10 +5,9 @@
 它解决的不是「Agent 不听话」，而是「一次把几千字流程灌进去，它就不专注了」。流程图在这里的作用是描述
 **何时披露什么**，而不是当笼子。Agent 每领一步 → 做完回报 `summary`/`payload` → 再领下一步。
 
-两种用法，同一套引擎、同一份 SQLite：
-
-- **DeepSeek Harness 插件**：在 DSH 会话里直接发起 run、看进度与运行图、在画布上编辑流程图；
-- **本地 MCP 服务**（`npx aiworkflow`）：给 Claude Code / Codex / 任意 MCP 客户端用，自带 Web 面板。
+这是一个 **DeepSeek Harness（DSH）插件**：不依赖独立服务，也不支持其它 Agent 客户端。
+插件 Host 半直接用 `node:sqlite` 打开 `~/.aiworkflow/aiworkflow.db`，执行引擎复用 `shared/` 里的同一份实现；
+Client 半在 DSH 里提供画布编辑器、进度面板和只读运行图。
 
 ---
 
@@ -21,7 +20,7 @@
 - 卡点**一个选项一个出口**：没连线的出口名字挂在节点右侧，可以从它拖线（或点名字再点目标节点）；
 - 属性面板按节点类型给出字段入口（工具参数、fan-out、迭代上限、逃生节点、`flowRef`/`waitFor` 下拉）；
 - 改动后实时校验：页头显示「校验通过 / 几条警告 / 几处硬拒」，点条目直接定位到节点；
-- 保存前跑与 CLI 完全相同的 `validateFlow`，不通过不会写库，原图保持不变。
+- 保存前跑与 Agent 工具完全相同的 `validateFlow`，不通过不会写库，原图保持不变。
 
 ### 跑：把流程交给 Agent 执行
 
@@ -29,15 +28,14 @@
 - **分支用自然语言**：Agent 自己判断该走哪条；`*` 表示默认分支；
 - **数据传递**：`complete_step` 回报 `summary`（给人看）+ `payload`（给机器用），后续节点可用 `{{节点.payload.字段}}` 插值；
 - **子 Agent**：`inline` / `flowRef` 两种模式，支持 `fanOut`（按数组或固定数量并行）与 `join` 汇总；
-- **人工卡点**：run 挂起等人，面板点选（`source: panel`）或在对话里答复（`source: chat`）后继续；
+- **人工卡点**：run 挂起等人；用户在对话里答复，Agent 用 `answer_gate` 代填（`source: chat`）后继续；
 - **循环可控**：节点级 `iterationLimit`，撞上限可跳到逃生节点，也可以直接判失败。
 
-### 看：进度、路径与运行图
+### 看：进度与运行图
 
-- **DSH**：标题栏状态胶囊 + 浮动面板（当前步、卡点、已走路径、执行轨迹、payload），以及只读运行图
-  （节点按状态着色、走过的边高亮、点节点看这一步的记录）；
-- **CLI 面板**：编辑器 + run 监控，SSE 实时推送；
-- **历史**：所有 run 落 SQLite，随时回看当时的快照与轨迹。
+- 标题栏状态胶囊 + 浮动面板（当前步、卡点、已走路径、执行轨迹、payload）；
+- 只读运行图：节点按状态着色、走过的边高亮、点节点看这一步的记录；
+- 所有 run 落 SQLite，切换会话/重开面板都能按 `dsh:<sessionId>` 找回当时的快照与轨迹。
 
 ---
 
@@ -66,17 +64,16 @@
 
 ---
 
-## 使用方式
+## 安装
 
-### 一、装进 DeepSeek Harness（推荐）
-
-仓库里已经带了构建好的产物，安装时不需要 clone、不需要在本机构建。侧栏 **Plugins → Add plugin**，粘贴：
+仓库里已经带了构建好的产物，安装时不需要 clone、不需要在本机构建。DSH 侧栏
+**Plugins → Add plugin**，粘贴：
 
 ```
 git+https://github.com/zh880517/AIWorkFlow.git#main&path:/dsh-plugin
 ```
 
-- `#main` 跟随主分支；要固定版本就换成 commit（只能钉在包含构建产物的提交上，`f57374a` 之后都行）；
+- `#main` 跟随主分支；要固定版本就换成 commit（只能钉在包含构建产物的提交上，用 `git log --oneline -- dsh-plugin/index.js` 查）；
 - `&path:/dsh-plugin` 指定插件在仓库子目录里；
 - 装完自动加入 profile 的 bundle 列表并启用，重开 DSH 生效。
 
@@ -94,36 +91,14 @@ https://raw.githubusercontent.com/zh880517/AIWorkFlow/main/dsh-plugin/market/ind
 - 对话输入框左侧的「工作流」按钮列出所有图，选一张就直接建 run（不发聊天消息）；
 - 跑起来后标题栏出现胶囊，点开是进度面板；面板里可以打开「运行图」。
 
-### 二、作为 MCP 服务给任意 Agent 用
+---
 
-```bash
-npm install
-npm run build            # tsc → dist/，vite → dist-web/
-npm start                # 或 node dist/src/cli.js
-```
+## 一次 run 的样子
 
-启动后打印面板 / MCP / 建图 MCP 三个地址（另有 `/api` 只读接口）；token 每次启动随机，可用 `AIWORKFLOW_TOKEN` 固定：
-
-| 地址 | 用途 |
-|---|---|
-| `http://127.0.0.1:4123/?k=<token>` | Web 面板：画图 + 看 run |
-| `http://127.0.0.1:4123/mcp?k=<token>` | 执行类 MCP：`list_flows` `start_run` `get_current_step` `complete_step` `report_blocked` `await_gate` `answer_gate` |
-| `http://127.0.0.1:4123/mcp-build?k=<token>` | 建图类 MCP：`list_flows` `get_flow` `validate_flow` `create_flow` `update_flow` |
-
-宿主接入（以 Claude Code 为例）：
-
-```bash
-claude mcp add aiworkflow --transport http "http://127.0.0.1:4123/mcp?k=<token>"
-```
-
-`npx aiworkflow install` 会写 Skill / hooks 配置；hook 负责把宿主会话 id 注入工具入参，run 才能稳定绑定到会话。
-
-### 一次 run 的样子
-
-1. 在面板（或插件）里画好图，设好入口；
-2. `start_run`（或点「工作流」按钮）建 run，Agent 拿到纪律文本 + 第一步；
-3. Agent 干活，`complete_step` 回报 `{ summary, payload? }`；有分支时给 `branchId`；
-4. 撞到 `gate` 节点就挂起：人点名选项，Agent 醒来继续；
+1. 在「可视化工作流」里画好图，设好入口；
+2. 在输入框左侧点「工作流」选一张图（或让 Agent 调 `aiworkflow_start_run`）建 run；
+3. Agent 拿到纪律文本 + 第一步，干活后 `aiworkflow_complete_step` 回报 `{ summary, payload? }`；有分支时给 `branchId`；
+4. 撞到 `gate` 节点就挂起：人在对话里答复，Agent 调 `answer_gate` 后继续；
 5. 走到 `end` 节点结束（`success` / `fail`），面板里能回看整条轨迹。
 
 ---
@@ -164,15 +139,13 @@ claude mcp add aiworkflow --transport http "http://127.0.0.1:4123/mcp?k=<token>"
 ## 目录
 
 ```
-shared/src/  公用层：DSL 类型、校验、执行引擎、快照、SQLite 表结构（插件与主工程共用，不依赖 src/）
-src/         主工程：HTTP 服务（hono + MCP + SSE）、CLI、Web 面板
-src/web/     React 面板（Vite 构建到 dist-web/）
+shared/src/  公用层：DSL 类型、校验、执行引擎、快照、SQLite 表结构、只读查询
 dsh-plugin/  DeepSeek Harness 插件（Host 半 + Client 半，构建成 index.js / client.js）
-tests/       vitest（203 条）
+tests/       vitest（内存 node:sqlite）
 docs/        设计文档与开发笔记
 ```
 
-依赖方向固定：`src/ → shared/`、`dsh-plugin/ → shared/`。有测试守着，插件或公用层里出现 `src/` 引用会直接失败。
+依赖方向固定：`dsh-plugin/ → shared/`。有测试守着，插件或公用层里出现反向依赖会直接失败。
 
 ---
 
@@ -180,17 +153,9 @@ docs/        设计文档与开发笔记
 
 ```bash
 npm install
-npm run typecheck        # 主工程 + Web 面板
-npm run typecheck:plugin # shared + DSH 插件
+npm run typecheck        # shared + 插件
 npm test                 # vitest
-npm run dev:web          # Vite 热更（面板）
-npm run build            # 主工程产物
-```
-
-插件（改了 `dsh-plugin/src/` 之后）：
-
-```bash
-npm run build:plugin     # 生成 index.js / client.js（产物要提交，别人安装时不再构建）
+npm run build:plugin     # 生成 index.js / client.js（产物要提交）
 npm run check:plugin     # 重建并与暂存区比对，防止产物和源码脱节
 npm run release:plugin   # 一键：构建 → 提交产物 → 刷新市场索引 → 提交索引 → 打印安装链接
 npm run release:plugin -- --dry-run   # 只看会做什么，不动 git 历史
@@ -203,4 +168,3 @@ npm run release:plugin -- --dry-run   # 只看会做什么，不动 git 历史
 
 - 设计文档：[docs/2026-09-02-flowchart-driven-agent-design.md](docs/2026-09-02-flowchart-driven-agent-design.md)
 - 插件细节（界面、工具、边界）：[dsh-plugin/README.md](dsh-plugin/README.md)
-- 开发路线图：[docs/dev/ROADMAP.md](docs/dev/ROADMAP.md)

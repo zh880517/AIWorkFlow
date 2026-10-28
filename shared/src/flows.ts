@@ -1,9 +1,9 @@
-// 公用层：flow 图的读写（主工程 src/core/flowStore.ts 与本文件同一套语义）。
+// 公用层：flow 图的读写（面板与 Agent 工具共用同一套语义）。
 // 先落 SQLite，再刷 flows/*.json 派生镜像；校验走同目录的 validateFlow。
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Flow } from './types.js';
-import type { SqlDatabase, SqlStatement } from './sql.js';
+import type { SqlDatabase, SqlWriter } from './sql.js';
 import { validateFlow, type ValidationResult } from './validate.js';
 
 export interface FlowMeta {
@@ -15,12 +15,6 @@ export interface FlowMeta {
 /** 干跑校验：与落库路径用的是同一个校验器，仅不写库 */
 export function validateFlowOnly(flow: Flow): ValidationResult {
   return validateFlow(flow);
-}
-
-/** 可写连接需要的最小接口（node:sqlite 的 DatabaseSync 直接满足） */
-export interface FlowWriter extends SqlDatabase {
-  prepare(sql: string): SqlStatement & { run(...params: Array<string | number | null>): unknown };
-  exec(sql: string): void;
 }
 
 export interface FlowSaveResult extends ValidationResult {
@@ -46,7 +40,7 @@ export function getFlow(db: SqlDatabase, flowId: string): Flow | undefined {
   }
 }
 
-export function saveFlow(db: FlowWriter, flow: Flow, jsonDir: string): FlowSaveResult {
+export function saveFlow(db: SqlWriter, flow: Flow, jsonDir: string): FlowSaveResult {
   const result = validateFlow(flow);
   if (!result.ok) return result;
   const now = new Date().toISOString();
@@ -61,9 +55,10 @@ export function saveFlow(db: FlowWriter, flow: Flow, jsonDir: string): FlowSaveR
   return { ...result, flow };
 }
 
-export function deleteFlow(db: FlowWriter, flowId: string, jsonDir: string): boolean {
-  const info = db.prepare('DELETE FROM flows WHERE id = ?').run(flowId) as { changes: number };
+export function deleteFlow(db: SqlWriter, flowId: string, jsonDir: string): boolean {
+  const info = db.prepare('DELETE FROM flows WHERE id = ?').run(flowId);
   const mirror = path.join(jsonDir, `${flowId}.json`);
-  if (info.changes > 0 && fs.existsSync(mirror)) fs.rmSync(mirror);
-  return info.changes > 0;
+  const changes = Number(info.changes);
+  if (changes > 0 && fs.existsSync(mirror)) fs.rmSync(mirror);
+  return changes > 0;
 }

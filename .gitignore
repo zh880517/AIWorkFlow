@@ -1,8 +1,6 @@
 node_modules/
-dist/
 *.log
 .DS_Store
-dist-web/
 tmp/
 # DSH 插件构建产物 **要提交**：别人用 GitHub 链接安装时不会在本机跑构建，
 # 安装包直接从 git 树里取 index.js / client.js。改完插件记得 npm run build:plugin 一起提交。

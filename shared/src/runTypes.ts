@@ -1,7 +1,6 @@
 // 公用层：run 只读模型（监控视图的数据契约）。
 //
-// 与 src/core/runQuery.ts 的对外形状保持一致；这里独立声明是因为 runQuery 依赖
-// better-sqlite3（原生模块），不能被插件 bundle 引入。字段变化时两边一起改。
+// 只依赖最小 SQL 接口，不绑定具体驱动，插件 Host 半直接使用。
 import type { FlowSnapshot } from './types.js';
 
 export interface RunListItem {

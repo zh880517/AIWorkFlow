@@ -3,8 +3,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { openMemoryDb } from '../src/core/db.js';
-import { FlowStore } from '../src/core/flowStore.js';
+import { openMemoryDb, type TestDb } from './support/db.js';
+import { FlowStore } from './support/flowStore.js';
 import {
   ExecutionEngine,
   DISCIPLINE_TEXT,
@@ -12,8 +12,8 @@ import {
   type RunFinishedResult,
   type SelfHealError,
   type EngineEvent,
-} from '../src/core/engine.js';
-import type { Flow } from '../src/core/types.js';
+} from '../shared/src/engine.js';
+import type { Flow } from '../shared/src/types.js';
 
 let tmpHome: string;
 
@@ -228,7 +228,7 @@ function blockedNoExitFlow(): Flow {
   };
 }
 
-function makeEngine(flows: Flow[], onEvent?: (event: EngineEvent) => void): { engine: ExecutionEngine; store: FlowStore; db: import('better-sqlite3').Database } {
+function makeEngine(flows: Flow[], onEvent?: (event: EngineEvent) => void): { engine: ExecutionEngine; store: FlowStore; db: TestDb } {
   const db = openMemoryDb();
   const store = new FlowStore(db, path.join(tmpHome, `flows-${Math.random().toString(36).slice(2)}`));
   for (const f of flows) {
@@ -416,7 +416,7 @@ describe('complete_step', () => {
 
   it('非法 branchId → 自愈列出合法分支，且不落执行记录（不推进）', () => {
     const { engine, store } = makeEngine([branchFlow()]);
-    const db = (engine as unknown as { db: import('better-sqlite3').Database }).db;
+    const db = (engine as unknown as { db: TestDb }).db;
     void store;
     const start = engine.startRun({ flowName: '分支图' });
     if (!isStep(start)) throw new Error('start 失败');
@@ -504,11 +504,11 @@ describe('get_current_step', () => {
     expect(a.progress).toEqual({ completed: 1 });
   });
 
-  it('上下文压缩后的恢复入口：不带 runId 时按会话绑定解析', () => {
+  it('上下文压缩后的恢复入口：不带 runId 时按 DSH 会话绑定解析', () => {
     const { engine } = makeEngine([linearFlow()]);
-    const start = engine.startRun({ flowName: '直线图', mcpSessionId: 'sess-1' });
+    const start = engine.startRun({ flowName: '直线图', hostSession: 'dsh:session-1' });
     if (!isStep(start)) throw new Error('start 失败');
-    const r = engine.getCurrentStep({}, 'sess-1');
+    const r = engine.getCurrentStep({ hostSession: 'dsh:session-1' });
     expect(isStep(r)).toBe(true);
     if (!isStep(r)) return;
     expect(r.runId).toBe(start.runId);
@@ -541,7 +541,7 @@ describe('get_current_step', () => {
 describe('执行轨迹落库', () => {
   it('node_executions 记录 summary / payload / branch_id / iteration', () => {
     const { engine } = makeEngine([branchFlow()]);
-    const db = (engine as unknown as { db: import('better-sqlite3').Database }).db;
+    const db = (engine as unknown as { db: TestDb }).db;
     const start = engine.startRun({ flowName: '分支图' });
     if (!isStep(start)) throw new Error('start 失败');
     engine.completeStep({
@@ -575,7 +575,7 @@ describe('执行轨迹落库', () => {
 
   it('run 行含快照 hash 与 cwd / projectName', () => {
     const { engine } = makeEngine([linearFlow()]);
-    const db = (engine as unknown as { db: import('better-sqlite3').Database }).db;
+    const db = (engine as unknown as { db: TestDb }).db;
     const start = engine.startRun({
       flowName: '直线图',
       cwd: 'D:/work/demo',
@@ -595,61 +595,44 @@ describe('执行轨迹落库', () => {
   });
 });
 
-describe('宿主会话定位（阶段 2.5：hostSession，hook 注入）', () => {
+describe('DSH 会话定位（hostSession）', () => {
   it('start_run 持久化 host_session', () => {
     const { engine } = makeEngine([linearFlow()]);
-    const db = (engine as unknown as { db: import('better-sqlite3').Database }).db;
-    const start = engine.startRun({ flowName: '直线图', hostSession: 'claude-code:s1' });
+    const db = (engine as unknown as { db: TestDb }).db;
+    const start = engine.startRun({ flowName: '直线图', hostSession: 'dsh:session-1' });
     if (!isStep(start)) throw new Error('start 失败');
     const run = db.prepare('SELECT host_session FROM runs WHERE id = ?').get(start.runId) as {
       host_session: string | null;
     };
-    expect(run.host_session).toBe('claude-code:s1');
+    expect(run.host_session).toBe('dsh:session-1');
   });
 
   it('不带 runId/childToken 时按 hostSession 定位当前步', () => {
     const { engine } = makeEngine([linearFlow()]);
-    const start = engine.startRun({ flowName: '直线图', hostSession: 'codex:thr_1' });
-    const cur = engine.getCurrentStep({ hostSession: 'codex:thr_1' });
+    const start = engine.startRun({ flowName: '直线图', hostSession: 'dsh:session-2' });
+    const cur = engine.getCurrentStep({ hostSession: 'dsh:session-2' });
     if (!isStep(cur)) throw new Error('应按 hostSession 定位成功');
     expect(cur.runId).toBe(start.runId);
     expect(cur.step.nodeId).toBe('n1');
   });
 
-  it('hostSession 优先于 mcpSessionId（即使后者匹配更新的 run）', () => {
-    const { engine } = makeEngine([linearFlow()]);
-    const a = engine.startRun({ flowName: '直线图', hostSession: 'claude-code:s1', mcpSessionId: 'm1' });
-    engine.startRun({ flowName: '直线图', mcpSessionId: 'm2' }); // 更晚创建，只绑 MCP 会话
-    const cur = engine.getCurrentStep({ hostSession: 'claude-code:s1' }, 'm2');
-    if (!isStep(cur)) throw new Error('应定位成功');
-    expect(cur.runId).toBe(a.runId);
-  });
-
-  it('hostSession 无匹配时回落 mcpSessionId', () => {
-    const { engine } = makeEngine([linearFlow()]);
-    const a = engine.startRun({ flowName: '直线图', mcpSessionId: 'm1' });
-    const cur = engine.getCurrentStep({ hostSession: 'claude-code:unknown' }, 'm1');
-    if (!isStep(cur)) throw new Error('应回落到 mcpSessionId 定位');
-    expect(cur.runId).toBe(a.runId);
-  });
-
   it('run 终结后按 hostSession 回落最近 run，返回终结态而非找不到', () => {
     const { engine } = makeEngine([linearFlow()]);
-    const start = engine.startRun({ flowName: '直线图', hostSession: 'claude-code:s1' });
+    const start = engine.startRun({ flowName: '直线图', hostSession: 'dsh:session-3' });
     engine.completeStep({ runId: start.runId, summary: '完成' });
-    const cur = engine.getCurrentStep({ hostSession: 'claude-code:s1' });
+    const cur = engine.getCurrentStep({ hostSession: 'dsh:session-3' });
     if (!isFinished(cur)) throw new Error('应返回终结态');
     expect(cur.runId).toBe(start.runId);
   });
 
-  it('complete_step 同样按 hostSession 定位并推进（MCP 会话已换的场景）', () => {
+  it('complete_step 同样按 hostSession 定位并推进', () => {
     const { engine } = makeEngine([interpolationFlow()]);
-    engine.startRun({ flowName: '插值图', hostSession: 'claude-code:s1' });
-    // 模拟 Codex 会话过期重握手：Mcp-Session-Id 已变，仅靠 hostSession 定位
-    const next = engine.completeStep(
-      { hostSession: 'claude-code:s1', summary: '项目是 demo', payload: { project: 'apps/demo' } },
-      'mcp-new-after-reconnect',
-    );
+    engine.startRun({ flowName: '插值图', hostSession: 'dsh:session-4' });
+    const next = engine.completeStep({
+      hostSession: 'dsh:session-4',
+      summary: '项目是 demo',
+      payload: { project: 'apps/demo' },
+    });
     if (!isStep(next)) throw new Error('应推进成功');
     expect(next.step.nodeId).toBe('n2');
     expect(next.step.instruction).toContain('apps/demo');
@@ -700,7 +683,7 @@ describe('环与迭代上限（§4.5）', () => {
 
   it('撞 iterationLimit 不执行该节点：落 limit_exceeded 轨迹并走 onLimitExceeded 逃生', () => {
     const { engine } = makeEngine([retryFlow(true)]);
-    const db = (engine as unknown as { db: import('better-sqlite3').Database }).db;
+    const db = (engine as unknown as { db: TestDb }).db;
     const start = engine.startRun({ flowName: '测试回退环' });
     if (!isStep(start)) throw new Error('start 失败');
     // 两轮失败（iterationLimit 2 已用完）
@@ -745,7 +728,7 @@ describe('环与迭代上限（§4.5）', () => {
 
   it('超出 maxSteps → 第 maxSteps+1 步不再执行，run 判失败', () => {
     const { engine } = makeEngine([maxStepsFlow()]);
-    const db = (engine as unknown as { db: import('better-sqlite3').Database }).db;
+    const db = (engine as unknown as { db: TestDb }).db;
     const start = engine.startRun({ flowName: '小上限图' });
     if (!isStep(start)) throw new Error('start 失败');
     const step2 = engine.completeStep({ runId: start.runId, summary: '做完一' });
@@ -768,7 +751,7 @@ describe('环与迭代上限（§4.5）', () => {
 describe('report_blocked（§7.8）', () => {
   it('节点无任何出口 → 落 blocked 轨迹并判 run 失败', () => {
     const { engine } = makeEngine([blockedNoExitFlow()]);
-    const db = (engine as unknown as { db: import('better-sqlite3').Database }).db;
+    const db = (engine as unknown as { db: TestDb }).db;
     const start = engine.startRun({ flowName: '无出口阻塞图' });
     if (!isStep(start)) throw new Error('start 失败');
     const res = engine.reportBlocked({ runId: start.runId, reason: '缺少构建依赖 X' });
@@ -992,7 +975,7 @@ describe('gate 卡点（§7.6）', () => {
   it('await_gate：等待中被面板放行 → 醒来返回放行后的终结态', async () => {
     const { engine } = makeEngine([gateFlow()]);
     const { runId, gateId } = toGate(engine);
-    const waiting = engine.awaitGate({ runId, gateId }, undefined, 5_000);
+    const waiting = engine.awaitGate({ runId, gateId }, 5_000);
     await new Promise((resolve) => setTimeout(resolve, 150));
     const panel = engine.answerGate({ runId, optionId: 'opt_go' }, 'panel');
     expect(isFinished(panel)).toBe(true);
@@ -1004,7 +987,7 @@ describe('gate 卡点（§7.6）', () => {
   it('await_gate 超时 → 返回 gate 步 + "仍在等待"提示，run 仍挂起', async () => {
     const { engine, db } = makeEngine([gateFlow()]);
     const { runId, gateId } = toGate(engine);
-    const r = await engine.awaitGate({ runId, gateId }, undefined, 120);
+    const r = await engine.awaitGate({ runId, gateId }, 120);
     if (!isStep(r)) throw new Error('超时应返回 gate 步');
     expect(r.step.gateId).toBe(gateId);
     expect(r.note).toContain('仍在等待');
@@ -1016,7 +999,7 @@ describe('gate 卡点（§7.6）', () => {
     const { engine } = makeEngine([gateFlow()]);
     const { runId, gateId } = toGate(engine);
     engine.answerGate({ runId, optionId: 'opt_go' }, 'panel');
-    const r = await engine.awaitGate({ runId, gateId }, undefined, 60_000);
+    const r = await engine.awaitGate({ runId, gateId }, 60_000);
     if (!isFinished(r)) throw new Error('应返回终结态');
     expect(r.outcome).toBe('success');
   });

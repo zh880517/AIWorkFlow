@@ -31,13 +31,13 @@
 
 **仍待定**：卡点由谁放行（面板只读）、运行图默认跟随哪个 run、`followup` 那条系统消息的呈现形式是否要换成更中性的 source。
 
-**现状**：Agent 侧已有 6 个执行类工具（`aiworkflow_start_run` / `get_current_step` / `complete_step` / `report_blocked` / `await_gate` / `answer_gate`），在对话里说一句就能跑完整条流程；但**没有任何 UI 入口**——编辑器、运行图都只能看，不能发起。
+**现状**：Agent 侧已有 6 个执行类工具（`aiworkflow_start_run` / `get_current_step` / `complete_step` / `report_blocked` / `await_gate` / `answer_gate`），在对话里说一句就能跑完整条流程；输入框左侧已有「工作流」选择器可以发起 run，编辑器里仍没有「运行」按钮。
 
 **待定的事**：
 
 - **入口形态**：对话里自然语言发起 / 编辑器里的「运行」按钮 / 运行图浮层里的「重跑」/ 三者都要；
 - **参数来源**：`cwd`、`projectName` 直接取当前会话工作目录，还是让用户填；
-- **卡点放行**：跑起来之后 gate 由谁放行（面板点选仍是只读提示，还是补上点选入口）；
+- **卡点放行**：已定为对话代填（`source: chat`）；面板只读展示，不再补点选入口；
 - **默认跟随哪个 run**：当前会话最近一个 / 手动选 / 跟随 `host_session`。
 
 P-1 的默认态（打开时展示哪个 run、tab 是否跟随、要不要"重跑"按钮）依赖这些答案，所以先定 P-2 再决定 A/B/C。

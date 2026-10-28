@@ -2,21 +2,23 @@
 
 ## 项目定位
 
-流程图驱动的 AI Agent 执行引擎：`npx aiworkflow` 启动本地服务（HTTP MCP 端点 + Web 面板），Agent 逐步领取流程图节点指令、做完回报后领取下一步。核心理念是**管理 Agent 的注意力预算（逐步披露），引导而非约束**。
+**只面向 DeepSeek Harness 的流程图插件**：在 DSH 里画流程图、发起 run、看进度与运行图；Agent 每领一步指令 → 做完回报 `summary`/`payload` → 再领下一步。核心理念是**管理 Agent 的注意力预算（逐步披露），引导而非约束**。
 
-必读文档：改动核心逻辑前先读 [docs/2026-09-02-flowchart-driven-agent-design.md](docs/2026-09-02-flowchart-driven-agent-design.md)（已评审的设计文档，是所有实现的依据）。开发进度与阶段验收标准见 [docs/dev/ROADMAP.md](docs/dev/ROADMAP.md)。
+不提供独立 MCP 服务，不提供 CLI，也不适配其它 Agent 宿主。
+Host 半用 `node:sqlite` 直接打开 `~/.aiworkflow/aiworkflow.db`，不依赖任何外部服务。
+
+必读文档：改动核心逻辑前先读 [docs/2026-09-02-flowchart-driven-agent-design.md](docs/2026-09-02-flowchart-driven-agent-design.md)（已评审的设计文档，是所有实现的依据）。
 
 ## 目录结构
 
 ```
-shared/src/  # 公用层（依赖最底层）：DSL 类型、校验、快照、执行引擎、路径/建表、SQL/进度/格式化。
-             # 主工程 src/ 与 DSH 插件 dsh-plugin/ 都从这里 import；这里**不得**反向 import src/
-src/core/    # 主工程自己的胶水：better-sqlite3 连接、flow 存储、run 查询；其余模块是从 shared/ 再导出的老路径
-src/server/  # HTTP 服务：MCP 端点、面板静态资源、SSE（Phase 2 起）
-src/cli/     # npx 入口（src/cli.ts，Phase 2 实现）
-src/web/     # React 面板源码，Vite 构建，产物进 dist-web/（Phase 4 起）
+shared/src/  # 公用层（依赖最底层）：DSL 类型、校验、快照、执行引擎、SQLite 表结构、只读查询、进度/格式化。
+             # 插件的 Host/Client 两半都从这里 import；这里**不得** import dsh-plugin/
 dsh-plugin/  # DeepSeek Harness 插件（Host + Client 两半，构建成 index.js / client.js）
-tests/       # vitest 测试
+  src/host.ts      # ctx.webServer 同源路由（进度读取 + 图读写）、工具注册
+  src/tools.ts     # Agent 工具：context + flow（建图五件套）+ 6 个执行类
+  src/client.tsx   # Client 半入口（胶囊 / 浮层 / 工作流主面板 / 运行图）
+tests/       # vitest（内存 node:sqlite）
 docs/        # 项目正式文档（长期保留）
 docs/dev/    # 开发临时文档：阶段验收后删除，结论回写正式文档
 ```
@@ -24,9 +26,10 @@ docs/dev/    # 开发临时文档：阶段验收后删除，结论回写正式�
 ## 常用命令
 
 ```bash
-npm run typecheck   # tsc --noEmit（提交前必过）
-npm test            # vitest run
-npm run build       # tsc → dist/
+npm run typecheck    # shared + 插件（提交前必过）
+npm test             # vitest
+npm run build:plugin # 生成 index.js / client.js（产物要提交）
+npm run check:plugin # 重建并与暂存区比对，防止产物与源码脱节
 ```
 
 ## 架构红线（来自设计文档，不可绕过）
@@ -35,21 +38,24 @@ npm run build       # tsc → dist/
 - **数据目录**：`~/.aiworkflow/`；测试中用环境变量 `AIWORKFLOW_HOME` 重定向到临时目录，不要污染真实 home。
 - **下发给 Agent 的单步数据必须降噪**：剥离分支的 `to` 字段、`progress` 不含总数、不下发图拓扑。这是刻意设计，不是遗漏。
 - **报错自愈**：所有拒绝路径返回“错在哪 + 正确姿势 + 当前这一步是什么”三段式。
-- **服务绑 127.0.0.1 + token**（`http://127.0.0.1:4123/mcp?k=<token>`），token 进程启动时生成。
-- **Web 面板画布必须用 React Flow（@xyflow/react）**，不自研画布；实时通道用 SSE，不用 WebSocket；不引入第二个 HTTP 框架（用 hono）。
 - **run 一律对启动时的快照执行**（copy-on-run，flowRef 递归解析），原图修改不影响进行中的 run。
-- MCP 传输用 Streamable HTTP（非 stdio），`Mcp-Session-Id` 是主 Agent 的身份锚点。
+- **会话身份只来自 DSH**：取工具执行上下文里的 `exec.agent.id`，写成 `dsh:<sessionId>` 存进 `runs.host_session`；不要再引入 hook / MCP 会话 id / 其它宿主的身份锚点。
+- **只支持 DSH 插件**：不要恢复独立服务、HTTP MCP 端点、install / hook / Skill 宿主集成或其它 Agent 客户端适配。
+- **插件构建产物必须提交**：`dsh-plugin/index.js` 与 `client.js` 是别人从 GitHub 安装时直接取的产物，改完源码必须 `npm run build:plugin` 一起提交。
 
 ## 编码约定
 
-- TypeScript strict + ESM（`"type": "module"`，`module: Node16`）：相对导入**必须带 `.js` 扩展名**。
-- **依赖方向只能是 `src/` → `shared/`、`dsh-plugin/` → `shared/`**：插件（和 shared）里不准出现 `../../src/...` 引用；需要共用的逻辑放 `shared/src/`。`src/core/` 里被迁走的模块只剩一行再导出，别在上面加逻辑。
-- `shared/src/` 不得 import `src/server/` 或任何 HTTP 依赖；它要能同时给浏览器半（类型/纯函数）和 Host 半（用 `node:` 内建）用。
-- `src/core/` 不得 import `src/server/` 或任何 HTTP 依赖；core 层保持可单测（内存库 `openMemoryDb()`）。
-- 阶段开发流程：看 ROADMAP 对应阶段 → 实现 → 测试 + 阶段验收项跑通 → 在 ROADMAP 勾选并 git commit（每阶段一提交）。
+- TypeScript strict + ESM：相对导入**必须带 `.js` 扩展名**。
+- **依赖方向只能是 `dsh-plugin/` → `shared/`**：插件里不准出现反向或 `src/` 引用；需要共用的逻辑放 `shared/src/`。
+- `shared/src/` 不得 import `dsh-plugin/`；不要引入 HTTP 框架或原生 SQLite 绑定（`better-sqlite3` 等）。数据库访问只通过最小 `SqlDatabase` / `SqlWriter` 接口，Host 半用 `node:sqlite` 适配。
+- `shared/src/index.ts` 只导出浏览器半也能用的纯逻辑；依赖 `node:fs` / `node:sqlite` 的模块（`flows.ts`、`sqlite.ts`）走显式子路径，不进 client bundle。
+- 测试使用 `tests/support/db.ts` 的内存 `node:sqlite` 库，不要退回 `better-sqlite3`。
+- 阶段开发流程：实现 → 测试跑通 → 在阶段记录里勾选并 git commit。
 
 ## 已知注意点
 
-- 设计文档 §10 有三个待实测前提（宿主 `Mcp-Session-Id` 行为、子 Agent 连接共享、Codex 并行能力），Phase 2 末用真实宿主验证，探针代码不留仓库。
-- 阶段 8（图编辑器）刻意排在引擎语义（阶段 2–7）之后：编辑器别抢跑，DSL 稳定前不动画布。
-- docs 两类文档生命周期不同：`docs/dev/` 全部完成后整体删除。
+- `docs/dev/` 是临时文档，生命周期结束整体删除；正式结论回写根目录设计文档。
+- 数据库迁移只追加，不改历史迁移；当前 `MIGRATIONS` 已到 v6（v6 删除旧 MCP 会话列）。旧库升级要保证数据不丢。
+- 插件的 Host 半依赖 DSH 的 `webServer` 与 `tools` 服务（`inject: ['webServer', 'tools']`），缺少任一服务的组合里不激活。
+- 页面必须与宿主同源（`dsh web` 或桌面版内置 Web 视图）；`file://` 载入的渲染器拿不到这个路由。
+- 插件 Client 半只从宿主拿 `react` / `react-dom`；不要 `import 'react/jsx-runtime'`（详见 `docs/dev/EDITOR-HANDOFF.md`）。

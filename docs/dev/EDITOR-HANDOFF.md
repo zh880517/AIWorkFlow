@@ -28,7 +28,7 @@ npm run typecheck:plugin && npm run build:plugin
 
 然后 `plugin_manager`：`set_plugin target="include:aiworkflow-progress" enabled=false`，再 `enabled=true`（两次调用都必须同时给 target 和 enabled）。
 
-验证限制：本环境**没有浏览器控制/截图**，界面效果只能让用户看截图；能自动验证的是 `npm run typecheck:plugin`、`build:plugin`、主工程 `npm test`，以及 `Invoke-WebRequest http://127.0.0.1:6102/aiworkflow/flows` 这类接口冒烟。
+验证限制：本环境**没有浏览器控制/截图**，界面效果只能让用户看截图；能自动验证的是 `npm run typecheck:plugin`、`build:plugin`、`npm test`，以及 `Invoke-WebRequest http://127.0.0.1:11981/aiworkflow/flows` 这类接口冒烟。
 
 ## 硬约束（都踩过）
 
@@ -37,7 +37,7 @@ npm run typecheck:plugin && npm run build:plugin
 3. **颜色只能来自 `--dsw-alias-*`**。品牌色填充的按钮文字用 `var(--dsw-alias-bg-base)`（写死 `#fff` 会在深色主题下白底白字——这个 bug 修过一次）。
 4. **Client 半不能 require Harness 客户端包**（`@deepseek-ai/dsh-client-*`）；React Flow 是唯一允许的第三方依赖，已在 bundle 里。
 5. **主面板注册要 try/catch**：`main` 是 keyed 槽，注册失败曾导致主区域黑屏。当前顺序是：先注册 `sidebar.panellist`，再注册 `main`，都包在 `ctx.effect` 里。
-6. **保存走主工程同一套 `validateFlow`**（`shared/flows.ts`）。硬拒不落库、原图不变；错误码 + nodeId 原样展示。别在前端另写一套校验结论。
+6. **保存走公用层同一套 `validateFlow`**（`shared/flows.ts`）。硬拒不落库、原图不变；错误码 + nodeId 原样展示。别在前端另写一套校验结论。
 
 ## 已修过的问题（别回退）
 
@@ -90,7 +90,7 @@ npm run typecheck:plugin && npm run build:plugin
 
 顺带修了上表里的 5 个交互/保存问题：点选连线误报未保存、第二条出边保存被拒「多个 default」、键盘删节点后编辑已删节点、新增节点落在视口外、卡点每个选项都警告未连线。
 
-验证过：`npm run typecheck:plugin`、`npm run build:plugin`、`npm test`（184 passed）；另外用一次性脚本跑过 `buildFlow` 的关键行为（单边写 next、双边只有一个 default、gate 按选项补 outlet、`canvasOf` 往返不丢条件/outlet）。界面效果仍需用户看截图——本环境没有浏览器控制。
+验证过：`npm run typecheck:plugin`、`npm run build:plugin`、`npm test`（全部通过）；另外用一次性脚本跑过 `buildFlow` 的关键行为（单边写 next、双边只有一个 default、gate 按选项补 outlet、`canvasOf` 往返不丢条件/outlet）。界面效果仍需用户看截图——本环境没有浏览器控制。
 
 ## 第二轮：P0 + P1（2026-10-23）
 

@@ -1,5 +1,5 @@
-// node:sqlite → 执行引擎需要的数据库形状（better-sqlite3 的同步 API 是主工程的契约）。
-// 差异只有一处：better-sqlite3 有 db.transaction(fn)，node:sqlite 没有，这里用 BEGIN/SAVEPOINT 补齐。
+// node:sqlite → 执行引擎需要的数据库形状（同步 prepare/exec + transaction）。
+// node:sqlite 没有 db.transaction(fn)，这里用 BEGIN/SAVEPOINT 补齐。
 import { DatabaseSync } from 'node:sqlite';
 import type { SchemaDb } from '@shared/schema.js';
 
@@ -29,7 +29,7 @@ export class NodeSqliteDb implements SchemaDb {
     this.raw.exec(`PRAGMA user_version = ${version}`);
   }
 
-  /** 与 better-sqlite3 的 transaction 语义一致：返回可调用函数，嵌套时退化为 SAVEPOINT */
+  /** transaction 语义：返回可调用函数，嵌套时退化为 SAVEPOINT */
   transaction<T>(fn: () => T): () => T {
     return () => {
       const depth = this.depth + 1;
