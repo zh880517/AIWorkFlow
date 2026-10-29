@@ -69,6 +69,7 @@ CREATE INDEX IF NOT EXISTS idx_flows_kind ON flows(kind);
 5. 配置内部可以继续放 `subagent` 节点（inline / subflow / flowRef），嵌套引用同样递归快照；引用成环由快照的 `visiting` 检测，直接引用自身由校验 `E_FLOW_REF_SELF` 拦下。
 6. **入口特判**：child run 从 `subagent` / `gate` 直接开始时，第一次 `get_current_step` 会补做 `startRun` 的入口派发/挂起（`bootstrapEntry`）。否则配置入口直接是 subagent 会永远停在 running，等不到派发。
 7. `subagent` 节点只有 `inline` 模式要求 `extraPrompt`；`subflow` / `flowRef` 的任务来自被引用图的第一步，`extraPrompt` 引擎不读，校验放宽为可选。
+8. **运行状态**：child run 是普通 run，`runs.flow_id` 就是配置 id；`RunListItem.flowKind` 区分 `flow / agent`，运行图子运行卡片显示配置名 + 「配置」徽标，父节点显示引用节点标题。`getRunDetail(childId).snapshot.rootFlowId` 指向配置，节点着色/轨迹/当前步/角色/产物都按配置快照渲染。
 
 ## 5. 界面
 

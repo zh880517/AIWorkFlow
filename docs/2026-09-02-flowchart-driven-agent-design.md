@@ -438,6 +438,7 @@ child run 调 `report_blocked` 时，该 child 置为 `failed`，随后由 7.5 �
 - 点节点 → 侧栏显示该次的 `summary`、`payload`、耗时、迭代序号
 - 子 Agent 按 run 树折叠展示；fan-out 的 N 个并排；**被 `max` 截断丢掉的显性列出**
 - 子 run 详情显示 `role`、`threadId`、派发轮次 `parentIteration`；`RunDetail.children` 带直接子 run，顶部只列根 run，父 run 右侧「子运行」卡片按 `parentNode` 过滤并点进 child 快照；右侧「产物」卡按 key/version 列出 `run_artifacts`，路径与摘要直接可见
+- 引用「子 Agent 配置」的 child run 同样按普通 run 展示：`RunListItem.flowKind = 'agent'`，子运行卡片显示配置名 + 「配置」徽标，父节点显示引用节点的标题；点画布上的引用节点即可筛出它的子运行
 - 人工卡点在此只读展示问题与选项；用户在对话里回复选项，Agent 代填后这里自动继续
 - **停滞检测（已移除，2026-09-08 用户决定）**：原设计为 15 分钟标黄、24 小时自动标 `stale`。移除原因：AI 在执行中长时间暂停是常态（长任务、等待用户），按超时判异常会产生误导。系统不基于时间做任何状态改写；`stale` 状态仅作为历史遗留兼容展示。
 
