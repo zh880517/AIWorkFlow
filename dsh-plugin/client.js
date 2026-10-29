@@ -12037,7 +12037,14 @@ function Inspector(props) {
 		type: "button",
 		className: "wf-btn",
 		onClick: () => props.onOpenSubflow(body.id)
-	}, "打开子图"))), /* @__PURE__ */ react.createElement(Field, {
+	}, "打开子图"))), body.mode === "inline" && /* @__PURE__ */ react.createElement(Field, {
+		label: "内嵌子图",
+		hint: "不想让子 Agent 只执行一个内联任务时，可以直接创建一张随主图保存的子图"
+	}, /* @__PURE__ */ react.createElement("div", { className: "wf-row" }, /* @__PURE__ */ react.createElement("span", { className: "wf-hint" }, body.subflow === void 0 ? "当前是 inline 模式" : "已有子图，可切换并打开"), /* @__PURE__ */ react.createElement("button", {
+		type: "button",
+		className: "wf-btn",
+		onClick: () => props.onOpenSubflow(body.id)
+	}, body.subflow === void 0 ? "创建子图并打开" : "打开已有子图"))), /* @__PURE__ */ react.createElement(Field, {
 		label: "角色",
 		hint: "引用全图角色表；角色章程与线程摘要会拼进 child preamble"
 	}, /* @__PURE__ */ react.createElement("select", {

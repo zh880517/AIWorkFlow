@@ -210,6 +210,25 @@ export function Inspector(props: InspectorProps): React.ReactElement {
               </div>
             </Field>
           )}
+          {body.mode === 'inline' && (
+            <Field
+              label="内嵌子图"
+              hint="不想让子 Agent 只执行一个内联任务时，可以直接创建一张随主图保存的子图"
+            >
+              <div className="wf-row">
+                <span className="wf-hint">
+                  {body.subflow === undefined ? '当前是 inline 模式' : '已有子图，可切换并打开'}
+                </span>
+                <button
+                  type="button"
+                  className="wf-btn"
+                  onClick={() => props.onOpenSubflow(body.id)}
+                >
+                  {body.subflow === undefined ? '创建子图并打开' : '打开已有子图'}
+                </button>
+              </div>
+            </Field>
+          )}
           <Field label="角色" hint="引用全图角色表；角色章程与线程摘要会拼进 child preamble">
             <select
               className="wf-input"
