@@ -38,11 +38,11 @@
       "versions": [
         {
           "version": "0.1.0",
-          "publishTimestamp": 1792986334,
+          "publishTimestamp": 1793182200,
           "source": {
             "type": "git",
             "url": "https://github.com/zh880517/AIWorkFlow",
-            "commit": "0b18aaa4fe4626d7ab4b6ff003618788c7f405ea",
+            "commit": "90d4c998e5be38f99bed707689946ca5634c9294",
             "path": "dsh-plugin"
           }
         }
