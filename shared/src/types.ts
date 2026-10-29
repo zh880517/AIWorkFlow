@@ -75,6 +75,10 @@ export interface FlowNodeBase {
   instruction?: string;
   /** 节点级迭代上限，挂在 (run_id, node_id) 上 */
   iterationLimit?: number;
+  /** 回路标识：同一回路的节点共用一个 loopId；引擎按回路计数 */
+  loopId?: string;
+  /** 回路最大轮次：配在 loopId 的控制器节点上；控制器每执行一次算一轮 */
+  maxRounds?: number;
   /** 撞上限后的逃生节点 id */
   onLimitExceeded?: string;
   /** 无 branches 时的唯一后继；与 branches 互斥。两者皆无 = 隐式 end */

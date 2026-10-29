@@ -180,6 +180,62 @@ function retryFlow(escape: boolean): Flow {
   };
 }
 
+// 回路级上限：控制器 n_test 每跑一次算一轮；n_fix 与 n_test 共享同一个 loopId
+function loopLimitFlow(): Flow {
+  return {
+    id: 'f_loop_limit',
+    name: '回路上限图',
+    entry: 'n_fix',
+    nodes: [
+      { id: 'n_fix', type: 'prompt', instruction: '按失败原因改代码', next: 'n_test', loopId: 'test-loop' },
+      {
+        id: 'n_test',
+        type: 'prompt',
+        instruction: '跑测试',
+        loopId: 'test-loop',
+        maxRounds: 2,
+        // 故意给一个更高、不会被用到的节点级上限：验证回路上限优先
+        iterationLimit: 10,
+        onLimitExceeded: 'n_fail',
+        branches: [
+          { id: 'b_pass', condition: '全部通过', to: 'n_ok' },
+          { id: 'b_fail', condition: '*', to: 'n_fix' },
+        ],
+      },
+      { id: 'n_ok', type: 'end', outcome: 'success' },
+      { id: 'n_fail', type: 'end', outcome: 'fail' },
+    ],
+  };
+}
+
+// 两个修正节点共用一个循环：控制器仍在 n_test，验证非控制器目标也按同一计数逃生
+function loopLimitSharedFlow(): Flow {
+  return {
+    id: 'f_loop_shared',
+    name: '回路共享上限图',
+    entry: 'n_fix',
+    nodes: [
+      { id: 'n_fix', type: 'prompt', instruction: '改一版', next: 'n_fix2', loopId: 'test-loop' },
+      { id: 'n_fix2', type: 'prompt', instruction: '再补一版', next: 'n_test', loopId: 'test-loop' },
+      {
+        id: 'n_test',
+        type: 'prompt',
+        instruction: '跑测试',
+        loopId: 'test-loop',
+        maxRounds: 2,
+        iterationLimit: 10,
+        onLimitExceeded: 'n_fail',
+        branches: [
+          { id: 'b_pass', condition: '全部通过', to: 'n_ok' },
+          { id: 'b_fail', condition: '*', to: 'n_fix' },
+        ],
+      },
+      { id: 'n_ok', type: 'end', outcome: 'success' },
+      { id: 'n_fail', type: 'end', outcome: 'fail' },
+    ],
+  };
+}
+
 function maxStepsFlow(): Flow {
   return {
     id: 'f_max',
@@ -724,6 +780,61 @@ describe('环与迭代上限（§4.5）', () => {
     if (!isFinished(third)) throw new Error('应判失败终结');
     expect(third.outcome).toBe('fail');
     expect(third.note).toContain('迭代上限');
+  });
+
+  it('撞 loopId + maxRounds：按控制器轮次计数，不执行目标节点并走控制器逃生出口', () => {
+    const { engine } = makeEngine([loopLimitFlow()]);
+    const db = (engine as unknown as { db: TestDb }).db;
+    const start = engine.startRun({ flowName: '回路上限图' });
+    if (!isStep(start)) throw new Error('start 失败');
+    expect(start.step.nodeId).toBe('n_fix');
+
+    // 第 1 轮：改代码 → 测试失败；第 2 轮同理
+    engine.completeStep({ runId: start.runId, summary: '改一' });
+    engine.completeStep({ runId: start.runId, nodeId: 'n_test', summary: '失败一', branchId: 'b_fail' });
+    engine.completeStep({ runId: start.runId, summary: '改二' });
+    engine.completeStep({ runId: start.runId, nodeId: 'n_test', summary: '失败二', branchId: 'b_fail' });
+    // 控制器已执行 2 次（maxRounds=2），再推进到 n_test 时直接逃生到 n_fail
+    const thirdFix = engine.completeStep({ runId: start.runId, summary: '改三' });
+
+    if (!isFinished(thirdFix)) throw new Error(`应在回路上限处终结：${JSON.stringify(thirdFix)}`);
+    expect(thirdFix.outcome).toBe('fail');
+    expect(thirdFix.note).toContain('maxRounds');
+
+    const rows = db
+      .prepare("SELECT node_id, iteration, status, summary FROM node_executions WHERE node_id = 'n_test' ORDER BY id")
+      .all() as Array<{ node_id: string; iteration: number; status: string; summary: string }>;
+    expect(rows).toHaveLength(3);
+    expect(rows.filter((r) => r.status === 'completed')).toHaveLength(2);
+    expect(rows[2]).toMatchObject({ status: 'limit_exceeded' });
+    expect(rows[2]!.summary).toContain('test-loop');
+    expect(rows[2]!.summary).toContain('maxRounds');
+  });
+
+  it('非控制器节点也共享回路计数，并用控制器 onLimitExceeded 逃生', () => {
+    const { engine } = makeEngine([loopLimitSharedFlow()]);
+    const db = (engine as unknown as { db: TestDb }).db;
+    const start = engine.startRun({ flowName: '回路共享上限图' });
+    if (!isStep(start)) throw new Error('start 失败');
+
+    engine.completeStep({ runId: start.runId, summary: '改一' });
+    engine.completeStep({ runId: start.runId, nodeId: 'n_fix2', summary: '补一' });
+    engine.completeStep({ runId: start.runId, nodeId: 'n_test', summary: '失败一', branchId: 'b_fail' });
+    engine.completeStep({ runId: start.runId, nodeId: 'n_fix', summary: '改二' });
+    engine.completeStep({ runId: start.runId, nodeId: 'n_fix2', summary: '补二' });
+    engine.completeStep({ runId: start.runId, nodeId: 'n_test', summary: '失败二', branchId: 'b_fail' });
+    // 推进目标 n_fix2 不是控制器，但共享 loopId 的 n_test 已执行 2 次 → 逃生
+    const hit = engine.completeStep({ runId: start.runId, nodeId: 'n_fix', summary: '改三' });
+    if (!isFinished(hit)) throw new Error(`应在共享回路上限处终结：${JSON.stringify(hit)}`);
+    expect(hit.outcome).toBe('fail');
+    expect(hit.note).toContain('maxRounds');
+
+    const rows = db
+      .prepare("SELECT node_id, status, summary FROM node_executions WHERE node_id = 'n_fix2' ORDER BY id")
+      .all() as Array<{ node_id: string; status: string; summary: string }>;
+    expect(rows.filter((row) => row.status === 'completed')).toHaveLength(2);
+    expect(rows.at(-1)?.status).toBe('limit_exceeded');
+    expect(rows.at(-1)?.summary).toContain('test-loop');
   });
 
   it('超出 maxSteps → 第 maxSteps+1 步不再执行，run 判失败', () => {

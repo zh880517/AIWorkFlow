@@ -11,11 +11,11 @@ const FLOW_ACTIONS = ['list', 'get', 'validate', 'create', 'update'] as const;
 /** 模型可见的 DSL 速查（完整语义以校验器报错为准） */
 const DSL_HINT =
   '完整流程图 DSL：{ id, name, entry, maxSteps?, agents?, nodes: [...] }。' +
-  '节点 { id, type: prompt|tool|gate|subagent|join|end, title?, instruction?, toolName?, params?, next?, branches?, iterationLimit?, onLimitExceeded?, outcome? }。' +
+  '节点 { id, type: prompt|tool|gate|subagent|join|end, title?, instruction?, toolName?, params?, next?, branches?, iterationLimit?, loopId?, maxRounds?, onLimitExceeded?, outcome? }。' +
   'subagent 额外支持 { role?, thread?: "new"|"role"|自定义, produces?, consumes?, reportHint? }；agents: [{ id, name, charter, produces?, consumes? }]。' +
   '后继二选一：next（唯一后继）或 branches: [{ id, condition, to, when? }]（condition "*" 是默认分支，同节点至多一个；when 是服务端可判定的单比较，如 "{{review.payload.verdict}} == \'pass\'"）。' +
   'complete_step 可带 artifacts: [{ key, summary?, path?, content? }]，插值用 {{artifacts.key.path}}；run 输入用 {{inputs.字段}}。' +
-  '环必须给环上节点配 iterationLimit。end 节点带 outcome: success|fail。';
+  '环必须给环上节点配 iterationLimit，或给同一 loopId 的控制器配 maxRounds。end 节点带 outcome: success|fail。';
 
 interface AgentTool {
   name: string;

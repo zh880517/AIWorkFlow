@@ -74,6 +74,14 @@ export const runCss = `
 .awr-card{border:1px solid var(--dsw-alias-border-l1);border-radius:10px;padding:8px 10px;
   background:var(--dsw-alias-bg-layer-2);display:flex;flex-direction:column;gap:6px}
 .awr-card-title{font-size:11.5px;font-weight:600;display:flex;align-items:center;gap:6px}
+.awr-child{display:flex;align-items:center;gap:6px;width:100%;padding:4px 6px;border-radius:7px;
+  border:1px solid transparent;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;
+  font-size:11px;text-align:left;cursor:pointer;overflow:hidden}
+.awr-child:hover{background:var(--dsw-alias-bg-layer-1);border-color:var(--dsw-alias-border-l1);
+  color:var(--dsw-alias-label-primary)}
+.awr-child[data-sel="true"]{border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-label-primary)}
+.awr-child-node{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:10px;
+  opacity:.75;flex:none;max-width:88px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .awr-card-q{font-size:12px;line-height:1.5}
 .awr-card-opts{display:flex;flex-wrap:wrap;gap:6px}
 .awr-opt{font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid var(--dsw-alias-border-l1);

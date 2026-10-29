@@ -106,6 +106,8 @@ run 定位顺序：**childToken → runId → hostSession（`dsh:<sessionId>`）
 }
 ```
 
+通用字段除上例的 `iterationLimit` / `onLimitExceeded` 外，还可配 `loopId`（回路标识，同一回路节点共用）和 `maxRounds`（只配在回路控制器节点上，控制器每执行一次算一轮）。`maxRounds` 必须同时有 `loopId`；同一 `loopId` 至多一个控制器。回路级上限优先于节点级 `iterationLimit`。
+
 ### 4.3 分支
 
 - 条件是**自然语言**，由 Agent 自己判断。代价是非确定性，收益是无需为每个节点定 schema、无需服务端另起一次 LLM 判定。
@@ -131,10 +133,11 @@ P1 增补两条交接通道：
 
 ### 4.5 环与迭代
 
-环是一等公民（"测试没过 → 回到改代码"是必需场景），通过两层限制兜底：
+环是一等公民（"测试没过 → 回到改代码"是必需场景），通过三层限制兜底：
 
 1. **节点级** — `iterationLimit` 计数挂在 `(run_id, node_id)` 上。撞到上限时**不执行该节点**，直接走 `onLimitExceeded` 指向的逃生节点。
-2. **run 级** — `maxSteps` 全局兜底（默认 200）。理由：`iterationLimit` 只防单点打转，防不住"A→B→C→A 三节点各自未超限但整体绕圈"这类病态图，也防不住引擎自身 bug。撞上判 run 失败，面板明确写"超出全局步数上限"。
+2. **回路级** — 同一回路的节点共用一个 `loopId`，其中**控制器节点**（同 `loopId` 中配 `maxRounds` 的节点）每执行一次算一轮。推进到该回路的任何节点时，若控制器执行数已达 `maxRounds`，不执行目标节点，落 `limit_exceeded` 轨迹并走逃生出口（目标节点 `onLimitExceeded` → 控制器 `onLimitExceeded` → 目标 default 分支）。这样"A→B→C→A"不会因为每个节点各自没超限而无限绕圈。
+3. **run 级** — `maxSteps` 全局兜底（默认 200）。理由：前两层只防单点/单回路打转，防不住跨回路组合出来的病态图，也防不住引擎自身 bug。撞上判 run 失败，面板明确写"超出全局步数上限"。
 
 ## 5. 存储
 
@@ -403,7 +406,8 @@ child run 调 `report_blocked` 时，该 child 置为 `failed`，随后由 7.5 �
 |---|---|
 | 环无逃生出口 | 缺 default 分支 |
 | 孤立节点（从 `entry` 不可达） / 无 `entry` | `join` 找不到对应 `fanOut` |
-| 存在无法终止的路径 | 环上节点缺 `iterationLimit` |
+| 存在无法终止的路径 | 环上节点缺 `iterationLimit` / 回路缺 `maxRounds` |
+| `maxRounds` 缺 `loopId`，或同一 `loopId` 多个控制器 | `loopId` 没配 `maxRounds` 控制器 |
 
 第三条"无法终止的路径"指从 `entry` 出发存在一条走不到任何终点的路径。**注意终点有两种**：显式 `end` 节点，或按 4.3 的隐式 end（节点无分支且无后继）。两者都算合法终止，校验不得只认显式 `end`。
 
@@ -417,7 +421,7 @@ child run 调 `report_blocked` 时，该 child 置为 `failed`，随后由 7.5 �
 - 走过的路径高亮，**环要能看出绕了几圈**——同一节点多次执行时，侧栏按迭代次序列出每一次结果
 - 点节点 → 侧栏显示该次的 `summary`、`payload`、耗时、迭代序号
 - 子 Agent 按 run 树折叠展示；fan-out 的 N 个并排；**被 `max` 截断丢掉的显性列出**
-- 子 run 详情显示 `role`、`threadId`、派发轮次 `parentIteration`；右侧「产物」卡按 key/version 列出 `run_artifacts`，路径与摘要直接可见
+- 子 run 详情显示 `role`、`threadId`、派发轮次 `parentIteration`；`RunDetail.children` 带直接子 run，顶部只列根 run，父 run 右侧「子运行」卡片按 `parentNode` 过滤并点进 child 快照；右侧「产物」卡按 key/version 列出 `run_artifacts`，路径与摘要直接可见
 - 人工卡点在此只读展示问题与选项；用户在对话里回复选项，Agent 代填后这里自动继续
 - **停滞检测（已移除，2026-09-08 用户决定）**：原设计为 15 分钟标黄、24 小时自动标 `stale`。移除原因：AI 在执行中长时间暂停是常态（长任务、等待用户），按超时判异常会产生误导。系统不基于时间做任何状态改写；`stale` 状态仅作为历史遗留兼容展示。
 

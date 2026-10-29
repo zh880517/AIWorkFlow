@@ -420,7 +420,24 @@ export function Inspector(props: InspectorProps): React.ReactElement {
 
       {body.type !== 'end' && (
         <Section title="循环与逃生">
-          <Field label="迭代上限" hint="环上节点建议设置；不设时只在全局步数上限处兜底">
+          <Field label="回路 id" hint="同一回路的节点共用一个 loopId；可只填在控制器上，其它节点靠 maxRounds 控制器共享计数">
+            <input
+              className="wf-input"
+              value={body.loopId ?? ''}
+              placeholder="review-loop"
+              onChange={(event) => patch({ loopId: event.target.value.trim() === '' ? undefined : event.target.value.trim() })}
+            />
+          </Field>
+          <Field label="回路最大轮次" hint="配在控制器节点上；控制器每执行一次算一轮，超限走 onLimitExceeded">
+            <input
+              className="wf-input"
+              type="number"
+              min={1}
+              value={body.maxRounds ?? ''}
+              onChange={(event) => patch({ maxRounds: positiveInt(event.target.value) })}
+            />
+          </Field>
+          <Field label="迭代上限" hint="节点级兜底；环上节点建议设置，不设时只在全局步数上限处兜底">
             <input
               className="wf-input"
               type="number"
@@ -429,7 +446,7 @@ export function Inspector(props: InspectorProps): React.ReactElement {
               onChange={(event) => patch({ iterationLimit: positiveInt(event.target.value) })}
             />
           </Field>
-          <Field label="撞上限后跳转到" hint="不设则撞上限直接判 run 失败">
+          <Field label="撞上限后跳转到" hint="不设则撞上限直接判 run 失败；回路级上限优先用控制器上的出口">
             <select
               className="wf-input"
               value={body.onLimitExceeded ?? ''}

@@ -41,6 +41,7 @@ function getRunDetail(db, runId) {
 	const pendingGate = resolvePendingGate(row, snapshot, gateRows);
 	const rootId = row.root_run_id ?? row.id;
 	const artifacts = db.prepare("SELECT key, version, summary, path, role, created_at FROM run_artifacts WHERE root_run_id = ? ORDER BY key, version").all(rootId);
+	const childRows = db.prepare(`${LIST_SQL} WHERE r.parent_run_id = ? ORDER BY r.created_at, r.rowid`).all(runId);
 	return {
 		...toListItem(row),
 		snapshotHash: row.flow_snapshot_hash,
@@ -49,6 +50,7 @@ function getRunDetail(db, runId) {
 		executions: executions.map(toExecution),
 		gates: gateRows.map(toGate),
 		pendingGate,
+		children: childRows.map((child) => toListItem(asRunRow(child))),
 		artifacts: artifacts.map((item) => ({
 			key: item.key,
 			version: item.version,
@@ -63,7 +65,9 @@ function readMonitorState(db, selectedId, limits = {}, hostSession) {
 	const all = listRuns(db, limits.runs ?? 60, hostSession ?? null);
 	const active = all.filter((r) => isActiveStatus(r.status)).slice(0, limits.list ?? 8);
 	const recent = all.filter((r) => !isActiveStatus(r.status)).slice(0, limits.list ?? 8);
-	const chosen = (selectedId !== null && selectedId !== void 0 ? all.find((r) => r.id === selectedId)?.id : void 0) ?? active[0]?.id ?? recent[0]?.id ?? null;
+	const rootActive = active.filter((r) => r.parentRunId === null);
+	const rootRecent = recent.filter((r) => r.parentRunId === null);
+	const chosen = (selectedId !== null && selectedId !== void 0 ? all.find((r) => r.id === selectedId)?.id : void 0) ?? rootActive[0]?.id ?? rootRecent[0]?.id ?? active[0]?.id ?? recent[0]?.id ?? null;
 	return {
 		active,
 		recent,
@@ -121,6 +125,7 @@ function toListItem(row) {
 	return {
 		id: row.id,
 		parentRunId: row.parent_run_id,
+		parentNode: row.parent_node ?? null,
 		rootRunId: row.root_run_id ?? row.id,
 		flowId: row.flow_id,
 		flowName: row.flow_name,
@@ -364,6 +369,7 @@ function validateFlow(flow) {
 		}
 	}
 	for (const node of flow.nodes) validateNode(node, byId, err, warn, agentIds);
+	const loopControllers = validateLoops(flow.nodes, err, warn);
 	const produced = /* @__PURE__ */ new Set();
 	for (const agent of flow.agents ?? []) for (const key of agent.produces ?? []) produced.add(key);
 	for (const node of flow.nodes) if (node.type === "subagent") for (const key of node.produces ?? []) produced.add(key);
@@ -382,7 +388,10 @@ function validateFlow(flow) {
 		for (const node of flow.nodes) if (reachable.has(node.id) && !canTerminate.has(node.id)) err("E_NO_TERMINATION", `节点 "${node.id}" 无法到达任何终点（环无逃生出口或死路）`, node.id);
 	}
 	const cycleNodes = nodesOnCycle(flow.nodes, edges);
-	for (const id of cycleNodes) if (byId.get(id).iterationLimit === void 0) warn("W_CYCLE_NO_LIMIT", `节点在环上但未配置 iterationLimit：${id}`, id);
+	for (const id of cycleNodes) {
+		const node = byId.get(id);
+		if (node.iterationLimit === void 0 && !(node.loopId !== void 0 && loopControllers.has(node.loopId))) warn("W_CYCLE_NO_LIMIT", `节点在环上但未配置 iterationLimit / 回路 maxRounds：${id}`, id);
+	}
 	return finish(errors, warnings);
 }
 function finish(errors, warnings) {
@@ -411,6 +420,12 @@ function validateNode(node, byId, err, warn, agentIds = /* @__PURE__ */ new Set(
 	if (node.iterationLimit !== void 0) {
 		if (!Number.isInteger(node.iterationLimit) || node.iterationLimit < 1) err("E_BAD_ITERATION_LIMIT", `iterationLimit 必须为正整数：${node.iterationLimit}`, id);
 		if (node.onLimitExceeded === void 0) warn("W_LIMIT_NO_ESCAPE", `节点 "${id}" 配了 iterationLimit 但没有 onLimitExceeded，撞上限时将判 run 失败`, id);
+	}
+	if (node.loopId !== void 0 && node.loopId.trim() === "") err("E_BAD_LOOP_ID", `loopId 不能为空字符串（节点 ${id}）`, id);
+	if (node.maxRounds !== void 0) {
+		if (node.loopId === void 0 || node.loopId.trim() === "") err("E_LOOP_ID_REQUIRED", `节点 "${id}" 配了 maxRounds 但没有 loopId；回路控制器必须属于一个回路`, id);
+		if (!Number.isInteger(node.maxRounds) || node.maxRounds < 1) err("E_BAD_LOOP_LIMIT", `maxRounds 必须为正整数：${node.maxRounds}（节点 ${id}）`, id);
+		if (node.onLimitExceeded === void 0) warn("W_LIMIT_NO_ESCAPE", `节点 "${id}" 配了 maxRounds 但没有 onLimitExceeded，撞上限时将判 run 失败`, id);
 	}
 	if (node.branches !== void 0) {
 		const branchIds = /* @__PURE__ */ new Set();
@@ -472,7 +487,7 @@ function validateNode(node, byId, err, warn, agentIds = /* @__PURE__ */ new Set(
 			if (!node.extraPrompt?.trim()) err("E_TYPE_FIELD", `subagent 节点 "${id}" 缺少 extraPrompt`, id);
 			if (!SUBAGENT_MODES.has(node.mode)) err("E_TYPE_FIELD", `subagent 节点 "${id}" 的 mode 非法：${node.mode}`, id);
 			if (node.mode === "subflow" && !node.subflow) err("E_TYPE_FIELD", `subagent 节点 "${id}" mode 为 subflow 但缺少内嵌子图`, id);
-			if (node.mode === "subflow" && node.subflow) validateSubflow(node.subflow, id, err, agentIds);
+			if (node.mode === "subflow" && node.subflow) validateSubflow(node.subflow, id, err, warn, agentIds);
 			if (node.mode === "flowRef" && !node.flowRef?.trim()) err("E_TYPE_FIELD", `subagent 节点 "${id}" mode 为 flowRef 但缺少 flowRef`, id);
 			if (node.fanOut) {
 				const { from, count, max } = node.fanOut;
@@ -493,8 +508,29 @@ function validateNode(node, byId, err, warn, agentIds = /* @__PURE__ */ new Set(
 		default: err("E_TYPE_FIELD", `未知节点类型：${node.type}（节点 ${id}）`, id);
 	}
 }
+/** 回路控制器校验：每个 loopId 最多一个 maxRounds 控制器；有 loopId 但无控制器时警告 */
+function validateLoops(nodes, err, warn) {
+	const controllers = /* @__PURE__ */ new Map();
+	const loopIds = /* @__PURE__ */ new Set();
+	for (const node of nodes) {
+		if (node.loopId === void 0 || node.loopId.trim() === "") continue;
+		loopIds.add(node.loopId);
+		if (node.maxRounds !== void 0) {
+			const list = controllers.get(node.loopId) ?? [];
+			list.push(node.id);
+			controllers.set(node.loopId, list);
+		}
+	}
+	const first = /* @__PURE__ */ new Map();
+	for (const [loopId, ids] of controllers) {
+		first.set(loopId, ids[0]);
+		if (ids.length > 1) err("E_DUP_LOOP_CONTROLLER", `回路 "${loopId}" 有多个 maxRounds 控制器：${ids.join(", ")}；每个回路只能有一个控制器`, ids[1]);
+	}
+	for (const loopId of loopIds) if (!controllers.has(loopId)) warn("W_LOOP_NO_CONTROLLER", `回路 "${loopId}" 没有任何节点配 maxRounds，回路级上限不会生效`);
+	return first;
+}
 /** 内嵌子图（subflow）递归校验；只做结构校验，节点 id 作用域独立 */
-function validateSubflow(subflow, parentId, err, agentIds) {
+function validateSubflow(subflow, parentId, err, warn, agentIds) {
 	if (!Array.isArray(subflow.nodes) || subflow.nodes.length === 0) {
 		err("E_TYPE_FIELD", `subflow（节点 ${parentId}）没有任何节点`, parentId);
 		return;
@@ -505,9 +541,14 @@ function validateSubflow(subflow, parentId, err, agentIds) {
 		byId.set(node.id, node);
 	}
 	if (!subflow.entry || !byId.has(subflow.entry)) err("E_NO_ENTRY", `subflow（节点 ${parentId}）的 entry 缺失或不存在：${subflow.entry}`, parentId);
-	const noopWarn = () => {};
-	for (const node of subflow.nodes) validateNode(node, byId, err, noopWarn, agentIds);
+	for (const node of subflow.nodes) validateNode(node, byId, err, warn, agentIds);
+	const loopControllers = validateLoops(subflow.nodes, err, warn);
 	const edges = buildEdgeMap(subflow.nodes);
+	const cycleNodes = nodesOnCycle(subflow.nodes, edges);
+	for (const id of cycleNodes) {
+		const node = byId.get(id);
+		if (node.iterationLimit === void 0 && !(node.loopId !== void 0 && loopControllers.has(node.loopId))) warn("W_CYCLE_NO_LIMIT", `subflow（节点 ${parentId}）内节点在环上但未配置 iterationLimit / maxRounds：${id}`, id);
+	}
 	const reachable = reachableFrom(subflow.entry, edges);
 	const terminals = subflow.nodes.filter(isTerminal).map((n) => n.id);
 	if (terminals.length === 0) err("E_NO_TERMINAL", `subflow（节点 ${parentId}）不存在任何终点`, parentId);
@@ -1986,7 +2027,7 @@ var ExecutionEngine = class {
 		};
 		return this.currentRef(run);
 	}
-	/** 解析最终推进目标（§4.5）：目标撞 iterationLimit 时不执行它，落 limit_exceeded 轨迹并改走 onLimitExceeded；
+	/** 解析最终推进目标（§4.5）：目标撞 iterationLimit / 回路 maxRounds 时不执行它，落 limit_exceeded 轨迹并改走逃生出口；
 	*  无逃生出口判失败。校验器已保证逃生边可达终点，逃生链成环只是防御性兜底。 */
 	resolveAdvance(run, snapshot, successorId) {
 		const limitRows = [];
@@ -1998,6 +2039,27 @@ var ExecutionEngine = class {
 				kind: "dangling",
 				nodeId: targetId
 			};
+			const loop = target.type === "end" ? void 0 : this.loopLimitOf(snapshot, target);
+			if (loop !== void 0 && this.execCount(run.id, loop.controllerId) >= loop.limit) {
+				const escape = target.onLimitExceeded ?? loop.controller.onLimitExceeded ?? target.branches?.find((branch) => branch.condition === "*")?.to;
+				if (escape === void 0) return {
+					kind: "fail",
+					reason: `回路 ${loop.id} 已到 maxRounds（${loop.limit} 轮）且没有配 onLimitExceeded 逃生出口，run 判失败。`
+				};
+				if (seen.has(`loop:${loop.id}`)) return {
+					kind: "fail",
+					reason: `回路 ${loop.id} 撞上限后逃生链成环，run 判失败。`
+				};
+				seen.add(`loop:${loop.id}`);
+				limitRows.push({
+					nodeId: target.id,
+					iteration: this.execCount(run.id, target.id) + 1,
+					limit: loop.limit,
+					loopId: loop.id
+				});
+				targetId = escape;
+				continue;
+			}
 			if (target.type !== "end" && target.iterationLimit !== void 0 && this.execCount(run.id, target.id) >= target.iterationLimit) {
 				if (target.onLimitExceeded === void 0) return {
 					kind: "fail",
@@ -2028,6 +2090,24 @@ var ExecutionEngine = class {
 			limitRows
 		};
 	}
+	/** 找节点所属回路的控制器：控制器 = 同 loopId 且声明了 maxRounds 的节点 */
+	loopLimitOf(snapshot, node) {
+		if (node.loopId === void 0 || node.loopId.trim() === "") return void 0;
+		if (node.maxRounds !== void 0) return {
+			id: node.loopId,
+			limit: node.maxRounds,
+			controllerId: node.id,
+			controller: node
+		};
+		const controller = snapshot.flows[snapshot.rootFlowId]?.nodes.find((candidate) => candidate.loopId === node.loopId && candidate.maxRounds !== void 0);
+		if (controller?.maxRounds === void 0) return void 0;
+		return {
+			id: node.loopId,
+			limit: controller.maxRounds,
+			controllerId: controller.id,
+			controller
+		};
+	}
 	/** 单事务推进：落本步轨迹（completed / blocked）+ 迭代逃生轨迹 + 卡点决策更新 + 子 run 落库 + 更新 run 指针/状态，任何一步失败整体回滚。
 	*  目标是 gate 时置 waiting_gate 并写 pending 卡点决策（§7.6）；目标是 subagent 时置 waiting_children（child 落库由调用方在事务后补，见 completeStep）。
 	*  事件在事务提交后才发（事务内只收集），回滚不会产生假事件。 */
@@ -2047,7 +2127,7 @@ var ExecutionEngine = class {
 			this.writeArtifacts(run, first.nodeId, first.artifacts, now);
 			const limitRows = plan.kind === "advance" ? plan.limitRows : [];
 			for (const row of limitRows) {
-				insert.run(run.id, row.nodeId, row.iteration, "limit_exceeded", `撞迭代上限（${row.limit} 次），未执行该节点，按 onLimitExceeded 逃生`, "{}", null, now, now);
+				insert.run(run.id, row.nodeId, row.iteration, "limit_exceeded", row.loopId !== void 0 ? `回路 ${row.loopId} 已到 maxRounds（${row.limit} 轮），未执行该节点，按逃生出口继续` : `撞迭代上限（${row.limit} 次），未执行该节点，按 onLimitExceeded 逃生`, "{}", null, now, now);
 				events.push({
 					type: "step_completed",
 					runId: run.id,
@@ -2106,7 +2186,7 @@ var ExecutionEngine = class {
 	resultForPlan(runId, snapshot, plan) {
 		if (plan.kind === "fail") return this.finishedResult(runId, "fail", plan.reason);
 		if (plan.kind === "dangling") return this.finishedResult(runId, "fail", `后继节点 ${plan.nodeId} 在快照里不存在，run 判失败。`);
-		const escapeNote = plan.limitRows.length > 0 ? `迭代逃生：${plan.limitRows.map((r) => `${r.nodeId} 撞迭代上限（${r.limit} 次）未执行，改走 onLimitExceeded。`).join("")}` : void 0;
+		const escapeNote = plan.limitRows.length > 0 ? `迭代逃生：${plan.limitRows.map((r) => r.loopId !== void 0 ? `回路 ${r.loopId} 已到 maxRounds（${r.limit} 轮），${r.nodeId} 未执行` : `${r.nodeId} 撞迭代上限（${r.limit} 次）未执行，改走 onLimitExceeded。`).join("")}` : void 0;
 		if (plan.targetId === null) return this.finishedResult(runId, "success", escapeNote ?? "节点没有后继，按隐式 end 收尾。");
 		const target = findNode(snapshot, plan.targetId);
 		if (target !== void 0 && target.type === "end") return this.finishedResult(runId, target.outcome, escapeNote);
@@ -2250,7 +2330,7 @@ var FLOW_ACTIONS = [
 	"update"
 ];
 /** 模型可见的 DSL 速查（完整语义以校验器报错为准） */
-var DSL_HINT = "完整流程图 DSL：{ id, name, entry, maxSteps?, agents?, nodes: [...] }。节点 { id, type: prompt|tool|gate|subagent|join|end, title?, instruction?, toolName?, params?, next?, branches?, iterationLimit?, onLimitExceeded?, outcome? }。subagent 额外支持 { role?, thread?: \"new\"|\"role\"|自定义, produces?, consumes?, reportHint? }；agents: [{ id, name, charter, produces?, consumes? }]。后继二选一：next（唯一后继）或 branches: [{ id, condition, to, when? }]（condition \"*\" 是默认分支，同节点至多一个；when 是服务端可判定的单比较，如 \"{{review.payload.verdict}} == 'pass'\"）。complete_step 可带 artifacts: [{ key, summary?, path?, content? }]，插值用 {{artifacts.key.path}}；run 输入用 {{inputs.字段}}。环必须给环上节点配 iterationLimit。end 节点带 outcome: success|fail。";
+var DSL_HINT = "完整流程图 DSL：{ id, name, entry, maxSteps?, agents?, nodes: [...] }。节点 { id, type: prompt|tool|gate|subagent|join|end, title?, instruction?, toolName?, params?, next?, branches?, iterationLimit?, loopId?, maxRounds?, onLimitExceeded?, outcome? }。subagent 额外支持 { role?, thread?: \"new\"|\"role\"|自定义, produces?, consumes?, reportHint? }；agents: [{ id, name, charter, produces?, consumes? }]。后继二选一：next（唯一后继）或 branches: [{ id, condition, to, when? }]（condition \"*\" 是默认分支，同节点至多一个；when 是服务端可判定的单比较，如 \"{{review.payload.verdict}} == 'pass'\"）。complete_step 可带 artifacts: [{ key, summary?, path?, content? }]，插值用 {{artifacts.key.path}}；run 输入用 {{inputs.字段}}。环必须给环上节点配 iterationLimit，或给同一 loopId 的控制器配 maxRounds。end 节点带 outcome: success|fail。";
 function textResult(value) {
 	return [{
 		type: "text",

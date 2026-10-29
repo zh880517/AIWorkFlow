@@ -127,11 +127,15 @@ export function RunGraphPage({ onExit, sessionId }: RunGraphPageProps): React.Re
 
   const detail = data?.detail ?? null;
   const graph = React.useMemo(() => (detail === null ? null : buildRunGraph(detail)), [detail]);
-  const runs = data === null ? [] : dedupe([...data.active, ...data.recent]);
+  const allRuns = data === null ? [] : dedupe([...data.active, ...data.recent]);
+  // 顶部只列根 run；child run 从父 run 的“子运行”卡片进入，避免列表被每轮派发刷屏
+  const runs = allRuns.filter((run) => run.parentRunId === null);
   const phase = detail === null ? null : phaseOf(detail);
   const executions = detail === null ? [] : detail.executions;
   const visible = focusNode === null ? executions : executions.filter((exec) => exec.nodeId === focusNode);
   const focused = openExec === null ? undefined : executions.find((exec) => exec.id === openExec);
+  const childRuns = detail === null ? [] : detail.children;
+  const shownChildren = focusNode === null ? childRuns : childRuns.filter((child) => child.parentNode === focusNode);
   const rootFlow = detail?.snapshot === null || detail?.snapshot === undefined
     ? undefined
     : detail.snapshot.flows[detail.snapshot.rootFlowId];
@@ -146,6 +150,20 @@ export function RunGraphPage({ onExit, sessionId }: RunGraphPageProps): React.Re
       <style>{runCss}</style>
       <header className="awr-head">
         <span className="awr-title">运行图</span>
+        {detail !== null && detail.parentRunId !== null && (
+          <button
+            type="button"
+            className="awr-btn"
+            onClick={() => {
+              setSelected(detail.parentRunId);
+              setFocusNode(null);
+              setOpenExec(null);
+            }}
+            title="回到派发这个 child 的父 run"
+          >
+            ← 父 run
+          </button>
+        )}
         <span className="awr-sub">
           {detail === null ? '只读预览' : `${detail.flowName ?? detail.flowId} · ${detail.stepsUsed} 步`}
         </span>
@@ -242,6 +260,38 @@ export function RunGraphPage({ onExit, sessionId }: RunGraphPageProps): React.Re
                     {detail.threadId !== null ? ` · 线程 ${detail.threadId}` : ''}
                     {detail.parentIteration !== null ? ` · 第 ${detail.parentIteration} 轮` : ''}
                   </>
+                )}
+              </div>
+            )}
+
+            {detail !== null && childRuns.length > 0 && (
+              <div className="awr-card">
+                <div className="awr-card-title">
+                  子运行（{shownChildren.length}/{childRuns.length}）
+                  {focusNode !== null ? ` · ${nodeLabel(rootFlow, focusNode)}` : ''}
+                </div>
+                {shownChildren.length === 0 ? (
+                  <div className="awr-card-hint">该节点没有子运行；点上面的父节点可筛选。</div>
+                ) : (
+                  shownChildren.map((child) => (
+                    <button
+                      type="button"
+                      key={child.id}
+                      className="awr-child"
+                      data-sel={child.id === (data?.selectedId ?? selected) ? 'true' : 'false'}
+                      onClick={() => {
+                        setSelected(child.id);
+                        setFocusNode(null);
+                        setOpenExec(null);
+                      }}
+                      title={`${child.flowName ?? child.flowId} · ${child.parentNode ?? ''}`}
+                    >
+                      <span className="awr-dot" data-phase={phaseOf(child)} />
+                      <span className="awr-run-name">{child.flowName ?? child.flowId}</span>
+                      {child.parentNode !== null && <span className="awr-child-node">{child.parentNode}</span>}
+                      <span>{child.role ?? ''}</span>
+                    </button>
+                  ))
                 )}
               </div>
             )}

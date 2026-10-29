@@ -3,12 +3,16 @@ import { describe, expect, it } from 'vitest';
 import {
   buildFlow,
   canvasOf,
+  makeReviewSubflow,
   makeSubflow,
+  makeTestSubflow,
   spreadSourceHandles,
   subflowPreview,
+  TEMPLATES,
   type CanvasEdge,
   type CanvasNode,
 } from '../dsh-plugin/src/editor/model.js';
+import { validateFlow } from '../shared/src/validate.js';
 
 const node = (id: string, kind: 'prompt' | 'gate' | 'end', extra: Record<string, unknown> = {}) =>
   ({ id, type: kind, title: id, ...extra }) as never;
@@ -157,6 +161,65 @@ describe('内嵌子图：缩略图与保存往返', () => {
     expect(node.subflow?.entry).toBe('s1');
     expect(node.subflow?.nodes).toHaveLength(2);
     expect(node.subflow?._ui?.positions).toBeDefined();
+  });
+});
+
+describe('回路模板', () => {
+  it('评审/测试模板都是带 loopId + maxRounds 的合法内嵌子图', () => {
+    for (const template of TEMPLATES) {
+      const sub = template.subflow();
+      expect(sub.nodes.length).toBeGreaterThanOrEqual(3);
+      const controller = sub.nodes.find((item) => item.maxRounds !== undefined);
+      expect(controller?.loopId).toBeDefined();
+      expect(controller?.onLimitExceeded).toBeDefined();
+      expect(sub.nodes.filter((item) => item.loopId === controller?.loopId).length).toBeGreaterThanOrEqual(2);
+    }
+  });
+
+  it('评审回路子图能通过完整校验', () => {
+    const sub = makeReviewSubflow();
+    const result = validateFlow({
+      id: 'f_template',
+      name: '模板图',
+      entry: 'agent',
+      nodes: [
+        {
+          id: 'agent',
+          type: 'subagent',
+          title: '评审回路',
+          extraPrompt: '按评审标准检查',
+          mode: 'subflow',
+          subflow: sub,
+          next: 'done',
+        },
+        { id: 'done', type: 'end', outcome: 'success' },
+      ],
+    });
+    expect(result.errors).toEqual([]);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it('测试回路子图能通过完整校验', () => {
+    const sub = makeTestSubflow();
+    const result = validateFlow({
+      id: 'f_template_test',
+      name: '模板图',
+      entry: 'agent',
+      nodes: [
+        {
+          id: 'agent',
+          type: 'subagent',
+          title: '测试回路',
+          extraPrompt: '按验收标准测试',
+          mode: 'subflow',
+          subflow: sub,
+          next: 'done',
+        },
+        { id: 'done', type: 'end', outcome: 'success' },
+      ],
+    });
+    expect(result.errors).toEqual([]);
+    expect(result.warnings).toEqual([]);
   });
 });
 

@@ -61,6 +61,7 @@ const RUN_COLUMNS = [
   'role',
   'thread_id',
   'parent_iteration',
+  'parent_node',
   'last_activity',
   'created_at',
   'finished_at',
@@ -82,6 +83,7 @@ interface RunRow {
   role: string | null;
   thread_id: string | null;
   parent_iteration: number | null;
+  parent_node: string | null;
   last_activity: string | null;
   created_at: string;
   finished_at: string | null;
@@ -159,6 +161,10 @@ export function getRunDetail(db: SqlDatabase, runId: string): RunDetail | undefi
     created_at: string;
   }>;
 
+  const childRows = db
+    .prepare(`${LIST_SQL} WHERE r.parent_run_id = ? ORDER BY r.created_at, r.rowid`)
+    .all(runId) as unknown[];
+
   return {
     ...toListItem(row),
     snapshotHash: row.flow_snapshot_hash,
@@ -167,6 +173,7 @@ export function getRunDetail(db: SqlDatabase, runId: string): RunDetail | undefi
     executions: executions.map(toExecution),
     gates: gateRows.map(toGate),
     pendingGate,
+    children: childRows.map((child) => toListItem(asRunRow(child))),
     artifacts: artifacts.map((item) => ({
       key: item.key,
       version: item.version,
@@ -199,8 +206,13 @@ export function readMonitorState(
   const all = listRuns(db, limits.runs ?? 60, hostSession ?? null);
   const active = all.filter((r) => isActiveStatus(r.status)).slice(0, limits.list ?? 8);
   const recent = all.filter((r) => !isActiveStatus(r.status)).slice(0, limits.list ?? 8);
+  // 默认选中根 run：child run 通过父 run 的“子运行”卡片进入，避免刷新后直接落到某个 child
+  const rootActive = active.filter((r) => r.parentRunId === null);
+  const rootRecent = recent.filter((r) => r.parentRunId === null);
   const chosen =
     (selectedId !== null && selectedId !== undefined ? all.find((r) => r.id === selectedId)?.id : undefined) ??
+    rootActive[0]?.id ??
+    rootRecent[0]?.id ??
     active[0]?.id ??
     recent[0]?.id ??
     null;
@@ -285,6 +297,7 @@ function toListItem(row: RunRow): RunListItem {
   return {
     id: row.id,
     parentRunId: row.parent_run_id,
+    parentNode: row.parent_node ?? null,
     rootRunId: row.root_run_id ?? row.id,
     flowId: row.flow_id,
     flowName: row.flow_name,

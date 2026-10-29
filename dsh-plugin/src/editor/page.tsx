@@ -16,6 +16,8 @@ import {
   makeSubflow,
   outletsOf,
   subflowPreview,
+  TEMPLATES,
+  type TemplateKind,
   PALETTE,
   typeLabel,
   type CanvasEdge,
@@ -586,6 +588,64 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
       insertNode(body, body.title ?? typeLabel(type), at);
     },
     [record, insertNode],
+  );
+
+  /** 插入一个“子 Agent + 完成节点”的模板；子图内部回路随主图保存 */
+  const insertTemplate = React.useCallback(
+    (kind: TemplateKind, at?: Point): void => {
+      const template = TEMPLATES.find((item) => item.kind === kind);
+      if (template === undefined) return;
+      record();
+      const snapshot = liveRef.current;
+      const subId = nextNodeId(snapshot.nodes, issuedRef.current);
+      issuedRef.current.add(subId);
+      const endId = nextNodeId(snapshot.nodes, issuedRef.current);
+      issuedRef.current.add(endId);
+      const position = placePoint(at);
+      const subflow = template.subflow();
+      const body: FlowNode = {
+        id: subId,
+        type: 'subagent',
+        title: template.title,
+        extraPrompt: template.extraPrompt,
+        mode: 'subflow',
+        subflow,
+        reportHint: template.reportHint,
+        produces: [template.produces],
+      };
+      const end = makeNode('end', endId);
+      end.title = `${template.title} · 完成`;
+      const nextEntry = snapshot.nodes.length === 0 || snapshot.entry === '' ? subId : snapshot.entry;
+      const card = (node: FlowNode, x: number): CanvasNode => ({
+        id: node.id,
+        type: 'wf',
+        position: { x: position.x + x, y: position.y },
+        data: {
+          title: node.title?.trim() || node.id,
+          kind: node.type,
+          detail: detailOf(node),
+          isEntry: node.id === nextEntry,
+          outlets: outletsOf(node),
+          ...(node.type === 'subagent' && node.mode === 'subflow' && node.subflow !== undefined
+            ? { subflow: subflowPreview(node.subflow) }
+            : {}),
+        },
+      });
+      setBodies((all) => ({ ...all, [subId]: body, [endId]: end }));
+      setNodes((all) => [
+        ...all.map((node) => (node.selected === true ? { ...node, selected: false } : node)),
+        card(body, 0),
+        card(end, 300),
+      ]);
+      setEdges((all) => [
+        ...all,
+        { id: newEdgeId(), source: subId, target: endId, data: {} },
+      ]);
+      setEntry(nextEntry);
+      setSelectedId(subId);
+      setDirty(true);
+    },
+    [record, placePoint, setNodes, setEdges],
   );
 
   const copyNode = React.useCallback((id: string | null): void => {
@@ -1269,6 +1329,18 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
         {PALETTE.map((item) => (
           <button type="button" className="wf-btn" key={item.type} onClick={() => addNode(item.type)}>
             + {item.label}
+          </button>
+        ))}
+        <span className="wf-sub">模板：</span>
+        {TEMPLATES.map((template) => (
+          <button
+            type="button"
+            className="wf-btn"
+            key={template.kind}
+            title={template.hint}
+            onClick={() => insertTemplate(template.kind)}
+          >
+            + {template.label}
           </button>
         ))}
         <span className="wf-spacer" />

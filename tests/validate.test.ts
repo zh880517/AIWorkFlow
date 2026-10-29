@@ -47,6 +47,26 @@ describe('校验器：合法图', () => {
     expect(result.ok).toBe(true);
     expect(result.warnings).toHaveLength(0);
   });
+
+  it('loopId + maxRounds 的回路合法且无警告', () => {
+    const result = validateFlow(
+      flow([
+        {
+          id: 'n1',
+          type: 'prompt',
+          instruction: '评审',
+          loopId: 'review',
+          maxRounds: 3,
+          onLimitExceeded: 'n_fail',
+          next: 'n2',
+        },
+        { id: 'n2', type: 'prompt', instruction: '修订', loopId: 'review', next: 'n1' },
+        end('n_fail', 'fail'),
+      ]),
+    );
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toHaveLength(0);
+  });
 });
 
 describe('校验器：硬拒', () => {
@@ -294,6 +314,35 @@ describe('校验器：硬拒', () => {
       ]),
     );
     expect(result.errors.map((e) => e.code)).toContain('E_MULTI_DEFAULT');
+  });
+  it('maxRounds 缺少 loopId', () => {
+    const result = validateFlow(
+      flow([
+        prompt('n1', 'x', { maxRounds: 2, onLimitExceeded: 'n_fail', next: 'n2' }),
+        { id: 'n2', type: 'prompt', instruction: 'x', next: 'n1' },
+        end('n_fail', 'fail'),
+      ]),
+    );
+    expect(result.errors.map((e) => e.code)).toContain('E_LOOP_ID_REQUIRED');
+  });
+
+  it('同一个 loopId 配了多个 maxRounds 控制器', () => {
+    const result = validateFlow(
+      flow([
+        {
+          id: 'n1',
+          type: 'prompt',
+          instruction: 'x',
+          loopId: 'r',
+          maxRounds: 2,
+          onLimitExceeded: 'n_fail',
+          next: 'n2',
+        },
+        { id: 'n2', type: 'prompt', instruction: 'x', loopId: 'r', maxRounds: 3, next: 'n1' },
+        end('n_fail', 'fail'),
+      ]),
+    );
+    expect(result.errors.map((e) => e.code)).toContain('E_DUP_LOOP_CONTROLLER');
   });
 });
 

@@ -129,6 +129,122 @@ export function makeSubflow(name = '子图'): SubflowDef {
   };
 }
 
+/** 评审回路：子 Agent 内先评审，不通过则按 issues 修订后复审；超轮次直接结束 */
+export function makeReviewSubflow(): SubflowDef {
+  return {
+    name: '评审回路',
+    entry: 'review',
+    nodes: [
+      {
+        id: 'review',
+        type: 'prompt',
+        title: '评审',
+        instruction: '按评审标准逐条检查，输出 verdict（pass/fail）与 issues；pass 才允许进入下一阶段。',
+        branches: [
+          { id: 'pass', condition: '评审通过', to: 'done' },
+          { id: 'fix', condition: '*', to: 'fix' },
+        ],
+        loopId: 'review-loop',
+        maxRounds: 3,
+        iterationLimit: 3,
+        onLimitExceeded: 'done',
+      },
+      {
+        id: 'fix',
+        type: 'prompt',
+        title: '按评审意见修订',
+        instruction: '按上一轮 issues 逐条修订，然后在 summary 里说明改了什么。',
+        next: 'review',
+        loopId: 'review-loop',
+      },
+      { id: 'done', type: 'end', title: '评审结束', outcome: 'success' },
+    ],
+    _ui: {
+      positions: {
+        review: { x: 80, y: 90 },
+        fix: { x: 380, y: 90 },
+        done: { x: 680, y: 90 },
+      },
+    },
+  };
+}
+
+/** 测试回路：子 Agent 内执行测试，失败按 failureType 修复后重测；超轮次结束 */
+export function makeTestSubflow(): SubflowDef {
+  return {
+    name: '测试回路',
+    entry: 'test',
+    nodes: [
+      {
+        id: 'test',
+        type: 'prompt',
+        title: '执行测试',
+        instruction: '按验收标准执行测试，输出 verdict（pass/fail）与 failureType（impl/design/env）。',
+        branches: [
+          { id: 'pass', condition: '测试通过', to: 'done' },
+          { id: 'fix', condition: '*', to: 'fix' },
+        ],
+        loopId: 'test-loop',
+        maxRounds: 4,
+        iterationLimit: 4,
+        onLimitExceeded: 'done',
+      },
+      {
+        id: 'fix',
+        type: 'prompt',
+        title: '按失败类型修复',
+        instruction: 'impl 改代码；design 回到设计；env 重跑测试。修完回到测试。',
+        next: 'test',
+        loopId: 'test-loop',
+      },
+      { id: 'done', type: 'end', title: '测试结束', outcome: 'success' },
+    ],
+    _ui: {
+      positions: {
+        test: { x: 80, y: 90 },
+        fix: { x: 380, y: 90 },
+        done: { x: 680, y: 90 },
+      },
+    },
+  };
+}
+
+export type TemplateKind = 'review' | 'test';
+
+export interface FlowTemplate {
+  kind: TemplateKind;
+  label: string;
+  hint: string;
+  title: string;
+  extraPrompt: string;
+  reportHint: string;
+  produces: string;
+  subflow: () => SubflowDef;
+}
+
+export const TEMPLATES: FlowTemplate[] = [
+  {
+    kind: 'review',
+    label: '评审回路',
+    hint: '插入一个带内嵌评审子图的子 Agent + 完成节点；子图内是评审→修订→复审的回路',
+    title: '评审回路',
+    extraPrompt: '按评审标准检查当前交付物，输出 verdict（pass/fail）与 issues；不通过时给出可执行的修订项。',
+    reportHint: 'payload 带 verdict（pass/fail）与 issues[]；需要修订时把 issues 写具体。',
+    produces: 'review',
+    subflow: makeReviewSubflow,
+  },
+  {
+    kind: 'test',
+    label: '测试回路',
+    hint: '插入一个带内嵌测试子图的子 Agent + 完成节点；子图内按失败类型修复后重测',
+    title: '测试回路',
+    extraPrompt: '按验收标准执行测试，失败时归类为 impl/design/env，并驱动对应修复后重测。',
+    reportHint: 'payload 带 verdict（pass/fail）与 failureType（impl/design/env）。',
+    produces: 'test',
+    subflow: makeTestSubflow,
+  },
+];
+
 /** 子图缩略图：取前 24 个节点，按包围盒归一化到 0..100 */
 export function subflowPreview(subflow: SubflowDef): SubflowPreview {
   const nodes = subflow.nodes.slice(0, 24);

@@ -78,6 +78,7 @@ export function validateFlow(flow: Flow): ValidationResult {
 
   // --- 逐节点结构校验 ---
   for (const node of flow.nodes) validateNode(node, byId, err, warn, agentIds);
+  const loopControllers = validateLoops(flow.nodes, err, warn);
 
   // --- 产物声明：消费的 key 至少有一个生产者（只警告，允许跨图交接） ---
   const produced = new Set<string>();
@@ -127,8 +128,8 @@ export function validateFlow(flow: Flow): ValidationResult {
   const cycleNodes = nodesOnCycle(flow.nodes, edges);
   for (const id of cycleNodes) {
     const node = byId.get(id)!;
-    if (node.iterationLimit === undefined) {
-      warn('W_CYCLE_NO_LIMIT', `节点在环上但未配置 iterationLimit：${id}`, id);
+    if (node.iterationLimit === undefined && !(node.loopId !== undefined && loopControllers.has(node.loopId))) {
+      warn('W_CYCLE_NO_LIMIT', `节点在环上但未配置 iterationLimit / 回路 maxRounds：${id}`, id);
     }
   }
 
@@ -190,6 +191,20 @@ function validateNode(
     }
     if (node.onLimitExceeded === undefined) {
       warn('W_LIMIT_NO_ESCAPE', `节点 "${id}" 配了 iterationLimit 但没有 onLimitExceeded，撞上限时将判 run 失败`, id);
+    }
+  }
+  if (node.loopId !== undefined && node.loopId.trim() === '') {
+    err('E_BAD_LOOP_ID', `loopId 不能为空字符串（节点 ${id}）`, id);
+  }
+  if (node.maxRounds !== undefined) {
+    if (node.loopId === undefined || node.loopId.trim() === '') {
+      err('E_LOOP_ID_REQUIRED', `节点 "${id}" 配了 maxRounds 但没有 loopId；回路控制器必须属于一个回路`, id);
+    }
+    if (!Number.isInteger(node.maxRounds) || node.maxRounds < 1) {
+      err('E_BAD_LOOP_LIMIT', `maxRounds 必须为正整数：${node.maxRounds}（节点 ${id}）`, id);
+    }
+    if (node.onLimitExceeded === undefined) {
+      warn('W_LIMIT_NO_ESCAPE', `节点 "${id}" 配了 maxRounds 但没有 onLimitExceeded，撞上限时将判 run 失败`, id);
     }
   }
 
@@ -300,7 +315,7 @@ function validateNode(
       if (node.mode === 'subflow' && !node.subflow) {
         err('E_TYPE_FIELD', `subagent 节点 "${id}" mode 为 subflow 但缺少内嵌子图`, id);
       }
-      if (node.mode === 'subflow' && node.subflow) validateSubflow(node.subflow, id, err, agentIds);
+      if (node.mode === 'subflow' && node.subflow) validateSubflow(node.subflow, id, err, warn, agentIds);
       if (node.mode === 'flowRef' && !node.flowRef?.trim()) {
         err('E_TYPE_FIELD', `subagent 节点 "${id}" mode 为 flowRef 但缺少 flowRef`, id);
       }
@@ -338,8 +353,43 @@ function validateNode(
   }
 }
 
+/** 回路控制器校验：每个 loopId 最多一个 maxRounds 控制器；有 loopId 但无控制器时警告 */
+function validateLoops(nodes: FlowNode[], err: ErrFn, warn: WarnFn): Map<string, string> {
+  const controllers = new Map<string, string[]>();
+  const loopIds = new Set<string>();
+  for (const node of nodes) {
+    if (node.loopId === undefined || node.loopId.trim() === '') continue;
+    loopIds.add(node.loopId);
+    if (node.maxRounds !== undefined) {
+      const list = controllers.get(node.loopId) ?? [];
+      list.push(node.id);
+      controllers.set(node.loopId, list);
+    }
+  }
+  const first = new Map<string, string>();
+  for (const [loopId, ids] of controllers) {
+    first.set(loopId, ids[0]!);
+    if (ids.length > 1) {
+      err(
+        'E_DUP_LOOP_CONTROLLER',
+        `回路 "${loopId}" 有多个 maxRounds 控制器：${ids.join(', ')}；每个回路只能有一个控制器`,
+        ids[1],
+      );
+    }
+  }
+  for (const loopId of loopIds) {
+    if (!controllers.has(loopId)) {
+      warn(
+        'W_LOOP_NO_CONTROLLER',
+        `回路 "${loopId}" 没有任何节点配 maxRounds，回路级上限不会生效`,
+      );
+    }
+  }
+  return first;
+}
+
 /** 内嵌子图（subflow）递归校验；只做结构校验，节点 id 作用域独立 */
-function validateSubflow(subflow: SubflowDef, parentId: string, err: ErrFn, agentIds: Set<string>): void {
+function validateSubflow(subflow: SubflowDef, parentId: string, err: ErrFn, warn: WarnFn, agentIds: Set<string>): void {
   if (!Array.isArray(subflow.nodes) || subflow.nodes.length === 0) {
     err('E_TYPE_FIELD', `subflow（节点 ${parentId}）没有任何节点`, parentId);
     return;
@@ -355,9 +405,16 @@ function validateSubflow(subflow: SubflowDef, parentId: string, err: ErrFn, agen
     err('E_NO_ENTRY', `subflow（节点 ${parentId}）的 entry 缺失或不存在：${subflow.entry}`, parentId);
   }
   // 子图内引用自身节点表；嵌套 subflow 继续递归
-  const noopWarn: WarnFn = () => {};
-  for (const node of subflow.nodes) validateNode(node, byId, err, noopWarn, agentIds);
+  for (const node of subflow.nodes) validateNode(node, byId, err, warn, agentIds);
+  const loopControllers = validateLoops(subflow.nodes, err, warn);
   const edges = buildEdgeMap(subflow.nodes);
+  const cycleNodes = nodesOnCycle(subflow.nodes, edges);
+  for (const id of cycleNodes) {
+    const node = byId.get(id)!;
+    if (node.iterationLimit === undefined && !(node.loopId !== undefined && loopControllers.has(node.loopId))) {
+      warn('W_CYCLE_NO_LIMIT', `subflow（节点 ${parentId}）内节点在环上但未配置 iterationLimit / maxRounds：${id}`, id);
+    }
+  }
   const reachable = reachableFrom(subflow.entry, edges);
   const terminals = subflow.nodes.filter(isTerminal).map((n) => n.id);
   if (terminals.length === 0) {

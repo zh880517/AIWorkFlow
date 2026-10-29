@@ -6,6 +6,8 @@ import type { FlowSnapshot } from './types.js';
 export interface RunListItem {
   id: string;
   parentRunId: string | null;
+  /** 派发该 child 的父节点 id（根 run 为 null） */
+  parentNode: string | null;
   rootRunId: string;
   flowId: string;
   flowName: string | null;
@@ -69,6 +71,8 @@ export interface RunDetail extends RunListItem {
   executions: RunExecutionItem[];
   gates: GateDecisionItem[];
   pendingGate: PendingGate | null;
+  /** 直接子 run（subagent 派发出来的 child；内嵌子图也在这里） */
+  children: RunListItem[];
   /** P1：整个 root run 的产物（按 key/version 升序）；child run 详情也能看到同一批 */
   artifacts: RunArtifactItem[];
 }

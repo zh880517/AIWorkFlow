@@ -11174,6 +11174,137 @@ function makeSubflow(name = "子图") {
 		} }
 	};
 }
+/** 评审回路：子 Agent 内先评审，不通过则按 issues 修订后复审；超轮次直接结束 */
+function makeReviewSubflow() {
+	return {
+		name: "评审回路",
+		entry: "review",
+		nodes: [
+			{
+				id: "review",
+				type: "prompt",
+				title: "评审",
+				instruction: "按评审标准逐条检查，输出 verdict（pass/fail）与 issues；pass 才允许进入下一阶段。",
+				branches: [{
+					id: "pass",
+					condition: "评审通过",
+					to: "done"
+				}, {
+					id: "fix",
+					condition: "*",
+					to: "fix"
+				}],
+				loopId: "review-loop",
+				maxRounds: 3,
+				iterationLimit: 3,
+				onLimitExceeded: "done"
+			},
+			{
+				id: "fix",
+				type: "prompt",
+				title: "按评审意见修订",
+				instruction: "按上一轮 issues 逐条修订，然后在 summary 里说明改了什么。",
+				next: "review",
+				loopId: "review-loop"
+			},
+			{
+				id: "done",
+				type: "end",
+				title: "评审结束",
+				outcome: "success"
+			}
+		],
+		_ui: { positions: {
+			review: {
+				x: 80,
+				y: 90
+			},
+			fix: {
+				x: 380,
+				y: 90
+			},
+			done: {
+				x: 680,
+				y: 90
+			}
+		} }
+	};
+}
+/** 测试回路：子 Agent 内执行测试，失败按 failureType 修复后重测；超轮次结束 */
+function makeTestSubflow() {
+	return {
+		name: "测试回路",
+		entry: "test",
+		nodes: [
+			{
+				id: "test",
+				type: "prompt",
+				title: "执行测试",
+				instruction: "按验收标准执行测试，输出 verdict（pass/fail）与 failureType（impl/design/env）。",
+				branches: [{
+					id: "pass",
+					condition: "测试通过",
+					to: "done"
+				}, {
+					id: "fix",
+					condition: "*",
+					to: "fix"
+				}],
+				loopId: "test-loop",
+				maxRounds: 4,
+				iterationLimit: 4,
+				onLimitExceeded: "done"
+			},
+			{
+				id: "fix",
+				type: "prompt",
+				title: "按失败类型修复",
+				instruction: "impl 改代码；design 回到设计；env 重跑测试。修完回到测试。",
+				next: "test",
+				loopId: "test-loop"
+			},
+			{
+				id: "done",
+				type: "end",
+				title: "测试结束",
+				outcome: "success"
+			}
+		],
+		_ui: { positions: {
+			test: {
+				x: 80,
+				y: 90
+			},
+			fix: {
+				x: 380,
+				y: 90
+			},
+			done: {
+				x: 680,
+				y: 90
+			}
+		} }
+	};
+}
+var TEMPLATES = [{
+	kind: "review",
+	label: "评审回路",
+	hint: "插入一个带内嵌评审子图的子 Agent + 完成节点；子图内是评审→修订→复审的回路",
+	title: "评审回路",
+	extraPrompt: "按评审标准检查当前交付物，输出 verdict（pass/fail）与 issues；不通过时给出可执行的修订项。",
+	reportHint: "payload 带 verdict（pass/fail）与 issues[]；需要修订时把 issues 写具体。",
+	produces: "review",
+	subflow: makeReviewSubflow
+}, {
+	kind: "test",
+	label: "测试回路",
+	hint: "插入一个带内嵌测试子图的子 Agent + 完成节点；子图内按失败类型修复后重测",
+	title: "测试回路",
+	extraPrompt: "按验收标准执行测试，失败时归类为 impl/design/env，并驱动对应修复后重测。",
+	reportHint: "payload 带 verdict（pass/fail）与 failureType（impl/design/env）。",
+	produces: "test",
+	subflow: makeTestSubflow
+}];
 /** 子图缩略图：取前 24 个节点，按包围盒归一化到 0..100 */
 function subflowPreview(subflow) {
 	const nodes = subflow.nodes.slice(0, 24);
@@ -12055,8 +12186,25 @@ function Inspector(props) {
 		value: body.instruction ?? "",
 		onChange: (event) => patch({ instruction: event.target.value })
 	}))), body.type !== "end" && /* @__PURE__ */ react.createElement(Section, { title: "循环与逃生" }, /* @__PURE__ */ react.createElement(Field, {
+		label: "回路 id",
+		hint: "同一回路的节点共用一个 loopId；可只填在控制器上，其它节点靠 maxRounds 控制器共享计数"
+	}, /* @__PURE__ */ react.createElement("input", {
+		className: "wf-input",
+		value: body.loopId ?? "",
+		placeholder: "review-loop",
+		onChange: (event) => patch({ loopId: event.target.value.trim() === "" ? void 0 : event.target.value.trim() })
+	})), /* @__PURE__ */ react.createElement(Field, {
+		label: "回路最大轮次",
+		hint: "配在控制器节点上；控制器每执行一次算一轮，超限走 onLimitExceeded"
+	}, /* @__PURE__ */ react.createElement("input", {
+		className: "wf-input",
+		type: "number",
+		min: 1,
+		value: body.maxRounds ?? "",
+		onChange: (event) => patch({ maxRounds: positiveInt(event.target.value) })
+	})), /* @__PURE__ */ react.createElement(Field, {
 		label: "迭代上限",
-		hint: "环上节点建议设置；不设时只在全局步数上限处兜底"
+		hint: "节点级兜底；环上节点建议设置，不设时只在全局步数上限处兜底"
 	}, /* @__PURE__ */ react.createElement("input", {
 		className: "wf-input",
 		type: "number",
@@ -12065,7 +12213,7 @@ function Inspector(props) {
 		onChange: (event) => patch({ iterationLimit: positiveInt(event.target.value) })
 	})), /* @__PURE__ */ react.createElement(Field, {
 		label: "撞上限后跳转到",
-		hint: "不设则撞上限直接判 run 失败"
+		hint: "不设则撞上限直接判 run 失败；回路级上限优先用控制器上的出口"
 	}, /* @__PURE__ */ react.createElement("select", {
 		className: "wf-input",
 		value: body.onLimitExceeded ?? "",
@@ -12880,6 +13028,75 @@ function Editor({ initial, flows, onBack, onExit }) {
 		const body = makeNode(type, id);
 		insertNode(body, body.title ?? typeLabel(type), at);
 	}, [record, insertNode]);
+	/** 插入一个“子 Agent + 完成节点”的模板；子图内部回路随主图保存 */
+	const insertTemplate = react.useCallback((kind, at) => {
+		const template = TEMPLATES.find((item) => item.kind === kind);
+		if (template === void 0) return;
+		record();
+		const snapshot = liveRef.current;
+		const subId = nextNodeId(snapshot.nodes, issuedRef.current);
+		issuedRef.current.add(subId);
+		const endId = nextNodeId(snapshot.nodes, issuedRef.current);
+		issuedRef.current.add(endId);
+		const position = placePoint(at);
+		const subflow = template.subflow();
+		const body = {
+			id: subId,
+			type: "subagent",
+			title: template.title,
+			extraPrompt: template.extraPrompt,
+			mode: "subflow",
+			subflow,
+			reportHint: template.reportHint,
+			produces: [template.produces]
+		};
+		const end = makeNode("end", endId);
+		end.title = `${template.title} · 完成`;
+		const nextEntry = snapshot.nodes.length === 0 || snapshot.entry === "" ? subId : snapshot.entry;
+		const card = (node, x) => ({
+			id: node.id,
+			type: "wf",
+			position: {
+				x: position.x + x,
+				y: position.y
+			},
+			data: {
+				title: node.title?.trim() || node.id,
+				kind: node.type,
+				detail: detailOf(node),
+				isEntry: node.id === nextEntry,
+				outlets: outletsOf(node),
+				...node.type === "subagent" && node.mode === "subflow" && node.subflow !== void 0 ? { subflow: subflowPreview(node.subflow) } : {}
+			}
+		});
+		setBodies((all) => ({
+			...all,
+			[subId]: body,
+			[endId]: end
+		}));
+		setNodes((all) => [
+			...all.map((node) => node.selected === true ? {
+				...node,
+				selected: false
+			} : node),
+			card(body, 0),
+			card(end, 300)
+		]);
+		setEdges((all) => [...all, {
+			id: newEdgeId(),
+			source: subId,
+			target: endId,
+			data: {}
+		}]);
+		setEntry(nextEntry);
+		setSelectedId(subId);
+		setDirty(true);
+	}, [
+		record,
+		placePoint,
+		setNodes,
+		setEdges
+	]);
 	const copyNode = react.useCallback((id) => {
 		if (id === null) return;
 		const snapshot = liveRef.current;
@@ -13471,7 +13688,13 @@ function Editor({ initial, flows, onBack, onExit }) {
 		className: "wf-btn",
 		key: item.type,
 		onClick: () => addNode(item.type)
-	}, "+ ", item.label)), /* @__PURE__ */ react.createElement("span", { className: "wf-spacer" }), /* @__PURE__ */ react.createElement("span", { className: "wf-sub" }, "右键画布可在指针处新建 / 粘贴；选中后 Ctrl+C 复制")), banner !== null && /* @__PURE__ */ react.createElement("div", {
+	}, "+ ", item.label)), /* @__PURE__ */ react.createElement("span", { className: "wf-sub" }, "模板："), TEMPLATES.map((template) => /* @__PURE__ */ react.createElement("button", {
+		type: "button",
+		className: "wf-btn",
+		key: template.kind,
+		title: template.hint,
+		onClick: () => insertTemplate(template.kind)
+	}, "+ ", template.label)), /* @__PURE__ */ react.createElement("span", { className: "wf-spacer" }), /* @__PURE__ */ react.createElement("span", { className: "wf-sub" }, "右键画布可在指针处新建 / 粘贴；选中后 Ctrl+C 复制")), banner !== null && /* @__PURE__ */ react.createElement("div", {
 		className: "wf-banner",
 		"data-kind": banner.kind
 	}, banner.lines[0], banner.lines.length > 1 && /* @__PURE__ */ react.createElement("ul", null, banner.lines.slice(1).map((line, index) => /* @__PURE__ */ react.createElement("li", { key: index }, line)))), /* @__PURE__ */ react.createElement("div", {
@@ -13789,6 +14012,14 @@ var runCss = `
 .awr-card{border:1px solid var(--dsw-alias-border-l1);border-radius:10px;padding:8px 10px;
   background:var(--dsw-alias-bg-layer-2);display:flex;flex-direction:column;gap:6px}
 .awr-card-title{font-size:11.5px;font-weight:600;display:flex;align-items:center;gap:6px}
+.awr-child{display:flex;align-items:center;gap:6px;width:100%;padding:4px 6px;border-radius:7px;
+  border:1px solid transparent;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;
+  font-size:11px;text-align:left;cursor:pointer;overflow:hidden}
+.awr-child:hover{background:var(--dsw-alias-bg-layer-1);border-color:var(--dsw-alias-border-l1);
+  color:var(--dsw-alias-label-primary)}
+.awr-child[data-sel="true"]{border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-label-primary)}
+.awr-child-node{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:10px;
+  opacity:.75;flex:none;max-width:88px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .awr-card-q{font-size:12px;line-height:1.5}
 .awr-card-opts{display:flex;flex-wrap:wrap;gap:6px}
 .awr-opt{font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid var(--dsw-alias-border-l1);
@@ -14082,11 +14313,13 @@ function RunGraphPage({ onExit, sessionId }) {
 	]);
 	const detail = data?.detail ?? null;
 	const graph = react.useMemo(() => detail === null ? null : buildRunGraph(detail), [detail]);
-	const runs = data === null ? [] : dedupe([...data.active, ...data.recent]);
+	const runs = (data === null ? [] : dedupe([...data.active, ...data.recent])).filter((run) => run.parentRunId === null);
 	const phase = detail === null ? null : phaseOf(detail);
 	const executions = detail === null ? [] : detail.executions;
 	const visible = focusNode === null ? executions : executions.filter((exec) => exec.nodeId === focusNode);
 	const focused = openExec === null ? void 0 : executions.find((exec) => exec.id === openExec);
+	const childRuns = detail === null ? [] : detail.children;
+	const shownChildren = focusNode === null ? childRuns : childRuns.filter((child) => child.parentNode === focusNode);
 	const rootFlow = detail?.snapshot === null || detail?.snapshot === void 0 ? void 0 : detail.snapshot.flows[detail.snapshot.rootFlowId];
 	const pickNode = (nodeId) => {
 		setFocusNode((current) => current === nodeId ? null : nodeId);
@@ -14095,7 +14328,16 @@ function RunGraphPage({ onExit, sessionId }) {
 	return /* @__PURE__ */ react.createElement("div", {
 		className: "awr-page",
 		style: PAGE_STYLE
-	}, /* @__PURE__ */ react.createElement("style", null, runCss), /* @__PURE__ */ react.createElement("header", { className: "awr-head" }, /* @__PURE__ */ react.createElement("span", { className: "awr-title" }, "运行图"), /* @__PURE__ */ react.createElement("span", { className: "awr-sub" }, detail === null ? "只读预览" : `${detail.flowName ?? detail.flowId} · ${detail.stepsUsed} 步`), phase !== null && /* @__PURE__ */ react.createElement("span", {
+	}, /* @__PURE__ */ react.createElement("style", null, runCss), /* @__PURE__ */ react.createElement("header", { className: "awr-head" }, /* @__PURE__ */ react.createElement("span", { className: "awr-title" }, "运行图"), detail !== null && detail.parentRunId !== null && /* @__PURE__ */ react.createElement("button", {
+		type: "button",
+		className: "awr-btn",
+		onClick: () => {
+			setSelected(detail.parentRunId);
+			setFocusNode(null);
+			setOpenExec(null);
+		},
+		title: "回到派发这个 child 的父 run"
+	}, "← 父 run"), /* @__PURE__ */ react.createElement("span", { className: "awr-sub" }, detail === null ? "只读预览" : `${detail.flowName ?? detail.flowId} · ${detail.stepsUsed} 步`), phase !== null && /* @__PURE__ */ react.createElement("span", {
 		className: "awr-run",
 		"data-sel": "true",
 		style: { cursor: "default" }
@@ -14129,7 +14371,21 @@ function RunGraphPage({ onExit, sessionId }) {
 		edges: graph.edges,
 		selectedId: focusNode,
 		onSelect: pickNode
-	}), /* @__PURE__ */ react.createElement("aside", { className: "awr-rail" }, detail !== null && /* @__PURE__ */ react.createElement("div", { className: "awr-meta" }, detail.flowName ?? detail.flowId, detail.outcome !== null && !isActiveRun(detail) ? ` · ${detail.outcome === "fail" ? "未达成" : "达成"}` : "", /* @__PURE__ */ react.createElement("br", null), "开始 ", relTime(detail.createdAt), "（", clockTime(detail.createdAt), "）", detail.finishedAt !== null ? ` · 结束 ${clockTime(detail.finishedAt)}` : "", /* @__PURE__ */ react.createElement("br", null), "当前步 ", nodeLabel$1(rootFlow, detail.currentNode), detail.role !== null && /* @__PURE__ */ react.createElement(react.Fragment, null, /* @__PURE__ */ react.createElement("br", null), "角色 ", detail.role, detail.threadId !== null ? ` · 线程 ${detail.threadId}` : "", detail.parentIteration !== null ? ` · 第 ${detail.parentIteration} 轮` : "")), detail !== null && (detail.artifacts ?? []).length > 0 && /* @__PURE__ */ react.createElement("div", { className: "awr-card" }, /* @__PURE__ */ react.createElement("div", { className: "awr-card-title" }, "产物（", (detail.artifacts ?? []).length, "）"), (detail.artifacts ?? []).map((artifact) => /* @__PURE__ */ react.createElement("div", {
+	}), /* @__PURE__ */ react.createElement("aside", { className: "awr-rail" }, detail !== null && /* @__PURE__ */ react.createElement("div", { className: "awr-meta" }, detail.flowName ?? detail.flowId, detail.outcome !== null && !isActiveRun(detail) ? ` · ${detail.outcome === "fail" ? "未达成" : "达成"}` : "", /* @__PURE__ */ react.createElement("br", null), "开始 ", relTime(detail.createdAt), "（", clockTime(detail.createdAt), "）", detail.finishedAt !== null ? ` · 结束 ${clockTime(detail.finishedAt)}` : "", /* @__PURE__ */ react.createElement("br", null), "当前步 ", nodeLabel$1(rootFlow, detail.currentNode), detail.role !== null && /* @__PURE__ */ react.createElement(react.Fragment, null, /* @__PURE__ */ react.createElement("br", null), "角色 ", detail.role, detail.threadId !== null ? ` · 线程 ${detail.threadId}` : "", detail.parentIteration !== null ? ` · 第 ${detail.parentIteration} 轮` : "")), detail !== null && childRuns.length > 0 && /* @__PURE__ */ react.createElement("div", { className: "awr-card" }, /* @__PURE__ */ react.createElement("div", { className: "awr-card-title" }, "子运行（", shownChildren.length, "/", childRuns.length, "）", focusNode !== null ? ` · ${nodeLabel$1(rootFlow, focusNode)}` : ""), shownChildren.length === 0 ? /* @__PURE__ */ react.createElement("div", { className: "awr-card-hint" }, "该节点没有子运行；点上面的父节点可筛选。") : shownChildren.map((child) => /* @__PURE__ */ react.createElement("button", {
+		type: "button",
+		key: child.id,
+		className: "awr-child",
+		"data-sel": child.id === (data?.selectedId ?? selected) ? "true" : "false",
+		onClick: () => {
+			setSelected(child.id);
+			setFocusNode(null);
+			setOpenExec(null);
+		},
+		title: `${child.flowName ?? child.flowId} · ${child.parentNode ?? ""}`
+	}, /* @__PURE__ */ react.createElement("span", {
+		className: "awr-dot",
+		"data-phase": phaseOf(child)
+	}), /* @__PURE__ */ react.createElement("span", { className: "awr-run-name" }, child.flowName ?? child.flowId), child.parentNode !== null && /* @__PURE__ */ react.createElement("span", { className: "awr-child-node" }, child.parentNode), /* @__PURE__ */ react.createElement("span", null, child.role ?? "")))), detail !== null && (detail.artifacts ?? []).length > 0 && /* @__PURE__ */ react.createElement("div", { className: "awr-card" }, /* @__PURE__ */ react.createElement("div", { className: "awr-card-title" }, "产物（", (detail.artifacts ?? []).length, "）"), (detail.artifacts ?? []).map((artifact) => /* @__PURE__ */ react.createElement("div", {
 		key: `${artifact.key}@${artifact.version}`,
 		className: "awr-card-hint"
 	}, /* @__PURE__ */ react.createElement("b", null, artifact.key), " v", artifact.version, artifact.path !== null ? ` · ${artifact.path}` : "", artifact.summary !== null ? ` · ${artifact.summary}` : ""))), detail?.pendingGate !== null && detail?.pendingGate !== void 0 && /* @__PURE__ */ react.createElement("div", { className: "awr-card" }, /* @__PURE__ */ react.createElement("div", { className: "awr-card-title" }, /* @__PURE__ */ react.createElement("span", {

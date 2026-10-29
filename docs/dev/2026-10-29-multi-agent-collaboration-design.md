@@ -1,7 +1,7 @@
 # 子 Agent 协作工作流 — 扩展设计方案（P1 已完成，P2 内嵌子图）
 
 日期：2026-10-29
-状态：**已评审；P1 已完成（角色/线程/产物/when/inputs），P2 内嵌子图可视化编辑已落地**。评审结论：采用方案 A（父级中转）。评审通过的部分回写 `docs/2026-09-02-flowchart-driven-agent-design.md`，本文按 `docs/dev/` 约定在阶段结束后删除。
+状态：**已评审；P1 已完成（角色/线程/产物/when/inputs），P2 内嵌子图、运行图层级、评审/测试模板、loopId/maxRounds 已落地**。评审结论：采用方案 A（父级中转）。评审通过的部分回写 `docs/2026-09-02-flowchart-driven-agent-design.md`，本文按 `docs/dev/` 约定在阶段结束后删除。
 基线：当前 v9 引擎 + 六种节点 + 已构建产物。
 
 > 决策记录（2026-10-29）：Review 与 Design 是同级子 Agent，当前全局 `send_message` 只允许父→直接 child / 驻留 child→直接 parent，同级不能直投；确认**不引入 experimental Agent Teams**，P1 采用父级中转（Review → 主 Agent → Design/开发）。Agent Teams 直连保留为 P3 可选，不进 P1。
@@ -716,8 +716,8 @@ P1 不新增 `send_message` / `inbox` 工具。当前全局 `send_message` 的�
 
 实施状态（2026-10-29）：
 - **1–7 已完成**：引擎、DSL 类型、校验、v7/v8/v9 迁移、工具 `DSL_HINT` / `complete_step.artifacts` 均已落地；新增 `tests/p1-multi-agent.test.ts` 覆盖子 payload 平铺、`when` 自动/手动路由、角色线程摘要、产物版本、`inputs`、校验错误码与迁移。
-- **8 部分完成**：`inspector` 已有 role 下拉、thread 输入、produces/consumes、reportHint、每条分支的 `when` 输入，以及全图角色表编辑；palette 的“评审回路/测试回路”模板尚未做。
-- **9 部分完成**：`RunDetail` 已带 `role/threadId/parentIteration/artifacts`，运行图右侧显示角色/线程/轮次与产物版本卡；泳道式线程视图和 Review 卡片尚未做。
+- **8 已完成**：`inspector` 已有 role 下拉、thread 输入、produces/consumes、reportHint、每条分支的 `when` 输入，以及全图角色表编辑；palette 的“评审回路/测试回路”模板已落地（P2.2）。
+- **9 部分完成**：`RunDetail` 已带 `role/threadId/parentIteration/artifacts/children`，运行图右侧显示角色/线程/轮次、子运行与产物版本卡；泳道式线程视图和 Review 卡片尚未做。
 
 粗估：引擎与迁移 2–3 天，编辑器 1–2 天，面板 1 天，测试与文档 1 天。**合计约 5–7 个工作日**，不含实机联调。
 
@@ -726,9 +726,9 @@ P1 完成的判定标准：把 v0 里的三个 `route_*` prompt 节点删掉，�
 ### P2（按需）
 
 - **内嵌子图可视化编辑**（已落地，见 P2.1）：`subagent.mode=subflow` 的子图直接嵌在主图节点里，画布内可展开编辑，不引入独立保存的“子流程”实体。
+- **运行图层级 / 评审测试模板 / 回路级轮次**（已落地，见 P2.2）。
 - `review` 宏节点（仅当模板重复到不可维护时）。
 - `join` 的 `any/quorum`。
-- 回路级轮次计数（`loopId` + `maxRounds`），替代现在“节点级 iterationLimit 跨回路累计”的粗糙做法。
 - 产物 diff / 版本对比视图。
 
 #### P2.1 内嵌子图可视化编辑（2026-10-29）
@@ -769,6 +769,16 @@ interface SubflowDef {
 - 子图编辑的撤销栈按层独立；返回父层恢复父层历史，子图层历史不跨层保留。
 - 子图没有独立 `flowRef` 身份，不能被其他主图引用；需要复用时仍用 `flowRef` 指向已保存的图。
 
+### P2.2 运行图层级 + 回路模板 + loopId/maxRounds（2026-10-29）
+
+本轮按“运行图 → 模板 → 回路上限”的顺序补齐：
+
+1. **运行图层级**：`RunListItem` 增加 `parentNode`，`RunDetail` 增加直接子 run 列表 `children`。顶部只列根 run；选中父 run 后，右侧“子运行”卡片按派发节点筛选，点 child 进入它的快照/执行轨迹；child 详情有「← 父 run」返回。这样内嵌子图的 child run 不再平铺在根列表里，也不会丢失父子关系。
+2. **评审/测试模板**：palette 增加「评审回路」「测试回路」。模板插入一个 `subagent(mode=subflow)` + 一个 end，并把回路直接写进 `node.subflow`（不是 `flowRef`）：评审/测试是控制器，修正节点回到控制器。模板保存后仍是标准 DSL，没有运行时宏展开。
+3. **回路级轮次**：节点通用字段增加 `loopId?` / `maxRounds?`。同一 `loopId` 中配 `maxRounds` 的节点是控制器；控制器每执行一次算一轮，推进到同回路任何节点时若已达上限，就落 `limit_exceeded` 并走逃生出口（目标 `onLimitExceeded` → 控制器 `onLimitExceeded` → 目标 default）。`maxRounds` 必须带 `loopId`；同一 `loopId` 至多一个控制器；有 `loopId` 没控制器只警告。编辑器检查器有对应输入。
+
+已知边界：运行图目前是“根列表 + 直接子 run”两层，不做无限深的树形缩进；线程泳道与 Review 卡片仍未做。
+
 ### P3（可选，直连增强）
 
 - **同级直连**：评估启用 `dsh-experimental-agent-team` + `dsh-experimental-tool-agent-team`，把设计/Review/开发/测试做成 Team members，主 Agent 做 Lead。这样任意成员可以互相 `send_message`，Review 不必经主 Agent 转交。
@@ -787,7 +797,7 @@ interface SubflowDef {
 | 平铺 payload 的键冲突 | 子 payload 的 `children` 会覆盖聚合结构 | 保留键 `children/child` 不平铺；文档写明 |
 | 迁移风险 | v7/v8/v9 加列加表 | 只追加；旧库先备份；测试覆盖 v6→v9 |
 | 面板复杂度 | 泳道 + 产物时间线会让运行图变重 | 默认折叠线程，点开才看轮次；保持“当前步”优先 |
-| 轮次上限语义 | 现在 `iterationLimit` 是节点级、跨回路累计 | P1 先接受；P2 引入 `loopId` 后按回路计数 |
+| 轮次上限语义 | 节点级 `iterationLimit` 与回路级 `maxRounds` 并存 | 回路级优先；`maxRounds` 必须带 `loopId`，编辑器和校验器提示 |
 | 子 Agent 失败/未回报 | 现有“重派一轮后带部分结果推进”仍然适用 | 不静默；面板列出缺谁；升级节点接住 |
 
 ---
@@ -921,4 +931,4 @@ interface SubflowDef {
 2. **Review 是否独立角色？** 建议独立。若为了省一轮而让开发自评，Review 的客观性会明显下降。
 3. **产物以文件为准还是 SQLite 为准？** 建议文件为准，SQLite 存路径 + 摘要 + 可选小快照。
 4. **verdict 是否强制结构化？** 建议强制。不强制就没有可靠的自动路由，只能退回主 Agent 猜。
-5. **轮次上限按节点还是按回路？** P1 先沿用节点级 `iterationLimit`；P2 再引入 `loopId` 做回路级计数。若评审认为“跨回路累计”不可接受，就把 P2 的 `loopId` 提前到 P1。
+5. **轮次上限按节点还是按回路？** 节点级 `iterationLimit` 保留为兜底；P2 已引入 `loopId` + `maxRounds` 做回路级计数，回路级优先。

@@ -172,11 +172,15 @@ describe('P1 引擎', () => {
     const detail = getRunDetail(db, run.id);
     expect(detail).toBeDefined();
     expect(detail!.artifacts.map((item) => `${item.key}@${item.version}`)).toEqual(['design@1', 'design@2']);
+    expect(detail!.children.length).toBeGreaterThan(0);
+    expect(detail!.children.every((item) => item.parentRunId === run.id)).toBe(true);
+    expect(detail!.children.some((item) => item.parentNode === 'design')).toBe(true);
     const child = db
       .prepare('SELECT id FROM runs WHERE parent_run_id = ? AND parent_node = ? ORDER BY parent_iteration LIMIT 1')
       .get(run.id, 'design') as { id: string };
     const childDetail = getRunDetail(db, child.id);
     expect(childDetail).toMatchObject({ role: 'designer', threadId: 'role:designer', parentIteration: 1 });
+    expect(childDetail!.parentNode).toBe('design');
     expect(childDetail!.artifacts).toHaveLength(2);
   });
 

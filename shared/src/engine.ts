@@ -165,6 +165,8 @@ interface LimitRow {
   nodeId: string;
   iteration: number;
   limit: number;
+  /** 非空 = 这是回路级上限（loopId），limit 是 maxRounds */
+  loopId?: string;
 }
 
 /** 后继解析结果：正常推进 / 判失败（无逃生出口或逃生链成环）/ 后继悬空 */
@@ -1825,7 +1827,7 @@ private childFlowOf(run: RunRow, node: SubagentNode, snapshot: FlowSnapshot, fan
     return this.currentRef(run);
   }
 
-  /** 解析最终推进目标（§4.5）：目标撞 iterationLimit 时不执行它，落 limit_exceeded 轨迹并改走 onLimitExceeded；
+  /** 解析最终推进目标（§4.5）：目标撞 iterationLimit / 回路 maxRounds 时不执行它，落 limit_exceeded 轨迹并改走逃生出口；
    *  无逃生出口判失败。校验器已保证逃生边可达终点，逃生链成环只是防御性兜底。 */
   private resolveAdvance(run: RunRow, snapshot: FlowSnapshot, successorId: string): AdvanceOutcome {
     const limitRows: LimitRow[] = [];
@@ -1834,6 +1836,34 @@ private childFlowOf(run: RunRow, node: SubagentNode, snapshot: FlowSnapshot, fan
     while (typeof targetId === 'string') {
       const target = findNode(snapshot, targetId);
       if (target === undefined) return { kind: 'dangling', nodeId: targetId };
+
+      // 回路级上限：控制器每执行一次算一轮；同一 loopId 的其它节点共享这个计数
+      const loop = target.type === 'end' ? undefined : this.loopLimitOf(snapshot, target);
+      if (loop !== undefined && this.execCount(run.id, loop.controllerId) >= loop.limit) {
+        const escape =
+          target.onLimitExceeded ??
+          loop.controller.onLimitExceeded ??
+          target.branches?.find((branch) => branch.condition === '*')?.to;
+        if (escape === undefined) {
+          return {
+            kind: 'fail',
+            reason: `回路 ${loop.id} 已到 maxRounds（${loop.limit} 轮）且没有配 onLimitExceeded 逃生出口，run 判失败。`,
+          };
+        }
+        if (seen.has(`loop:${loop.id}`)) {
+          return { kind: 'fail', reason: `回路 ${loop.id} 撞上限后逃生链成环，run 判失败。` };
+        }
+        seen.add(`loop:${loop.id}`);
+        limitRows.push({
+          nodeId: target.id,
+          iteration: this.execCount(run.id, target.id) + 1,
+          limit: loop.limit,
+          loopId: loop.id,
+        });
+        targetId = escape;
+        continue;
+      }
+
       if (
         target.type !== 'end' &&
         target.iterationLimit !== undefined &&
@@ -1856,6 +1886,23 @@ private childFlowOf(run: RunRow, node: SubagentNode, snapshot: FlowSnapshot, fan
       return { kind: 'advance', targetId, limitRows };
     }
     return { kind: 'advance', targetId: null, limitRows };
+  }
+
+  /** 找节点所属回路的控制器：控制器 = 同 loopId 且声明了 maxRounds 的节点 */
+  private loopLimitOf(
+    snapshot: FlowSnapshot,
+    node: FlowNode,
+  ): { id: string; limit: number; controllerId: string; controller: FlowNode } | undefined {
+    if (node.loopId === undefined || node.loopId.trim() === '') return undefined;
+    if (node.maxRounds !== undefined) {
+      return { id: node.loopId, limit: node.maxRounds, controllerId: node.id, controller: node };
+    }
+    const flow = snapshot.flows[snapshot.rootFlowId];
+    const controller = flow?.nodes.find(
+      (candidate) => candidate.loopId === node.loopId && candidate.maxRounds !== undefined,
+    );
+    if (controller?.maxRounds === undefined) return undefined;
+    return { id: node.loopId, limit: controller.maxRounds, controllerId: controller.id, controller };
   }
 
   /** 单事务推进：落本步轨迹（completed / blocked）+ 迭代逃生轨迹 + 卡点决策更新 + 子 run 落库 + 更新 run 指针/状态，任何一步失败整体回滚。
@@ -1889,7 +1936,9 @@ private childFlowOf(run: RunRow, node: SubagentNode, snapshot: FlowSnapshot, fan
       this.writeArtifacts(run, first.nodeId, first.artifacts, now);
       const limitRows = plan.kind === 'advance' ? plan.limitRows : [];
       for (const row of limitRows) {
-        insert.run(run.id, row.nodeId, row.iteration, 'limit_exceeded', `撞迭代上限（${row.limit} 次），未执行该节点，按 onLimitExceeded 逃生`, '{}', null, now, now);
+        insert.run(run.id, row.nodeId, row.iteration, 'limit_exceeded', row.loopId !== undefined
+          ? `回路 ${row.loopId} 已到 maxRounds（${row.limit} 轮），未执行该节点，按逃生出口继续`
+          : `撞迭代上限（${row.limit} 次），未执行该节点，按 onLimitExceeded 逃生`, '{}', null, now, now);
         events.push({ type: 'step_completed', runId: run.id, nodeId: row.nodeId, status: 'limit_exceeded', at: now });
       }
       const stepsUsed = run.steps_used + 1 + limitRows.length;
@@ -1945,7 +1994,13 @@ private childFlowOf(run: RunRow, node: SubagentNode, snapshot: FlowSnapshot, fan
     // 逃生说明：Agent 刚交完一步就看到跳变，必须解释为什么
     const escapeNote =
       plan.limitRows.length > 0
-        ? `迭代逃生：${plan.limitRows.map((r) => `${r.nodeId} 撞迭代上限（${r.limit} 次）未执行，改走 onLimitExceeded。`).join('')}`
+        ? `迭代逃生：${plan.limitRows
+            .map((r) =>
+              r.loopId !== undefined
+                ? `回路 ${r.loopId} 已到 maxRounds（${r.limit} 轮），${r.nodeId} 未执行`
+                : `${r.nodeId} 撞迭代上限（${r.limit} 次）未执行，改走 onLimitExceeded。`,
+            )
+            .join('')}`
         : undefined;
     if (plan.targetId === null) {
       return this.finishedResult(runId, 'success', escapeNote ?? '节点没有后继，按隐式 end 收尾。');
