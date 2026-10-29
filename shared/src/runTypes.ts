@@ -1,7 +1,7 @@
 // 公用层：run 只读模型（监控视图的数据契约）。
 //
 // 只依赖最小 SQL 接口，不绑定具体驱动，插件 Host 半直接使用。
-import type { FlowSnapshot } from './types.js';
+import type { FlowKind, FlowSnapshot } from './types.js';
 
 export interface RunListItem {
   id: string;
@@ -11,6 +11,8 @@ export interface RunListItem {
   rootRunId: string;
   flowId: string;
   flowName: string | null;
+  /** flow（主流程）/ agent（子 Agent 配置）；图被删或老快照时为 null */
+  flowKind: FlowKind | null;
   status: string;
   outcome: 'success' | 'fail' | null;
   currentNode: string | null;

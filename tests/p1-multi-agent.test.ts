@@ -326,6 +326,16 @@ describe('P1 引擎', () => {
     expect(grandchild.preamble).toContain('评审员');
     expect(grandchild.preamble).toContain('role=reviewer');
     expect(grandchild.preamble).toContain('挑剔，只认证据');
+
+    // 运行状态：child run 的详情按配置自己的快照/名称展示，并挂在主流程的引用节点下
+    const childDetail = getRunDetail(db, childRun.id);
+    expect(childDetail?.flowName).toBe('评审配置');
+    expect(childDetail?.flowKind).toBe('agent');
+    expect(childDetail?.snapshot?.rootFlowId).toBe(profile.id);
+    expect(childDetail?.parentNode).toBe('m1');
+    expect(childDetail?.currentNode).toBe('a1');
+    expect(childDetail?.children).toHaveLength(1);
+    expect(childDetail?.children[0]?.parentNode).toBe('a1');
   });
 
   it('迁移到 v10：runs 新列、parent_iteration、run_artifacts 表与 flows.kind 都在', () => {

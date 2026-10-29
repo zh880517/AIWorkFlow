@@ -247,6 +247,14 @@ export function RunGraphPage({ onExit, sessionId }: RunGraphPageProps): React.Re
             {detail !== null && (
               <div className="awr-meta">
                 {detail.flowName ?? detail.flowId}
+                {detail.flowKind === 'agent' && (
+                  <>
+                    {' '}
+                    <span className="awr-chip" title="这是一个子 Agent 配置">
+                      子 Agent 配置
+                    </span>
+                  </>
+                )}
                 {detail.outcome !== null && !isActiveRun(detail) ? ` · ${detail.outcome === 'fail' ? '未达成' : '达成'}` : ''}
                 <br />
                 开始 {relTime(detail.createdAt)}（{clockTime(detail.createdAt)}）
@@ -288,7 +296,16 @@ export function RunGraphPage({ onExit, sessionId }: RunGraphPageProps): React.Re
                     >
                       <span className="awr-dot" data-phase={phaseOf(child)} />
                       <span className="awr-run-name">{child.flowName ?? child.flowId}</span>
-                      {child.parentNode !== null && <span className="awr-child-node">{child.parentNode}</span>}
+                      {child.flowKind === 'agent' && (
+                        <span className="awr-chip" title="子 Agent 配置">
+                          配置
+                        </span>
+                      )}
+                      {child.parentNode !== null && (
+                        <span className="awr-child-node" title={child.parentNode}>
+                          {nodeLabel(rootFlow, child.parentNode)}
+                        </span>
+                      )}
                       <span>{child.role ?? ''}</span>
                     </button>
                   ))

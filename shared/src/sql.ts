@@ -42,7 +42,7 @@ export function isActiveStatus(status: string): boolean {
   return (ACTIVE_STATUSES as readonly string[]).includes(status);
 }
 
-const LIST_SQL = `SELECT r.*, f.name AS flow_name
+const LIST_SQL = `SELECT r.*, f.name AS flow_name, f.kind AS flow_kind
   FROM runs r LEFT JOIN flows f ON f.id = r.flow_id`;
 
 const RUN_COLUMNS = [
@@ -51,6 +51,7 @@ const RUN_COLUMNS = [
   'root_run_id',
   'flow_id',
   'flow_name',
+  'flow_kind',
   'flow_snapshot_hash',
   'current_node',
   'status',
@@ -73,6 +74,7 @@ interface RunRow {
   root_run_id: string | null;
   flow_id: string;
   flow_name: string | null;
+  flow_kind: string | null;
   flow_snapshot_hash: string;
   current_node: string | null;
   status: string;
@@ -301,6 +303,7 @@ function toListItem(row: RunRow): RunListItem {
     rootRunId: row.root_run_id ?? row.id,
     flowId: row.flow_id,
     flowName: row.flow_name,
+    flowKind: row.flow_kind === 'agent' ? 'agent' : row.flow_kind === 'flow' ? 'flow' : null,
     status: row.status,
     outcome: row.outcome,
     currentNode: row.current_node,

@@ -12,7 +12,7 @@ var ACTIVE_STATUSES = [
 function isActiveStatus(status) {
 	return ACTIVE_STATUSES.includes(status);
 }
-var LIST_SQL = `SELECT r.*, f.name AS flow_name
+var LIST_SQL = `SELECT r.*, f.name AS flow_name, f.kind AS flow_kind
   FROM runs r LEFT JOIN flows f ON f.id = r.flow_id`;
 function asRunRow(raw) {
 	return raw;
@@ -129,6 +129,7 @@ function toListItem(row) {
 		rootRunId: row.root_run_id ?? row.id,
 		flowId: row.flow_id,
 		flowName: row.flow_name,
+		flowKind: row.flow_kind === "agent" ? "agent" : row.flow_kind === "flow" ? "flow" : null,
 		status: row.status,
 		outcome: row.outcome,
 		currentNode: row.current_node,
