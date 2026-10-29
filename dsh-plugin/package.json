@@ -1,6 +1,6 @@
 {
   "name": "@aiworkflow/dsh-plugin",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "description": "在 DeepSeek Harness 里画流程图、发起 run 并查看执行进度",

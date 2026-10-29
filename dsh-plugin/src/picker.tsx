@@ -1,4 +1,4 @@
-// 工作流启动器：输入框左侧一个「工作流」按钮，点开列出全部图，选中即直接创建 run。
+// 工作流启动器：输入框左侧一个「工作流」按钮，点开列出可启动的图，选中即直接创建 run。
 // 刻意不发聊天消息——避免在对话里误触发；run 建好后由 Agent 接手执行。
 import * as React from 'react';
 import { relTime } from '@shared/index.js';
@@ -8,7 +8,14 @@ import { Styles } from './styles.js';
 interface FlowItem {
   id: string;
   name: string;
+  /** flow（缺省）/ agent；agent 是子 Agent 配置，只能被主流程引用，不能单独启动 */
+  kind?: 'flow' | 'agent';
   updatedAt: string;
+}
+
+/** 启动列表只留主流程：子 Agent 配置没有「独立跑一遍」的语义，混进来会建出无意义的 run */
+export function startableFlows(flows: FlowItem[]): FlowItem[] {
+  return flows.filter((flow) => flow.kind !== 'agent');
 }
 
 interface InputActions {
@@ -99,7 +106,8 @@ export function WorkflowPickerDialog({ onStarted }: WorkflowPickerDialogProps): 
     setFlows(null);
     setError(null);
     setBusy(null);
-    fetch(resolveEndpoint('aiworkflow/flows'), { headers: { accept: 'application/json' }, cache: 'no-store' })
+    // Host 侧按 kind 过滤，客户端再兜一层（老 Host / 缓存返回全量时也不会漏出配置）
+    fetch(resolveEndpoint('aiworkflow/flows?kind=flow'), { headers: { accept: 'application/json' }, cache: 'no-store' })
       .then((response) => response.json())
       .then((body: { ok?: boolean; flows?: FlowItem[]; error?: { message?: string } }) => {
         if (!alive) return;
@@ -107,7 +115,7 @@ export function WorkflowPickerDialog({ onStarted }: WorkflowPickerDialogProps): 
           setError(body.error?.message ?? '读取流程图列表失败');
           return;
         }
-        setFlows(Array.isArray(body.flows) ? body.flows : []);
+        setFlows(startableFlows(Array.isArray(body.flows) ? body.flows : []));
       })
       .catch((cause: unknown) => {
         if (alive) setError(cause instanceof Error ? cause.message : String(cause));
@@ -193,8 +201,8 @@ export function WorkflowPickerDialog({ onStarted }: WorkflowPickerDialogProps): 
               </div>
             ) : flows.length === 0 ? (
               <div className="awp-empty">
-                <b>还没有流程图</b>
-                <p>先去左侧「可视化工作流」建一张，再回来选。</p>
+                <b>还没有可启动的流程</b>
+                <p>子 Agent 配置只能被主流程引用，不能单独启动；先去左侧「可视化工作流」建一张主流程。</p>
               </div>
             ) : (
               <div className="awp-pick-list">

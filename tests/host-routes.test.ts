@@ -136,14 +136,19 @@ describe('Host 路由：流程图 CRUD', () => {
       ],
       entry: 'n1',
     };
+    expect((await call(mounted, 'PUT', `/aiworkflow/flows/${flow.id}`, flow)).json.ok).toBe(true);
     expect((await call(mounted, 'PUT', `/aiworkflow/flows/${profile.id}`, profile)).json.ok).toBe(true);
 
     const agents = await call(mounted, 'GET', '/aiworkflow/flows?kind=agent');
     expect(agents.json.flows.map((item: { id: string }) => item.id)).toEqual(['f_host_agent']);
     expect(agents.json.flows[0].kind).toBe('agent');
 
+    // 启动工作流面板拉的就是这个视图：只能是主流程，配置不能出现在里面
     const flows = await call(mounted, 'GET', '/aiworkflow/flows?kind=flow');
+    expect(flows.json.flows.map((item: { id: string }) => item.id)).toEqual(['f_host_routes']);
     expect(flows.json.flows.every((item: { kind: string }) => item.kind === 'flow')).toBe(true);
+
+    expect((await call(mounted, 'DELETE', `/aiworkflow/flows/${profile.id}`)).json.deleted).toBe(true);
   });
 
   it('校验失败不落库，原图保持不变', async () => {

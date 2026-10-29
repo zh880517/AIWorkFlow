@@ -47,7 +47,9 @@ git+https://github.com/zh880517/AIWorkFlow.git#main&path:/dsh-plugin
 
 ## 发起一次运行
 
-不用记流程图名字，也不用发聊天消息：输入框左侧有一个「工作流」按钮，点开列出全部图，选一张即可。
+不用记流程图名字，也不用发聊天消息：输入框左侧有一个「工作流」按钮，点开列出**可启动的主流程**，选一张即可。
+子 Agent 配置（`kind = 'agent'`）不会出现在这个列表里——它没有独立启动的语义，只能被主流程的 `subagent`
+节点按 id 引用（见设计文档 §4.6）。
 
 - 选中即调 Host 的 `POST /aiworkflow/runs` **直接建 run**（不经过输入框发送用户消息，避免误触发）；
 - run 绑到当前会话（`dsh:<sessionId>`），Agent 的 `complete_step` 才能定位到它；

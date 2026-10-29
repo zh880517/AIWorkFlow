@@ -15385,6 +15385,10 @@ function ProgressPill({ store, t, sessionId }) {
 }
 //#endregion
 //#region
+/** 启动列表只留主流程：子 Agent 配置没有「独立跑一遍」的语义，混进来会建出无意义的 run */
+function startableFlows(flows) {
+	return flows.filter((flow) => flow.kind !== "agent");
+}
 var open = false;
 var connection = null;
 var listeners = /* @__PURE__ */ new Set();
@@ -15468,7 +15472,7 @@ function WorkflowPickerDialog({ onStarted }) {
 		setFlows(null);
 		setError(null);
 		setBusy(null);
-		fetch(resolveEndpoint("aiworkflow/flows"), {
+		fetch(resolveEndpoint("aiworkflow/flows?kind=flow"), {
 			headers: { accept: "application/json" },
 			cache: "no-store"
 		}).then((response) => response.json()).then((body) => {
@@ -15477,7 +15481,7 @@ function WorkflowPickerDialog({ onStarted }) {
 				setError(body.error?.message ?? "读取流程图列表失败");
 				return;
 			}
-			setFlows(Array.isArray(body.flows) ? body.flows : []);
+			setFlows(startableFlows(Array.isArray(body.flows) ? body.flows : []));
 		}).catch((cause) => {
 			if (alive) setError(cause instanceof Error ? cause.message : String(cause));
 		});
@@ -15546,7 +15550,7 @@ function WorkflowPickerDialog({ onStarted }) {
 	}, "✕")), /* @__PURE__ */ react.createElement("div", { className: "awp-modal-body" }, error !== null && /* @__PURE__ */ react.createElement("div", {
 		className: "awp-banner",
 		"data-kind": "error"
-	}, error), flows === null ? /* @__PURE__ */ react.createElement("div", { className: "awp-empty" }, /* @__PURE__ */ react.createElement("b", null, "读取中…")) : flows.length === 0 ? /* @__PURE__ */ react.createElement("div", { className: "awp-empty" }, /* @__PURE__ */ react.createElement("b", null, "还没有流程图"), /* @__PURE__ */ react.createElement("p", null, "先去左侧「可视化工作流」建一张，再回来选。")) : /* @__PURE__ */ react.createElement("div", { className: "awp-pick-list" }, flows.map((flow) => /* @__PURE__ */ react.createElement("button", {
+	}, error), flows === null ? /* @__PURE__ */ react.createElement("div", { className: "awp-empty" }, /* @__PURE__ */ react.createElement("b", null, "读取中…")) : flows.length === 0 ? /* @__PURE__ */ react.createElement("div", { className: "awp-empty" }, /* @__PURE__ */ react.createElement("b", null, "还没有可启动的流程"), /* @__PURE__ */ react.createElement("p", null, "子 Agent 配置只能被主流程引用，不能单独启动；先去左侧「可视化工作流」建一张主流程。")) : /* @__PURE__ */ react.createElement("div", { className: "awp-pick-list" }, flows.map((flow) => /* @__PURE__ */ react.createElement("button", {
 		type: "button",
 		key: flow.id,
 		className: "awp-pick-item",
