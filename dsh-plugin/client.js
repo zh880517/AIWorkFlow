@@ -13014,7 +13014,8 @@ function WorkflowPage({ onExit } = {}) {
 	};
 	const remove = async (id, label, kind) => {
 		const what = kind === "agent" ? "子 Agent 配置" : "流程";
-		if (!window.confirm(`删除${what}「${label}」（${id}）？删除后不可恢复。`)) return;
+		const refs = kind === "agent" ? "\n如果有主流程还在引用它，删除后那些流程启动 run 会失败。" : "";
+		if (!window.confirm(`删除${what}「${label}」（${id}）？删除后不可恢复。${refs}`)) return;
 		try {
 			await deleteFlow(id);
 			await refresh();
