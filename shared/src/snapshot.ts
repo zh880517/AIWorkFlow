@@ -17,7 +17,7 @@ export interface FlowResolver {
 export function buildSnapshot(rootFlow: Flow, resolver: FlowResolver): FlowSnapshot {
   const flows: Record<string, Flow> = {};
   collectFlows(rootFlow, resolver, flows, new Set([rootFlow.id]));
-  return { rootFlowId: rootFlow.id, flows };
+  return { rootFlowId: rootFlow.id, agents: rootFlow.agents, flows };
 }
 
 function collectFlows(
@@ -68,7 +68,7 @@ export function buildSubSnapshot(parent: FlowSnapshot, childFlow: Flow): FlowSna
   const flows: Record<string, Flow> = {};
   const resolver: FlowResolver = { get: (id) => parent.flows[id] };
   collectFlows(childFlow, resolver, flows, new Set([childFlow.id]));
-  return { rootFlowId: childFlow.id, flows };
+  return { rootFlowId: childFlow.id, agents: parent.agents, flows };
 }
 
 /** 快照内容寻址 hash（对完整快照结构做稳定序列化） */

@@ -58,6 +58,9 @@ const RUN_COLUMNS = [
   'cwd',
   'project_name',
   'steps_used',
+  'role',
+  'thread_id',
+  'parent_iteration',
   'last_activity',
   'created_at',
   'finished_at',
@@ -76,6 +79,9 @@ interface RunRow {
   cwd: string | null;
   project_name: string | null;
   steps_used: number;
+  role: string | null;
+  thread_id: string | null;
+  parent_iteration: number | null;
   last_activity: string | null;
   created_at: string;
   finished_at: string | null;
@@ -139,6 +145,19 @@ export function getRunDetail(db: SqlDatabase, runId: string): RunDetail | undefi
   }>;
 
   const pendingGate = resolvePendingGate(row, snapshot, gateRows);
+  const rootId = row.root_run_id ?? row.id;
+  const artifacts = db
+    .prepare(
+      'SELECT key, version, summary, path, role, created_at FROM run_artifacts WHERE root_run_id = ? ORDER BY key, version',
+    )
+    .all(rootId) as Array<{
+    key: string;
+    version: number;
+    summary: string | null;
+    path: string | null;
+    role: string | null;
+    created_at: string;
+  }>;
 
   return {
     ...toListItem(row),
@@ -148,6 +167,14 @@ export function getRunDetail(db: SqlDatabase, runId: string): RunDetail | undefi
     executions: executions.map(toExecution),
     gates: gateRows.map(toGate),
     pendingGate,
+    artifacts: artifacts.map((item) => ({
+      key: item.key,
+      version: item.version,
+      summary: item.summary,
+      path: item.path,
+      role: item.role,
+      createdAt: item.created_at,
+    })),
   };
 }
 
@@ -267,6 +294,9 @@ function toListItem(row: RunRow): RunListItem {
     cwd: row.cwd,
     projectName: row.project_name,
     stepsUsed: row.steps_used,
+    role: row.role ?? null,
+    threadId: row.thread_id ?? null,
+    parentIteration: row.parent_iteration ?? null,
     createdAt: row.created_at,
     lastActivity: row.last_activity,
     finishedAt: row.finished_at,

@@ -235,6 +235,27 @@ export function RunGraphPage({ onExit, sessionId }: RunGraphPageProps): React.Re
                 {detail.finishedAt !== null ? ` · 结束 ${clockTime(detail.finishedAt)}` : ''}
                 <br />
                 当前步 {nodeLabel(rootFlow, detail.currentNode)}
+                {detail.role !== null && (
+                  <>
+                    <br />
+                    角色 {detail.role}
+                    {detail.threadId !== null ? ` · 线程 ${detail.threadId}` : ''}
+                    {detail.parentIteration !== null ? ` · 第 ${detail.parentIteration} 轮` : ''}
+                  </>
+                )}
+              </div>
+            )}
+
+            {detail !== null && (detail.artifacts ?? []).length > 0 && (
+              <div className="awr-card">
+                <div className="awr-card-title">产物（{(detail.artifacts ?? []).length}）</div>
+                {(detail.artifacts ?? []).map((artifact) => (
+                  <div key={`${artifact.key}@${artifact.version}`} className="awr-card-hint">
+                    <b>{artifact.key}</b> v{artifact.version}
+                    {artifact.path !== null ? ` · ${artifact.path}` : ''}
+                    {artifact.summary !== null ? ` · ${artifact.summary}` : ''}
+                  </div>
+                ))}
               </div>
             )}
 

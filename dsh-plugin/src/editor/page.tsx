@@ -1,7 +1,7 @@
 // DSH 内的流程图页面：流程库 ⇄ 画布编辑器。整页跑在宿主 React 里，不嵌 iframe。
 import * as React from 'react';
 import { addEdge, useEdgesState, useNodesState, type Connection, type EdgeChange } from '@xyflow/react';
-import type { Flow, FlowNode, NodeType } from '@shared/index.js';
+import type { AgentDef, Flow, FlowNode, NodeType } from '@shared/index.js';
 import { relTime } from '@shared/index.js';
 import { Boundary, reportInfo } from '../diagnostics.js';
 import * as api from './api.js';
@@ -202,6 +202,7 @@ interface Snapshot {
   nodes: CanvasNode[];
   edges: CanvasEdge[];
   bodies: Record<string, FlowNode>;
+  agents: AgentDef[];
   entry: string;
   name: string;
 }
@@ -223,6 +224,7 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
   const [bodies, setBodies] = React.useState<Record<string, FlowNode>>(() =>
     Object.fromEntries(initial.nodes.map((node) => [node.id, node])),
   );
+  const [agents, setAgents] = React.useState<AgentDef[]>(initial.agents ?? []);
   const [name, setName] = React.useState(initial.name);
   const [entry, setEntry] = React.useState(initial.entry);
   const [dirty, setDirty] = React.useState(false);
@@ -263,11 +265,12 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
     nodes: seed.nodes,
     edges: seed.edges,
     bodies,
+    agents,
     entry: initial.entry,
     name: initial.name,
   });
 
-  liveRef.current = { nodes, edges, bodies, entry, name };
+  liveRef.current = { nodes, edges, bodies, agents, entry, name };
   historyRef.current = history;
   selectedRef.current = selectedId;
   clipboardRef.current = clipboard;
@@ -289,6 +292,7 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
       setNodes(withEntryFlags(snapshot.nodes, snapshot.entry));
       setEdges(snapshot.edges);
       setBodies(snapshot.bodies);
+      setAgents(snapshot.agents);
       setEntry(snapshot.entry);
       setName(snapshot.name);
       setSelectedId((current) =>
@@ -630,6 +634,25 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
     setDirty(true);
   };
 
+  const setWhen = (edgeId: string, value: string): void => {
+    record(`when:${edgeId}`);
+    const when = value.trim() === '' ? undefined : value;
+    setEdges((all) =>
+      all.map((edge) =>
+        edge.id === edgeId ? { ...edge, data: { ...(edge.data ?? {}), when } } : edge,
+      ),
+    );
+    setDirty(true);
+  };
+
+  /** 角色表改动：整体替换，撤销栈里也存一份 */
+  const changeAgents = (next: AgentDef[]): void => {
+    record('agents');
+    setAgents(next);
+    setDirty(true);
+  };
+
+
   /** 点了卡片右侧的出口名字：记下来，下一次点目标节点就把它连上（鼠标也可以直接从圆点拖） */
   const startOutletLink = (nodeId: string, outletKey: string): void => {
     setPendingLink((current) =>
@@ -772,7 +795,7 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
     const timer = window.setTimeout(() => {
       let flow: Flow;
       try {
-        flow = buildFlow({ ...baseRef.current, name, entry }, bodies, nodes, edges);
+        flow = buildFlow({ ...baseRef.current, name, entry, agents }, bodies, nodes, edges);
       } catch {
         return;
       }
@@ -789,19 +812,20 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
       alive = false;
       window.clearTimeout(timer);
     };
-  }, [nodes, edges, bodies, entry, name]);
+  }, [nodes, edges, bodies, agents, entry, name]);
 
   const save = async (): Promise<void> => {
     setBusy(true);
     setBanner(null);
     try {
-      const flow = buildFlow({ ...baseRef.current, name, entry }, bodies, nodes, edges);
+      const flow = buildFlow({ ...baseRef.current, name, entry, agents }, bodies, nodes, edges);
       const result = await api.saveFlow(flow);
       if (result.ok) {
         baseRef.current = result.flow;
         setEntry(result.flow.entry);
         setNodes((all) => withEntryFlags(all, result.flow.entry));
         setName(result.flow.name);
+        setAgents(result.flow.agents ?? []);
         setDirty(false);
         setHistory({ past: [], future: [] });
         mergeRef.current = null;
@@ -1158,12 +1182,15 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
             canvasNode={selectedCanvas}
             nodes={nodes}
             flows={flows.filter((item) => item.id !== initial.id)}
+            agents={agents}
             payloadFields={payloadFields}
             edges={selectedEdges}
             isEntry={selectedId !== null && entry === selectedId}
             onPatch={patchNode}
             onDelete={deleteNode}
             onCondition={setCondition}
+            onWhen={setWhen}
+            onAgentsChange={changeAgents}
             onSetEntry={() => {
               if (selectedId !== null) setEntryId(selectedId);
             }}

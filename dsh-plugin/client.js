@@ -11184,6 +11184,7 @@ function canvasOf(flow) {
 					data: {
 						branchId: branch.id,
 						condition: branch.condition,
+						when: branch.when,
 						outlet: branch.outlet
 					}
 				});
@@ -11283,6 +11284,8 @@ function buildFlow(base, bodies, nodes, edges) {
 				const rawCondition = dataCondition !== void 0 ? dataCondition : previous?.condition ?? (index === 0 ? "*" : "");
 				const condition = rawCondition === "" && index === 0 ? "*" : rawCondition;
 				const outlet = edge.data?.outlet ?? previous?.outlet;
+				const dataWhen = edge.data?.when;
+				const when = dataWhen !== void 0 ? dataWhen.trim() === "" ? void 0 : dataWhen.trim() : previous?.when;
 				const branch = previous !== void 0 ? {
 					...previous,
 					to: edge.target,
@@ -11294,6 +11297,8 @@ function buildFlow(base, bodies, nodes, edges) {
 					to: edge.target,
 					...outlet !== void 0 ? { outlet } : {}
 				};
+				if (when !== void 0) branch.when = when;
+				else delete branch.when;
 				usedBranchIds.add(branch.id);
 				return branch;
 			});
@@ -11650,6 +11655,14 @@ function positiveInt(text) {
 function nodeLabel(node) {
 	return `${node.data.title} · ${typeLabel(node.data.kind)}`;
 }
+/** 逗号/空白分隔的产物 key 列表 ↔ 输入框文本 */
+function keysText(keys) {
+	return (keys ?? []).join(", ");
+}
+function splitKeys(text) {
+	const keys = text.split(/[,，\s]+/).map((key) => key.trim()).filter((key) => key !== "");
+	return keys.length === 0 ? void 0 : keys;
+}
 function Inspector(props) {
 	const { body } = props;
 	const instrRef = react.useRef(null);
@@ -11722,7 +11735,49 @@ function Inspector(props) {
 	}, /* @__PURE__ */ react.createElement("option", { value: "inline" }, "inline — 同一会话内执行"), /* @__PURE__ */ react.createElement("option", { value: "flowRef" }, "flowRef — 引用另一张图"), /* @__PURE__ */ react.createElement("option", {
 		value: "subflow",
 		disabled: true
-	}, "subflow — 内嵌子图（面板暂不支持）"))), body.mode === "subflow" && /* @__PURE__ */ react.createElement("div", { className: "wf-hint wf-hint-warn" }, "当前节点是 subflow 模式，但面板暂不支持编辑内嵌子图；保存会被校验器拒绝（缺少子图）。请用 aiworkflow_flow 工具改它。"), body.mode === "flowRef" && /* @__PURE__ */ react.createElement(Field, {
+	}, "subflow — 内嵌子图（面板暂不支持）"))), body.mode === "subflow" && /* @__PURE__ */ react.createElement("div", { className: "wf-hint wf-hint-warn" }, "当前节点是 subflow 模式，但面板暂不支持编辑内嵌子图；保存会被校验器拒绝（缺少子图）。请用 aiworkflow_flow 工具改它。"), /* @__PURE__ */ react.createElement(Field, {
+		label: "角色",
+		hint: "引用全图角色表；角色章程与线程摘要会拼进 child preamble"
+	}, /* @__PURE__ */ react.createElement("select", {
+		className: "wf-input",
+		value: body.role ?? "",
+		onChange: (event) => patch({ role: event.target.value === "" ? void 0 : event.target.value })
+	}, /* @__PURE__ */ react.createElement("option", { value: "" }, "（无角色）"), props.agents.map((agent) => /* @__PURE__ */ react.createElement("option", {
+		key: agent.id,
+		value: agent.id
+	}, agent.name, " · ", agent.id)), body.role !== void 0 && !props.agents.some((agent) => agent.id === body.role) && /* @__PURE__ */ react.createElement("option", { value: body.role }, "（角色 ", body.role, " 不存在）"))), /* @__PURE__ */ react.createElement(Field, {
+		label: "线程",
+		hint: "留空或 new = 一次性；role = 同角色跨轮共享；也可以填自定义线程 key"
+	}, /* @__PURE__ */ react.createElement("input", {
+		className: "wf-input",
+		value: body.thread ?? "",
+		placeholder: "new / role / 自定义",
+		onChange: (event) => {
+			const value = event.target.value.trim();
+			patch({ thread: value === "" ? void 0 : value });
+		}
+	})), /* @__PURE__ */ react.createElement(Field, {
+		label: "产出 / 消费产物",
+		hint: "逗号分隔的 key；只用于校验与面板，运行时以 complete_step.artifacts 为准"
+	}, /* @__PURE__ */ react.createElement("div", { className: "wf-row" }, /* @__PURE__ */ react.createElement("input", {
+		className: "wf-input",
+		value: keysText(body.produces),
+		placeholder: "produces: design",
+		onChange: (event) => patch({ produces: splitKeys(event.target.value) })
+	}), /* @__PURE__ */ react.createElement("input", {
+		className: "wf-input",
+		value: keysText(body.consumes),
+		placeholder: "consumes: design",
+		onChange: (event) => patch({ consumes: splitKeys(event.target.value) })
+	}))), /* @__PURE__ */ react.createElement(Field, {
+		label: "汇报契约",
+		hint: "告诉子 Agent 的 payload/产物格式，会拼进 preamble"
+	}, /* @__PURE__ */ react.createElement("textarea", {
+		className: "wf-area",
+		value: body.reportHint ?? "",
+		onChange: (event) => patch({ reportHint: event.target.value }),
+		placeholder: "例如：payload 带 verdict（pass/fail）、issues[]；产物 key=design"
+	})), body.mode === "flowRef" && /* @__PURE__ */ react.createElement(Field, {
 		label: "引用的图",
 		hint: "目标图必须已保存；run 启动时按 id 递归解析"
 	}, /* @__PURE__ */ react.createElement("select", {
@@ -11862,7 +11917,72 @@ function Inspector(props) {
 		value: String(edge.data?.condition ?? (index === 0 ? "*" : "")),
 		onChange: (event) => props.onCondition(edge.id, event.target.value),
 		placeholder: index === 0 ? "默认分支一般填 *" : "例如：上一步结论为通过"
-	})))), /* @__PURE__ */ react.createElement("div", { className: "wf-insp-foot" }, /* @__PURE__ */ react.createElement("button", {
+	}), /* @__PURE__ */ react.createElement("input", {
+		className: "wf-input",
+		value: String(edge.data?.when ?? ""),
+		onChange: (event) => props.onWhen(edge.id, event.target.value),
+		placeholder: "when（可选）：{{review.payload.verdict}} == 'pass'"
+	})))), /* @__PURE__ */ react.createElement("details", { className: "wf-section" }, /* @__PURE__ */ react.createElement("summary", { className: "wf-section-title" }, "角色表（", props.agents.length, "）"), /* @__PURE__ */ react.createElement("div", { className: "wf-hint" }, "全图共享；subagent 节点用「角色」下拉引用。章程会随每轮 preamble 注入。"), props.agents.map((agent, index) => /* @__PURE__ */ react.createElement("div", {
+		key: `${agent.id}-${index}`,
+		className: "wf-field"
+	}, /* @__PURE__ */ react.createElement("div", { className: "wf-row" }, /* @__PURE__ */ react.createElement("input", {
+		className: "wf-input",
+		value: agent.id,
+		placeholder: "id（字母/数字/下划线）",
+		onChange: (event) => props.onAgentsChange(props.agents.map((item, i) => i === index ? {
+			...item,
+			id: event.target.value
+		} : item))
+	}), /* @__PURE__ */ react.createElement("input", {
+		className: "wf-input",
+		value: agent.name,
+		placeholder: "显示名",
+		onChange: (event) => props.onAgentsChange(props.agents.map((item, i) => i === index ? {
+			...item,
+			name: event.target.value
+		} : item))
+	}), /* @__PURE__ */ react.createElement("button", {
+		type: "button",
+		className: "wf-btn",
+		onClick: () => props.onAgentsChange(props.agents.filter((_, i) => i !== index))
+	}, "删")), /* @__PURE__ */ react.createElement("textarea", {
+		className: "wf-area",
+		value: agent.charter,
+		placeholder: "角色章程：职责、边界、完成标准",
+		onChange: (event) => props.onAgentsChange(props.agents.map((item, i) => i === index ? {
+			...item,
+			charter: event.target.value
+		} : item))
+	}), /* @__PURE__ */ react.createElement("div", { className: "wf-row" }, /* @__PURE__ */ react.createElement("input", {
+		className: "wf-input",
+		value: keysText(agent.produces),
+		placeholder: "produces: design",
+		onChange: (event) => props.onAgentsChange(props.agents.map((item, i) => i === index ? {
+			...item,
+			produces: splitKeys(event.target.value)
+		} : item))
+	}), /* @__PURE__ */ react.createElement("input", {
+		className: "wf-input",
+		value: keysText(agent.consumes),
+		placeholder: "consumes: design",
+		onChange: (event) => props.onAgentsChange(props.agents.map((item, i) => i === index ? {
+			...item,
+			consumes: splitKeys(event.target.value)
+		} : item))
+	})))), /* @__PURE__ */ react.createElement("button", {
+		type: "button",
+		className: "wf-btn",
+		onClick: () => {
+			let index = props.agents.length + 1;
+			const used = new Set(props.agents.map((agent) => agent.id));
+			while (used.has(`agent_${index}`)) index += 1;
+			props.onAgentsChange([...props.agents, {
+				id: `agent_${index}`,
+				name: "新角色",
+				charter: ""
+			}]);
+		}
+	}, "+ 添加角色")), /* @__PURE__ */ react.createElement("div", { className: "wf-insp-foot" }, /* @__PURE__ */ react.createElement("button", {
 		type: "button",
 		className: "wf-btn",
 		onClick: props.onSetEntry,
@@ -12237,6 +12357,7 @@ function Editor({ initial, flows, onBack, onExit }) {
 	const [nodes, setNodes, onNodesChange] = useNodesState(seed.nodes);
 	const [edges, setEdges, onEdgesChange] = useEdgesState(seed.edges);
 	const [bodies, setBodies] = react.useState(() => Object.fromEntries(initial.nodes.map((node) => [node.id, node])));
+	const [agents, setAgents] = react.useState(initial.agents ?? []);
 	const [name, setName] = react.useState(initial.name);
 	const [entry, setEntry] = react.useState(initial.entry);
 	const [dirty, setDirty] = react.useState(false);
@@ -12278,6 +12399,7 @@ function Editor({ initial, flows, onBack, onExit }) {
 		nodes: seed.nodes,
 		edges: seed.edges,
 		bodies,
+		agents,
 		entry: initial.entry,
 		name: initial.name
 	});
@@ -12285,6 +12407,7 @@ function Editor({ initial, flows, onBack, onExit }) {
 		nodes,
 		edges,
 		bodies,
+		agents,
 		entry,
 		name
 	};
@@ -12312,6 +12435,7 @@ function Editor({ initial, flows, onBack, onExit }) {
 		setNodes(withEntryFlags(snapshot.nodes, snapshot.entry));
 		setEdges(snapshot.edges);
 		setBodies(snapshot.bodies);
+		setAgents(snapshot.agents);
 		setEntry(snapshot.entry);
 		setName(snapshot.name);
 		setSelectedId((current) => current !== null && snapshot.nodes.some((node) => node.id === current) ? current : null);
@@ -12600,6 +12724,24 @@ function Editor({ initial, flows, onBack, onExit }) {
 		} : edge));
 		setDirty(true);
 	};
+	const setWhen = (edgeId, value) => {
+		record(`when:${edgeId}`);
+		const when = value.trim() === "" ? void 0 : value;
+		setEdges((all) => all.map((edge) => edge.id === edgeId ? {
+			...edge,
+			data: {
+				...edge.data ?? {},
+				when
+			}
+		} : edge));
+		setDirty(true);
+	};
+	/** 角色表改动：整体替换，撤销栈里也存一份 */
+	const changeAgents = (next) => {
+		record("agents");
+		setAgents(next);
+		setDirty(true);
+	};
 	/** 点了卡片右侧的出口名字：记下来，下一次点目标节点就把它连上（鼠标也可以直接从圆点拖） */
 	const startOutletLink = (nodeId, outletKey) => {
 		setPendingLink((current) => current !== null && current.nodeId === nodeId && current.outletKey === outletKey ? null : {
@@ -12724,7 +12866,8 @@ function Editor({ initial, flows, onBack, onExit }) {
 				flow = buildFlow({
 					...baseRef.current,
 					name,
-					entry
+					entry,
+					agents
 				}, bodies, nodes, edges);
 			} catch {
 				return;
@@ -12741,6 +12884,7 @@ function Editor({ initial, flows, onBack, onExit }) {
 		nodes,
 		edges,
 		bodies,
+		agents,
 		entry,
 		name
 	]);
@@ -12751,13 +12895,15 @@ function Editor({ initial, flows, onBack, onExit }) {
 			const result = await saveFlow(buildFlow({
 				...baseRef.current,
 				name,
-				entry
+				entry,
+				agents
 			}, bodies, nodes, edges));
 			if (result.ok) {
 				baseRef.current = result.flow;
 				setEntry(result.flow.entry);
 				setNodes((all) => withEntryFlags(all, result.flow.entry));
 				setName(result.flow.name);
+				setAgents(result.flow.agents ?? []);
 				setDirty(false);
 				setHistory({
 					past: [],
@@ -13084,12 +13230,15 @@ function Editor({ initial, flows, onBack, onExit }) {
 		canvasNode: selectedCanvas,
 		nodes,
 		flows: flows.filter((item) => item.id !== initial.id),
+		agents,
 		payloadFields: payloadFields$1,
 		edges: selectedEdges,
 		isEntry: selectedId !== null && entry === selectedId,
 		onPatch: patchNode,
 		onDelete: deleteNode,
 		onCondition: setCondition,
+		onWhen: setWhen,
+		onAgentsChange: changeAgents,
 		onSetEntry: () => {
 			if (selectedId !== null) setEntryId(selectedId);
 		}
@@ -13655,7 +13804,10 @@ function RunGraphPage({ onExit, sessionId }) {
 		edges: graph.edges,
 		selectedId: focusNode,
 		onSelect: pickNode
-	}), /* @__PURE__ */ react.createElement("aside", { className: "awr-rail" }, detail !== null && /* @__PURE__ */ react.createElement("div", { className: "awr-meta" }, detail.flowName ?? detail.flowId, detail.outcome !== null && !isActiveRun(detail) ? ` · ${detail.outcome === "fail" ? "未达成" : "达成"}` : "", /* @__PURE__ */ react.createElement("br", null), "开始 ", relTime(detail.createdAt), "（", clockTime(detail.createdAt), "）", detail.finishedAt !== null ? ` · 结束 ${clockTime(detail.finishedAt)}` : "", /* @__PURE__ */ react.createElement("br", null), "当前步 ", nodeLabel$1(rootFlow, detail.currentNode)), detail?.pendingGate !== null && detail?.pendingGate !== void 0 && /* @__PURE__ */ react.createElement("div", { className: "awr-card" }, /* @__PURE__ */ react.createElement("div", { className: "awr-card-title" }, /* @__PURE__ */ react.createElement("span", {
+	}), /* @__PURE__ */ react.createElement("aside", { className: "awr-rail" }, detail !== null && /* @__PURE__ */ react.createElement("div", { className: "awr-meta" }, detail.flowName ?? detail.flowId, detail.outcome !== null && !isActiveRun(detail) ? ` · ${detail.outcome === "fail" ? "未达成" : "达成"}` : "", /* @__PURE__ */ react.createElement("br", null), "开始 ", relTime(detail.createdAt), "（", clockTime(detail.createdAt), "）", detail.finishedAt !== null ? ` · 结束 ${clockTime(detail.finishedAt)}` : "", /* @__PURE__ */ react.createElement("br", null), "当前步 ", nodeLabel$1(rootFlow, detail.currentNode), detail.role !== null && /* @__PURE__ */ react.createElement(react.Fragment, null, /* @__PURE__ */ react.createElement("br", null), "角色 ", detail.role, detail.threadId !== null ? ` · 线程 ${detail.threadId}` : "", detail.parentIteration !== null ? ` · 第 ${detail.parentIteration} 轮` : "")), detail !== null && (detail.artifacts ?? []).length > 0 && /* @__PURE__ */ react.createElement("div", { className: "awr-card" }, /* @__PURE__ */ react.createElement("div", { className: "awr-card-title" }, "产物（", (detail.artifacts ?? []).length, "）"), (detail.artifacts ?? []).map((artifact) => /* @__PURE__ */ react.createElement("div", {
+		key: `${artifact.key}@${artifact.version}`,
+		className: "awr-card-hint"
+	}, /* @__PURE__ */ react.createElement("b", null, artifact.key), " v", artifact.version, artifact.path !== null ? ` · ${artifact.path}` : "", artifact.summary !== null ? ` · ${artifact.summary}` : ""))), detail?.pendingGate !== null && detail?.pendingGate !== void 0 && /* @__PURE__ */ react.createElement("div", { className: "awr-card" }, /* @__PURE__ */ react.createElement("div", { className: "awr-card-title" }, /* @__PURE__ */ react.createElement("span", {
 		className: "awr-dot",
 		"data-phase": "gate"
 	}), "等人工确认"), /* @__PURE__ */ react.createElement("div", { className: "awr-card-q" }, detail.pendingGate.question), /* @__PURE__ */ react.createElement("div", { className: "awr-card-opts" }, detail.pendingGate.options.map((option) => /* @__PURE__ */ react.createElement("span", {

@@ -95,6 +95,36 @@ export const MIGRATIONS: string[] = [
   `
   ALTER TABLE runs DROP COLUMN mcp_session_id;
   `,
+  // v7：多 Agent——角色/线程/run 输入；子 Agent 同角色跨轮共享 thread_id，线程摘要据此查询
+  `
+  ALTER TABLE runs ADD COLUMN role TEXT;
+  ALTER TABLE runs ADD COLUMN thread_id TEXT;
+  ALTER TABLE runs ADD COLUMN inputs TEXT;
+  CREATE INDEX IF NOT EXISTS idx_runs_thread ON runs(root_run_id, thread_id, created_at);
+  `,
+  // v8：产物总线——每个 key 按版本递增，插值 {{artifacts.key.path}} 永远取最新版
+  `
+  CREATE TABLE IF NOT EXISTS run_artifacts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    root_run_id TEXT NOT NULL,
+    key TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    run_id TEXT NOT NULL,
+    node_id TEXT NOT NULL,
+    role TEXT,
+    summary TEXT,
+    path TEXT,
+    content TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE(root_run_id, key, version)
+  );
+  CREATE INDEX IF NOT EXISTS idx_artifacts_root_key ON run_artifacts(root_run_id, key, version DESC);
+  `,
+  // v9：同一 subagent 节点可能在回路里多轮派发；用 parent_iteration 把“本轮 child”与历史轮次分开
+  `
+  ALTER TABLE runs ADD COLUMN parent_iteration INTEGER;
+  CREATE INDEX IF NOT EXISTS idx_runs_parent_iteration ON runs(parent_run_id, parent_node, parent_iteration);
+  `,
 ];
 
 /** 逐级迁移；库版本高于程序支持版本时拒绝启动，避免旧代码写坏新库 */

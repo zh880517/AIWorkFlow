@@ -1,7 +1,7 @@
 // 右侧属性面板：只编辑当前节点/当前层的字段，其余图结构由画布上的连线表达。
 // 排版约定：区块标题 > 加粗字段名 > 控件 > 灰色说明，说明文字单独一行，不塞进 label。
 import * as React from 'react';
-import type { FlowNode, GateOption, SubagentMode, SubagentNode } from '@shared/index.js';
+import type { AgentDef, FlowNode, GateOption, SubagentMode, SubagentNode } from '@shared/index.js';
 import type { FlowMeta } from './api.js';
 import { typeLabel, type CanvasEdge, type CanvasNode } from './model.js';
 
@@ -12,6 +12,8 @@ export interface InspectorProps {
   nodes: CanvasNode[];
   /** 流程库列表（已排除当前图）：flowRef 下拉用 */
   flows: FlowMeta[];
+  /** 全图角色表：subagent.role 下拉与角色编辑用 */
+  agents: AgentDef[];
   /** 历史 run 学到的 payload 字段名（插值提示用） */
   payloadFields: Record<string, string[]>;
   edges: CanvasEdge[];
@@ -19,6 +21,8 @@ export interface InspectorProps {
   onPatch: (patch: Record<string, unknown>) => void;
   onDelete: () => void;
   onCondition: (edgeId: string, value: string) => void;
+  onWhen: (edgeId: string, value: string) => void;
+  onAgentsChange: (agents: AgentDef[]) => void;
   onSetEntry: () => void;
 }
 
@@ -62,6 +66,19 @@ function positiveInt(text: string): number | undefined {
 
 function nodeLabel(node: CanvasNode): string {
   return `${node.data.title} · ${typeLabel(node.data.kind)}`;
+}
+
+/** 逗号/空白分隔的产物 key 列表 ↔ 输入框文本 */
+function keysText(keys: string[] | undefined): string {
+  return (keys ?? []).join(', ');
+}
+
+function splitKeys(text: string): string[] | undefined {
+  const keys = text
+    .split(/[,，\s]+/)
+    .map((key) => key.trim())
+    .filter((key) => key !== '');
+  return keys.length === 0 ? undefined : keys;
 }
 
 export function Inspector(props: InspectorProps): React.ReactElement {
@@ -169,6 +186,58 @@ export function Inspector(props: InspectorProps): React.ReactElement {
               当前节点是 subflow 模式，但面板暂不支持编辑内嵌子图；保存会被校验器拒绝（缺少子图）。请用 aiworkflow_flow 工具改它。
             </div>
           )}
+          <Field label="角色" hint="引用全图角色表；角色章程与线程摘要会拼进 child preamble">
+            <select
+              className="wf-input"
+              value={body.role ?? ''}
+              onChange={(event) => patch({ role: event.target.value === '' ? undefined : event.target.value })}
+            >
+              <option value="">（无角色）</option>
+              {props.agents.map((agent) => (
+                <option key={agent.id} value={agent.id}>
+                  {agent.name} · {agent.id}
+                </option>
+              ))}
+              {body.role !== undefined && !props.agents.some((agent) => agent.id === body.role) && (
+                <option value={body.role}>（角色 {body.role} 不存在）</option>
+              )}
+            </select>
+          </Field>
+          <Field label="线程" hint="留空或 new = 一次性；role = 同角色跨轮共享；也可以填自定义线程 key">
+            <input
+              className="wf-input"
+              value={body.thread ?? ''}
+              placeholder="new / role / 自定义"
+              onChange={(event) => {
+                const value = event.target.value.trim();
+                patch({ thread: value === '' ? undefined : value });
+              }}
+            />
+          </Field>
+          <Field label="产出 / 消费产物" hint="逗号分隔的 key；只用于校验与面板，运行时以 complete_step.artifacts 为准">
+            <div className="wf-row">
+              <input
+                className="wf-input"
+                value={keysText(body.produces)}
+                placeholder="produces: design"
+                onChange={(event) => patch({ produces: splitKeys(event.target.value) })}
+              />
+              <input
+                className="wf-input"
+                value={keysText(body.consumes)}
+                placeholder="consumes: design"
+                onChange={(event) => patch({ consumes: splitKeys(event.target.value) })}
+              />
+            </div>
+          </Field>
+          <Field label="汇报契约" hint="告诉子 Agent 的 payload/产物格式，会拼进 preamble">
+            <textarea
+              className="wf-area"
+              value={body.reportHint ?? ''}
+              onChange={(event) => patch({ reportHint: event.target.value })}
+              placeholder="例如：payload 带 verdict（pass/fail）、issues[]；产物 key=design"
+            />
+          </Field>
           {body.mode === 'flowRef' && (
             <Field label="引用的图" hint="目标图必须已保存；run 启动时按 id 递归解析">
               <select
@@ -396,10 +465,98 @@ export function Inspector(props: InspectorProps): React.ReactElement {
                 onChange={(event) => props.onCondition(edge.id, event.target.value)}
                 placeholder={index === 0 ? '默认分支一般填 *' : '例如：上一步结论为通过'}
               />
+              <input
+                className="wf-input"
+                value={String(edge.data?.when ?? '')}
+                onChange={(event) => props.onWhen(edge.id, event.target.value)}
+                placeholder="when（可选）：{{review.payload.verdict}} == 'pass'"
+              />
             </Field>
           ))}
         </Section>
       )}
+
+      <details className="wf-section">
+        <summary className="wf-section-title">角色表（{props.agents.length}）</summary>
+        <div className="wf-hint">全图共享；subagent 节点用「角色」下拉引用。章程会随每轮 preamble 注入。</div>
+        {props.agents.map((agent, index) => (
+          <div key={`${agent.id}-${index}`} className="wf-field">
+            <div className="wf-row">
+              <input
+                className="wf-input"
+                value={agent.id}
+                placeholder="id（字母/数字/下划线）"
+                onChange={(event) =>
+                  props.onAgentsChange(
+                    props.agents.map((item, i) => (i === index ? { ...item, id: event.target.value } : item)),
+                  )
+                }
+              />
+              <input
+                className="wf-input"
+                value={agent.name}
+                placeholder="显示名"
+                onChange={(event) =>
+                  props.onAgentsChange(
+                    props.agents.map((item, i) => (i === index ? { ...item, name: event.target.value } : item)),
+                  )
+                }
+              />
+              <button
+                type="button"
+                className="wf-btn"
+                onClick={() => props.onAgentsChange(props.agents.filter((_, i) => i !== index))}
+              >
+                删
+              </button>
+            </div>
+            <textarea
+              className="wf-area"
+              value={agent.charter}
+              placeholder="角色章程：职责、边界、完成标准"
+              onChange={(event) =>
+                props.onAgentsChange(
+                  props.agents.map((item, i) => (i === index ? { ...item, charter: event.target.value } : item)),
+                )
+              }
+            />
+            <div className="wf-row">
+              <input
+                className="wf-input"
+                value={keysText(agent.produces)}
+                placeholder="produces: design"
+                onChange={(event) =>
+                  props.onAgentsChange(
+                    props.agents.map((item, i) => (i === index ? { ...item, produces: splitKeys(event.target.value) } : item)),
+                  )
+                }
+              />
+              <input
+                className="wf-input"
+                value={keysText(agent.consumes)}
+                placeholder="consumes: design"
+                onChange={(event) =>
+                  props.onAgentsChange(
+                    props.agents.map((item, i) => (i === index ? { ...item, consumes: splitKeys(event.target.value) } : item)),
+                  )
+                }
+              />
+            </div>
+          </div>
+        ))}
+        <button
+          type="button"
+          className="wf-btn"
+          onClick={() => {
+            let index = props.agents.length + 1;
+            const used = new Set(props.agents.map((agent) => agent.id));
+            while (used.has(`agent_${index}`)) index += 1;
+            props.onAgentsChange([...props.agents, { id: `agent_${index}`, name: '新角色', charter: '' }]);
+          }}
+        >
+          + 添加角色
+        </button>
+      </details>
 
       <div className="wf-insp-foot">
         <button type="button" className="wf-btn" onClick={props.onSetEntry} disabled={props.isEntry}>

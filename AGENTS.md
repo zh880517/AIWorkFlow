@@ -55,7 +55,7 @@ npm run check:plugin # 重建并与暂存区比对，防止产物与源码脱节
 ## 已知注意点
 
 - `docs/dev/` 是临时文档，生命周期结束整体删除；正式结论回写根目录设计文档。
-- 数据库迁移只追加，不改历史迁移；当前 `MIGRATIONS` 已到 v6（v6 删除旧 MCP 会话列）。旧库升级要保证数据不丢。
+- 数据库迁移只追加，不改历史迁移；当前 `MIGRATIONS` 已到 v9（v6 删除旧 MCP 会话列；v7 角色/线程/inputs；v8 产物表；v9 父节点执行轮次）。旧库升级要保证数据不丢。
 - 插件的 Host 半依赖 DSH 的 `webServer` 与 `tools` 服务（`inject: ['webServer', 'tools']`），缺少任一服务的组合里不激活。
 - 页面必须与宿主同源（`dsh web` 或桌面版内置 Web 视图）；`file://` 载入的渲染器拿不到这个路由。
 - 插件 Client 半只从宿主拿 `react` / `react-dom`；不要 `import 'react/jsx-runtime'`（详见 `docs/dev/EDITOR-HANDOFF.md`）。

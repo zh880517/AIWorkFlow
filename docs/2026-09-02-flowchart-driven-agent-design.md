@@ -61,7 +61,7 @@ run 定位顺序：**childToken → runId → hostSession（`dsh:<sessionId>`）
 |---|---|---|
 | `prompt` | 描述干什么、怎么判断 | `instruction` |
 | `tool` | 指定工具与参数 | `toolName`, `params` |
-| `subagent` | 派子 Agent | `extraPrompt`, `mode`, `fanOut?` |
+| `subagent` | 派子 Agent | `extraPrompt`, `mode`, `fanOut?`, `role?`, `thread?`, `produces?`, `consumes?`, `reportHint?` |
 | `gate` | 人工卡点，挂起等确认 | `question`, `options[]` |
 | `join` | 等并行子 Agent 全部回报后汇总 | `waitFor`, `aggregateInstruction` |
 | `end` | 出口 | `outcome: success \| fail` |
@@ -71,6 +71,13 @@ run 定位顺序：**childToken → runId → hostSession（`dsh:<sessionId>`）
 - `inline` — 只提供额外提示词，子 Agent 执行单个节点，其余上下文由主 Agent 补充
 - `subflow` — 子 Agent 走一张内嵌子图
 - `flowRef` — 子 Agent 走另一张已保存的工作流图
+
+子 Agent 协作字段（db v7+）：
+
+- `role` — 引用 `flow.agents[]` 里的角色 id；角色名与 `charter` 会拼进 child preamble
+- `thread` — `new`/缺省 = 一次性；`role` = 同角色跨轮共享 `role:<id>`；其它字符串 = 自定义线程 key
+- `produces` / `consumes` — 产物 key 声明，只用于校验和面板提示；运行时以 `complete_step.artifacts` 为准
+- `reportHint` — 给子 Agent 的汇报契约（payload 字段、产物 key），拼进 preamble
 
 ### 4.2 节点通用结构
 
@@ -102,6 +109,7 @@ run 定位顺序：**childToken → runId → hostSession（`dsh:<sessionId>`）
 - 条件是**自然语言**，由 Agent 自己判断。代价是非确定性，收益是无需为每个节点定 schema、无需服务端另起一次 LLM 判定。
 - **下发给 Agent 时剥离 `to` 字段**，只给 `{ id, condition }`。Agent 回一个 `branchId`。理由是降噪：图的拓扑结构对 Agent 完成当前节点毫无用处，给了只是污染注意力。
 - `condition: "*"` 表示 default 分支。
+- **`when`（可选，P1）**：服务端可判定的单比较表达式，例如 `"{{review.payload.verdict}} == 'pass'"`。左值必须是 `{{...}}`；右值是字符串/数字/布尔/null 或另一个插值；支持 `== != > >= < <= contains in truthy empty`。所有 `when` 按声明顺序求值，第一个命中者胜出；都不命中才回落到 Agent 的 `branchId`，再不行走 `condition: "*"`。有 `when` 的分支不下发给 Agent 选择。`when` 求值发生在父节点轨迹落库之前，因此 `{{review.payload.verdict}}` 用的是本轮 child 的合并 payload，而不是数据库里的旧行。解析失败硬拒 `E_BAD_WHEN`；多个 `when` 可能同时命中只给 `W_WHEN_OVERLAP` 警告。
 
 ### 4.4 节点间数据传递
 
@@ -111,6 +119,13 @@ run 定位顺序：**childToken → runId → hostSession（`dsh:<sessionId>`）
 - `payload`（可选，对象）— 给机器用的，供后续节点插值取字段。**不强制 schema**，与自然语言路线一致
 
 后续节点的 `instruction` / `params` 中可写 `{{nodeId.payload.field}}`，**由服务端渲染完成后再下发**，Agent 收到的是最终文本。
+
+P1 增补两条交接通道：
+
+- **产物总线**：`complete_step` 可带 `artifacts: [{ key, summary?, path?, content? }]`。服务端按 `root_run_id + key` 自增 `version` 写入 `run_artifacts`；`{{artifacts.<key>.path|version|summary|content}}` 永远取最新版。正文或文件都行，preamble 只给路径/摘要，避免上下文膨胀。
+- **run 输入**：`start_run` 的 `inputs` 落 `runs.inputs`，child 继承；`{{inputs.feature}}` 在派发时渲染。
+
+子结果回传：child 的 `complete_step.summary/payload` 在汇聚时写入父节点执行行。单 child 时 payload 直接平铺（`{{review.payload.verdict}}`），多 child 时保留 `children[]` 结构，避免键冲突。
 
 ### 4.5 环与迭代
 
@@ -153,10 +168,13 @@ run 定位顺序：**childToken → runId → hostSession（`dsh:<sessionId>`）
 
 | 表 | 关键列 |
 |---|---|
-| `runs` | `id`, `parent_run_id`, `root_run_id`, `flow_id`, `flow_snapshot_hash`, `entry_node`, `current_node`, `status`, `cwd`, `project_name`, `host_session`, `child_token`, `steps_used`, `last_activity`, `created_at`, `finished_at` |
+| `runs` | `id`, `parent_run_id`, `root_run_id`, `flow_id`, `flow_snapshot_hash`, `entry_node`, `current_node`, `status`, `cwd`, `project_name`, `host_session`, `child_token`, `role`, `thread_id`, `inputs`, `parent_iteration`, `steps_used`, `last_activity`, `created_at`, `finished_at` |
 | `flow_snapshots` | `hash`, `content`（内容寻址去重） |
 | `node_executions` | `run_id`, `node_id`, `iteration`, `status`, `summary`, `payload`, `branch_id`, `started_at`, `finished_at` |
 | `gate_decisions` | `id`, `run_id`, `node_id`, `question`, `option_id`, `note`, `source`（`panel` \| `chat`）, `decided_at` |
+| `run_artifacts` | `root_run_id`, `key`, `version`, `run_id`, `node_id`, `role`, `summary`, `path`, `content`, `created_at`（v8，`UNIQUE(root_run_id, key, version)`） |
+
+`runs.parent_iteration`（v9）是派发该 child 的父节点执行轮次。同一 `subagent` 节点在回路里会执行多轮，取 child 时必须只取最大 `parent_iteration` 的那一批，否则第二轮的汇聚会混入第一轮旧结果。
 
 `runs.status`：`running` │ `waiting_gate` │ `waiting_children` │ `completed` │ `failed` │ `stale`
 
@@ -170,9 +188,9 @@ run 定位顺序：**childToken → runId → hostSession（`dsh:<sessionId>`）
 
 | DSH 工具 | 签名 | 说明 |
 |---|---|---|
-| `aiworkflow_start_run` | `{ flowName, cwd?, projectName? }` | 建 run（含快照），返回纪律文本 + 第一步 |
+| `aiworkflow_start_run` | `{ flowName, cwd?, projectName?, inputs? }` | 建 run（含快照），返回纪律文本 + 第一步 |
 | `aiworkflow_get_current_step` | `{ childToken? }` | **幂等**。返回"我在哪、要干啥"。上下文压缩后的恢复入口 |
-| `aiworkflow_complete_step` | `{ summary, payload?, branchId?, nodeId?, childToken? }` | 推进一格，返回下一步 |
+| `aiworkflow_complete_step` | `{ summary, payload?, branchId?, artifacts?, nodeId?, childToken? }` | 推进一格，返回下一步 |
 | `aiworkflow_report_blocked` | `{ reason, nodeId?, childToken? }` | 干不下去，见 7.8 的处理规则 |
 | `aiworkflow_await_gate` | `{ gateId?, childToken? }` | 长轮询上限 60 秒，超时返回"仍在等待，请再调一次" |
 | `aiworkflow_answer_gate` | `{ gateId?, optionId, note?, childToken? }` | 代填用户在聊天中的答复，记 `source: 'chat'` |
@@ -252,8 +270,11 @@ run 定位顺序：**childToken → runId → hostSession（`dsh:<sessionId>`）
 | 情况 | 处理 |
 |---|---|
 | 节点无分支 | 走唯一后继；无后继 = 隐式 end |
-| `branchId` 非法或缺失 | 不推进，自愈返回（附合法 id 列表） |
-| 多个条件都满足 | Agent 只回一个 id，服务端不裁决 |
+| 有 `when` 且命中 | 服务端直接走第一个命中的分支，Agent 不需要回 `branchId` |
+| 有 `when` 都不命中、还有自然语言分支 | 返回路由步（带 childResults/payload），由 Agent 选 `branchId` |
+| 有 `when` 都不命中、只剩 default | 自动走 default |
+| `branchId` 非法或缺失 | 不推进，自愈返回（附合法 id 列表）；`when` 分支不允许手工选不匹配的 |
+| 多个自然语言条件都满足 | Agent 只回一个 id，服务端不裁决 |
 | 都不满足 | 走 `condition: "*"` 的 default 分支 |
 | 无 default 且都不满足 | run 判失败，面板标红 |
 
@@ -286,6 +307,12 @@ run 定位顺序：**childToken → runId → hostSession（`dsh:<sessionId>`）
 - child 快照从父快照切出（`buildSubSnapshot`），不回读当前库——child 与主 run 钉同一版本。
 - child 建库在主 run 推进事务**之后**（插值需要刚提交的本步产物）；若两步之间进程崩溃，汇聚时发现无 child 会按节点配置惰性补建，不把 run 卡死。
 - 重派一轮用 `runs.retry_of`（db v4）指向被替代的旧 run；"最新一批" = 有 retry 取 retry、否则原始。
+
+多 Agent 回路（P1）补记：
+
+- 同一个 `subagent` 节点会被回路反复执行，child 用 `runs.parent_iteration` 标记"第几轮派发"。`childSlots` / `currentWave` 只取最大轮次，重派沿用原轮次，避免把历史轮次卷进本轮汇聚。
+- `subagent` 节点全部 child 到终态后：`when` 能判定的直接推进；仍有自然语言分支时返回**路由步**（`step.childResults[]` + `branches[]`），Agent 调 `complete_step({ branchId })`；写父节点轨迹时把本轮合并 payload 带上。
+- 子结果进入父 payload：单 child 直接平铺，多 child 保留 `children[]`。保留键 `children/child` 不与子 payload 冲突。
 
 ### 7.6 人工卡点
 
@@ -344,20 +371,27 @@ child run 调 `report_blocked` 时，该 child 置为 `failed`，随后由 7.5 �
 `subagent` 节点下发时给出一段**必须原样前置、不许改写或摘要**的文本：
 
 ```
-[以下三行由流程引擎提供，请原样前置，不要改写或摘要]
+[以下内容由流程引擎提供，请原样前置，不要改写或摘要]
 你是流程 run_a1b2 节点 7 派出的子任务，你的 childToken 是 c_7x2f。
+你的角色：设计 Agent（role=designer）。
+角色章程：负责设计方案，按评审意见修订
+你的线程：role:designer，这是第 2 轮。
+同线程最近几轮摘要：
+- 第 1 轮（designer，completed）：设计 v1
+汇报契约：payload 带 verdict（pass/fail）与 issues；产物 key=design
 调 get_current_step({childToken:"c_7x2f"}) 取你这一步要做什么。
-做完调 complete_step({childToken:"c_7x2f", summary, payload?, branchId})。
+做完调 complete_step({childToken:"c_7x2f", summary, payload?, branchId?, artifacts?})。
 [主 Agent 的补充说明写在这行之后]
 ```
 
-由主 Agent 补充上下文，preamble 原样携带。子 Agent 首次调用时服务端校验 token 在白名单内，不在则自愈返回。
+角色/线程/摘要段只在节点声明了 `role` 或 `thread` 时出现；线程摘要最多 5 条、封顶 1200 字符。由主 Agent 补充上下文，preamble 原样携带。子 Agent 首次调用时服务端校验 token 在白名单内，不在则自愈返回。
 
 ## 9. 编辑器与监控面板
 
 ### 9.1 编辑器
 
-- 画布拖拽建节点、连线即分支；选中连线编辑 `condition`。六种节点以颜色 / 图标区分，右侧按 `type` 显示对应字段表单
+- 画布拖拽建节点、连线即分支；选中连线编辑 `condition`，高级区可填 `when`。六种节点以颜色 / 图标区分，右侧按 `type` 显示对应字段表单
+- `subagent` 额外编辑 `role`（下拉引用全图角色表）、`thread`、`produces/consumes`、`reportHint`；属性面板底部可维护全图「角色表」（id/name/charter/produces/consumes）
 - **技术选型：React Flow**。自定义节点、连线交互、缩放定位均现成
 - **插值提示的固有限制**：输入 `{{` 时能提示的只有前序**节点 id**，`payload` 字段名运行时才知道。补法是从历史 run 中学习该节点曾出现过的字段名作候选。首次画图无提示，用过几次后有
 
@@ -381,6 +415,7 @@ child run 调 `report_blocked` 时，该 child 置为 `failed`，随后由 7.5 �
 - 走过的路径高亮，**环要能看出绕了几圈**——同一节点多次执行时，侧栏按迭代次序列出每一次结果
 - 点节点 → 侧栏显示该次的 `summary`、`payload`、耗时、迭代序号
 - 子 Agent 按 run 树折叠展示；fan-out 的 N 个并排；**被 `max` 截断丢掉的显性列出**
+- 子 run 详情显示 `role`、`threadId`、派发轮次 `parentIteration`；右侧「产物」卡按 key/version 列出 `run_artifacts`，路径与摘要直接可见
 - 人工卡点在此只读展示问题与选项；用户在对话里回复选项，Agent 代填后这里自动继续
 - **停滞检测（已移除，2026-09-08 用户决定）**：原设计为 15 分钟标黄、24 小时自动标 `stale`。移除原因：AI 在执行中长时间暂停是常态（长任务、等待用户），按超时判异常会产生误导。系统不基于时间做任何状态改写；`stale` 状态仅作为历史遗留兼容展示。
 
@@ -392,7 +427,7 @@ child run 调 `report_blocked` 时，该 child 置为 `failed`，随后由 7.5 �
 
 ## 10. 验证方式
 
-- **引擎 / 校验 / 存储 / 迁移**：`vitest`，数据库用内存 `node:sqlite`，覆盖六种节点、分支/环/迭代上限、gate、子 Agent、fan-out、快照以及 v5→v6 迁移。
+- **引擎 / 校验 / 存储 / 迁移**：`vitest`，数据库用内存 `node:sqlite`，覆盖六种节点、分支/环/迭代上限、gate、子 Agent、fan-out、快照、P1 多 Agent 语义以及 v5→v9 迁移。
 - **类型与打包**：`npm run typecheck`（shared + 插件）与 `npm run build:plugin`；Host 产物必须只外置 `node:` 内建。
 - **DSH 实机**：在 `dsh web` 或桌面版里装载插件，跑一张含 gate 与 subagent 的图，验证工具注册、会话隔离、面板与运行图。
 
@@ -404,6 +439,7 @@ child run 调 `report_blocked` 时，该 child 置为 `failed`，随后由 7.5 �
 - **从项目目录加载图** — 使流程可随项目提交进 git、与同事共享
 - **图的版本管理与 diff**
 - **拦截类或状态注入类机制**（审批、往上下文塞提醒）——与"引导而非约束"矛盾
+- **子 Agent 同级直连消息** — 当前全局 `send_message` 只允许父↔直接 child；P1 的协作走"父级中转 + 轮次/产物"，不引入 experimental Agent Teams，也不做插件 broker。直连保留为 P3 可选
 
 ## 12. 已知局限
 
@@ -411,3 +447,4 @@ child run 调 `report_blocked` 时，该 child 置为 `failed`，随后由 7.5 �
 2. **"Agent 看不到图"是默认行为，不是安全边界。** Agent 有文件工具，可直接读 `~/.aiworkflow/flows/*.json`。该机制挡住的是"顺手读图"这一真实且高频的失效模式，而非有意为之的行为。
 3. **分支判断非确定性。** 条件是自然语言、由 Agent 判断。同样输入可能选不同分支。
 4. **图无法随项目共享。** 见 5.1。
+5. **多 Agent 协作是父级中转，不是同级直连。** Review 的结论先回主 Agent，再由主 Agent 派给设计/开发；多一跳延迟，但不需要 experimental Agent Teams，也不依赖子 Agent 在线。线程摘要只给最近 5 轮、1200 字符，跨很多轮的细节需要写进产物文件。

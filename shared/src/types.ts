@@ -14,6 +14,45 @@ export interface Branch {
   to: string;
   /** 该分支的连线起点出口 id（面板编辑器多出口用）；缺省 = 默认出口。引擎忽略 */
   outlet?: string;
+  /**
+   * 可选：服务端可判定的条件（如 "{{review.payload.verdict}} == 'pass'"）。
+   * 命中时不再依赖 Agent 选 branchId；语法见 validate.ts / 设计文档 §4.2.3。
+   */
+  when?: string;
+}
+
+/** 角色定义（Flow 级，一次编写、每轮注入） */
+export interface AgentDef {
+  id: string;
+  name: string;
+  /** 角色章程：职责、边界、完成标准。拼进 child preamble */
+  charter: string;
+  /** 声明产物 key；只用于校验与面板，运行时不强制 */
+  produces?: string[];
+  consumes?: string[];
+}
+
+/** complete_step 提交的产物条目 */
+export interface ArtifactInput {
+  key: string;
+  summary?: string;
+  /** 产物文件路径；正文以文件为准 */
+  path?: string;
+  /** 可选的小快照（<=8KB），便于面板回看 */
+  content?: string;
+}
+
+/** 产物只读视图（最新版本） */
+export interface ArtifactRef {
+  key: string;
+  version: number;
+  runId: string;
+  nodeId: string;
+  role: string | null;
+  summary: string | null;
+  path: string | null;
+  content: string | null;
+  createdAt: string;
 }
 
 export interface GateOption {
@@ -65,6 +104,15 @@ export interface SubagentNode extends FlowNodeBase {
   /** mode = flowRef 时引用的图 id；启动 run 时递归解析进快照 */
   flowRef?: string;
   fanOut?: FanOutConfig;
+  /** 角色 id，引用 flow.agents；省略 = 无角色（兼容老图） */
+  role?: string;
+  /** new（默认，一次性）| role（同角色共享线程）| 自定义线程 key */
+  thread?: 'new' | 'role' | string;
+  /** 声明本轮产出/消费的产物 key；校验与面板用，运行时不强制 */
+  produces?: string[];
+  consumes?: string[];
+  /** 给子 Agent 的汇报契约（自然语言），拼进 preamble */
+  reportHint?: string;
 }
 
 /** 内嵌子图（subflow 模式） */
@@ -115,6 +163,8 @@ export interface Flow {
   entry: string;
   /** run 级全局步数上限，默认 200 */
   maxSteps?: number;
+  /** 角色表：subagent.role 引用；一次编写、每轮注入 */
+  agents?: AgentDef[];
   nodes: FlowNode[];
   /** 面板编辑器专用布局元数据；不属于 DSL 语义，校验与引擎忽略 */
   _ui?: {
@@ -127,6 +177,8 @@ export const DEFAULT_MAX_STEPS = 200;
 /** 运行时快照（copy-on-run）：主图 + 递归解析后的 flowRef 子图，内容寻址去重 */
 export interface FlowSnapshot {
   rootFlowId: string;
+  /** 角色表随快照钉死；子快照从父快照继承，保证 child 也能查到角色章程 */
+  agents?: AgentDef[];
   /** key 为 flow id；rootFlowId 对应主图 */
   flows: Record<string, Flow>;
 }

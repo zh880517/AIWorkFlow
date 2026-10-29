@@ -20,7 +20,7 @@ export interface CanvasOutlet {
 }
 
 export type CanvasNode = Node<CanvasNodeData, 'wf'>;
-export type CanvasEdge = Edge<{ branchId?: string; condition?: string; outlet?: string }>;
+export type CanvasEdge = Edge<{ branchId?: string; condition?: string; when?: string; outlet?: string }>;
 
 export const PALETTE: Array<{ type: NodeType; label: string }> = [
   { type: 'prompt', label: '指令' },
@@ -114,7 +114,7 @@ export function canvasOf(flow: Flow): { nodes: CanvasNode[]; edges: CanvasEdge[]
           source: node.id,
           target: branch.to,
           label: branch.condition === '*' ? '默认' : branch.condition || '条件',
-          data: { branchId: branch.id, condition: branch.condition, outlet: branch.outlet },
+          data: { branchId: branch.id, condition: branch.condition, when: branch.when, outlet: branch.outlet },
         });
       }
       continue;
@@ -229,6 +229,8 @@ export function buildFlow(
         const condition = rawCondition === '' && index === 0 ? '*' : rawCondition;
         // 卡点的出口绑定（option id）优先取这次在面板里选的，其次沿用旧分支
         const outlet = edge.data?.outlet ?? previous?.outlet;
+        const dataWhen = edge.data?.when;
+        const when = dataWhen !== undefined ? (dataWhen.trim() === '' ? undefined : dataWhen.trim()) : previous?.when;
         const branch: Branch =
           previous !== undefined
             ? { ...previous, to: edge.target, condition, ...(outlet !== undefined ? { outlet } : {}) }
@@ -238,6 +240,8 @@ export function buildFlow(
                 to: edge.target,
                 ...(outlet !== undefined ? { outlet } : {}),
               };
+        if (when !== undefined) branch.when = when;
+        else delete branch.when;
         usedBranchIds.add(branch.id);
         return branch;
       });

@@ -1,7 +1,7 @@
 // Host 半：把插件的操作暴露给 Agent（建图五件套 + 执行类工具 + 会话信息）。
 // 与面板 UI 走同一套 Host 函数（shared/flows + 同一个 SQLite 连接），不另写一份逻辑。
 import { readMonitorState } from '@shared/index.js';
-import type { Flow } from '@shared/index.js';
+import type { ArtifactInput, Flow } from '@shared/index.js';
 import { getFlow, listFlows, saveFlow, validateFlowOnly } from '@shared/flows.js';
 import { database, databasePath, flowsDir } from './db.js';
 import { workflowEngine } from './engine.js';
@@ -10,9 +10,11 @@ const FLOW_ACTIONS = ['list', 'get', 'validate', 'create', 'update'] as const;
 
 /** 模型可见的 DSL 速查（完整语义以校验器报错为准） */
 const DSL_HINT =
-  '完整流程图 DSL：{ id, name, entry, maxSteps?, nodes: [...] }。' +
+  '完整流程图 DSL：{ id, name, entry, maxSteps?, agents?, nodes: [...] }。' +
   '节点 { id, type: prompt|tool|gate|subagent|join|end, title?, instruction?, toolName?, params?, next?, branches?, iterationLimit?, onLimitExceeded?, outcome? }。' +
-  '后继二选一：next（唯一后继）或 branches: [{ id, condition, to }]（condition "*" 是默认分支，同节点至多一个）。' +
+  'subagent 额外支持 { role?, thread?: "new"|"role"|自定义, produces?, consumes?, reportHint? }；agents: [{ id, name, charter, produces?, consumes? }]。' +
+  '后继二选一：next（唯一后继）或 branches: [{ id, condition, to, when? }]（condition "*" 是默认分支，同节点至多一个；when 是服务端可判定的单比较，如 "{{review.payload.verdict}} == \'pass\'"）。' +
+  'complete_step 可带 artifacts: [{ key, summary?, path?, content? }]，插值用 {{artifacts.key.path}}；run 输入用 {{inputs.字段}}。' +
   '环必须给环上节点配 iterationLimit。end 节点带 outcome: success|fail。';
 
 interface AgentTool {
@@ -199,13 +201,18 @@ function runTools(ctx: any): AgentTool[] {
     name: 'aiworkflow_start_run',
     description:
       '按流程名开始一个 run（引擎纪律文本里的 start_run）。返回循环纪律 + 第一步。' +
-      'flowName 可以是流程 id 或展示名（先调 aiworkflow_flow action=list 查）。之后每步做完必须调 aiworkflow_complete_step 回报。',
+      'flowName 可以是流程 id 或展示名（先调 aiworkflow_flow action=list 查）；inputs 供图里的 {{inputs.字段}} 插值。之后每步做完必须调 aiworkflow_complete_step 回报。',
     parameters: {
       type: 'object',
       properties: {
         flowName: { type: 'string', description: '流程 id 或展示名' },
         cwd: { type: 'string', description: '项目目录，面板按项目分组用；省略取当前会话的工作目录' },
         projectName: { type: 'string', description: '项目名，面板展示用；省略只记目录' },
+        inputs: {
+          type: 'object',
+          description: 'run 输入：图里用 {{inputs.字段}} 插值；child run 继承',
+          additionalProperties: true,
+        },
       },
       required: ['flowName'],
       additionalProperties: false,
@@ -215,10 +222,16 @@ function runTools(ctx: any): AgentTool[] {
       const flowName = requiredString(args?.flowName, 'flowName', 'start_run 需要 flowName（流程 id 或展示名）。');
       const given = typeof args?.cwd === 'string' ? args.cwd.trim() : '';
       const cwd = given !== '' ? given : ((await currentDirectory(ctx, exec)) ?? undefined);
+      const rawInputs = args?.inputs;
+      const inputs =
+        rawInputs !== null && typeof rawInputs === 'object' && !Array.isArray(rawInputs)
+          ? (rawInputs as Record<string, unknown>)
+          : undefined;
       return jsonSafe(
         workflowEngine().startRun({
           flowName,
           cwd,
+          inputs,
           projectName:
             typeof args?.projectName === 'string' && args.projectName.trim() !== '' ? args.projectName.trim() : undefined,
           hostSession: hostSessionOf(exec),
@@ -248,17 +261,33 @@ function runTools(ctx: any): AgentTool[] {
     name: 'aiworkflow_complete_step',
     description:
       '回报当前步骤的结果并领取下一步（= complete_step）。summary 必填（一句话，给人看）；' +
-      '节点有 branches 时必须给 branchId（从步骤下发的 branches 列表里选）。',
+      '节点有 branches 且未由 when 自动判定时必须给 branchId（从步骤下发的 branches 列表里选）；' +
+      '有产物时用 artifacts 声明，供后续 {{artifacts.key.path}} 插值。',
     parameters: {
       type: 'object',
       properties: {
         summary: { type: 'string', description: '这一步做了什么，一句话，给人看的' },
         payload: {
           type: 'object',
-          description: '给后续节点插值用的结构化结果，如 { project: "apps/battle" }',
+          description: '给后续节点插值用的结构化结果，如 { project: "apps/battle", verdict: "pass" }',
           additionalProperties: true,
         },
-        branchId: { type: 'string', description: '选中分支的 id；节点有 branches 时必填' },
+        branchId: { type: 'string', description: '选中分支的 id；节点有 branches 且未自动判定时必填' },
+        artifacts: {
+          type: 'array',
+          description: '本轮产物：key 会按版本递增，{{artifacts.key.path}} 永远取最新版',
+          items: {
+            type: 'object',
+            properties: {
+              key: { type: 'string', description: '产物 key（字母/数字/下划线），如 design' },
+              summary: { type: 'string', description: '一句话说明这版产物' },
+              path: { type: 'string', description: '产物文件路径，正文以文件为准' },
+              content: { type: 'string', description: '可选的小快照（<=8KB），便于面板回看' },
+            },
+            required: ['key'],
+            additionalProperties: false,
+          },
+        },
         nodeId: { type: 'string', description: '当前节点 id（复述身份用，省略亦可）' },
         childToken: { type: 'string', description: '子 Agent 专用身份令牌' },
       },
@@ -273,6 +302,7 @@ function runTools(ctx: any): AgentTool[] {
           summary: requiredString(args?.summary, 'summary', 'complete_step 需要 summary（一句话说清这一步做了什么）。'),
           payload: isPlainObject(args?.payload) ? (args.payload as Record<string, unknown>) : undefined,
           branchId: optionalString(args?.branchId),
+          artifacts: Array.isArray(args?.artifacts) ? (args.artifacts as ArtifactInput[]) : undefined,
           nodeId: optionalString(args?.nodeId),
         }),
       );

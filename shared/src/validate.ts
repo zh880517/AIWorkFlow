@@ -4,6 +4,7 @@
 // "环无逃生出口"与"存在无法终止的路径"合并为一个判定：从 entry 可达的节点中，
 // 若存在无法到达任何终点的节点（含经 onLimitExceeded 逃生边），判硬拒。
 import type { Flow, FlowNode, SubflowDef } from './types.js';
+import { parseWhen } from './when.js';
 
 export interface ValidationIssue {
   severity: 'error' | 'warning';
@@ -53,8 +54,48 @@ export function validateFlow(flow: Flow): ValidationResult {
     err('E_NO_ENTRY', `entry "${flow.entry}" 不存在于节点表中`, flow.entry);
   }
 
+  // --- 角色表（P1）：id 唯一、章程非空、产物 key 合法 ---
+  const agentIds = new Set<string>();
+  if (flow.agents !== undefined) {
+    if (!Array.isArray(flow.agents)) {
+      err('E_AGENTS', 'flow.agents 必须是数组');
+    } else {
+      for (const agent of flow.agents) {
+        if (!agent.id || !/^[A-Za-z0-9_]+$/.test(agent.id)) {
+          err('E_AGENT_ID', `角色 id 缺失或含非法字符：${agent.id ?? '（空）'}`);
+        } else if (agentIds.has(agent.id)) {
+          err('E_DUP_AGENT', `角色 id 重复：${agent.id}`, agent.id);
+        } else {
+          agentIds.add(agent.id);
+        }
+        if (!agent.name?.trim()) err('E_AGENT_FIELD', `角色 "${agent.id}" 缺少 name`, agent.id);
+        if (!agent.charter?.trim()) err('E_AGENT_FIELD', `角色 "${agent.id}" 缺少 charter`, agent.id);
+        validateKeyList(agent.produces, `角色 "${agent.id}" 的 produces`, err, agent.id);
+        validateKeyList(agent.consumes, `角色 "${agent.id}" 的 consumes`, err, agent.id);
+      }
+    }
+  }
+
   // --- 逐节点结构校验 ---
-  for (const node of flow.nodes) validateNode(node, byId, err, warn);
+  for (const node of flow.nodes) validateNode(node, byId, err, warn, agentIds);
+
+  // --- 产物声明：消费的 key 至少有一个生产者（只警告，允许跨图交接） ---
+  const produced = new Set<string>();
+  for (const agent of flow.agents ?? []) for (const key of agent.produces ?? []) produced.add(key);
+  for (const node of flow.nodes) {
+    if (node.type === 'subagent') for (const key of node.produces ?? []) produced.add(key);
+  }
+  for (const agent of flow.agents ?? []) {
+    for (const key of agent.consumes ?? []) {
+      if (!produced.has(key)) warn('W_ARTIFACT_NO_PRODUCER', `角色 "${agent.id}" 消费的产物 "${key}" 在图里没有生产者`, agent.id);
+    }
+  }
+  for (const node of flow.nodes) {
+    if (node.type !== 'subagent') continue;
+    for (const key of node.consumes ?? []) {
+      if (!produced.has(key)) warn('W_ARTIFACT_NO_PRODUCER', `节点 "${node.id}" 消费的产物 "${key}" 在图里没有生产者`, node.id);
+    }
+  }
 
   // --- 可达性：从 entry 出发的边（branches.to / next / onLimitExceeded） ---
   const edges = buildEdgeMap(flow.nodes);
@@ -98,10 +139,39 @@ function finish(errors: ValidationIssue[], warnings: ValidationIssue[]): Validat
   return { ok: errors.length === 0, errors, warnings };
 }
 
+function validateKeyList(
+  keys: string[] | undefined,
+  where: string,
+  err: ErrFn,
+  nodeId?: string,
+): void {
+  if (keys === undefined) return;
+  if (!Array.isArray(keys)) {
+    err('E_ARTIFACT_KEY', `${where} 必须是字符串数组`, nodeId);
+    return;
+  }
+  const seen = new Set<string>();
+  for (const key of keys) {
+    if (typeof key !== 'string' || !/^[A-Za-z0-9_]+$/.test(key)) {
+      err('E_ARTIFACT_KEY', `${where} 含非法 key：${JSON.stringify(key)}（只允许字母/数字/下划线）`, nodeId);
+    } else if (seen.has(key)) {
+      err('E_ARTIFACT_KEY', `${where} 重复声明 key：${key}`, nodeId);
+    } else {
+      seen.add(key);
+    }
+  }
+}
+
 type ErrFn = (code: string, message: string, nodeId?: string) => void;
 type WarnFn = (code: string, message: string, nodeId?: string) => void;
 
-function validateNode(node: FlowNode, byId: Map<string, FlowNode>, err: ErrFn, warn: WarnFn): void {
+function validateNode(
+  node: FlowNode,
+  byId: Map<string, FlowNode>,
+  err: ErrFn,
+  warn: WarnFn,
+  agentIds: Set<string> = new Set(),
+): void {
   const id = node.id;
 
   // 分支与 next 的互斥 / 引用有效性
@@ -127,6 +197,7 @@ function validateNode(node: FlowNode, byId: Map<string, FlowNode>, err: ErrFn, w
   if (node.branches !== undefined) {
     const branchIds = new Set<string>();
     let defaults = 0;
+    let whenCount = 0;
     for (const branch of node.branches) {
       if (!branch.id) err('E_BRANCH_ID', `节点 "${id}" 存在缺少 id 的分支`, id);
       else if (branchIds.has(branch.id)) {
@@ -136,11 +207,29 @@ function validateNode(node: FlowNode, byId: Map<string, FlowNode>, err: ErrFn, w
         err('E_EMPTY_CONDITION', `分支 "${branch.id}" 的 condition 为空（节点 ${id}）`, id);
       }
       if (branch.condition === '*') defaults++;
-      if (!branch.to || !byId.has(branch.to)) {
+      if (branch.to === undefined || !byId.has(branch.to)) {
         err('E_BAD_REF', `分支 "${branch.id}" 指向不存在的节点：${branch.to}（节点 ${id}）`, id);
+      }
+      if (branch.when !== undefined) {
+        whenCount++;
+        if (branch.condition === '*') {
+          err('E_WHEN_DEFAULT', `默认分支 "${branch.id}" 不应再配 when（默认分支由“其他都不命中”兜底）`, id);
+        } else {
+          const parsed = parseWhen(branch.when);
+          if (!parsed.ok) {
+            err('E_BAD_WHEN', `分支 "${branch.id}" 的 when 不合法：${parsed.error}`, id);
+          }
+        }
       }
     }
     if (defaults > 1) err('E_MULTI_DEFAULT', `节点 "${id}" 有多个 default（"*"）分支`, id);
+    if (whenCount > 1) {
+      warn(
+        'W_WHEN_OVERLAP',
+        `节点 "${id}" 有 ${whenCount} 条 when 分支；按声明顺序取第一个命中的，重叠时后面的不会生效`,
+        id,
+      );
+    }
     if (defaults === 0 && node.type !== 'gate') {
       // 卡点例外：出口由人工选择，无兜底分支语义
       warn('W_NO_DEFAULT', `节点 "${id}" 的分支缺少 default（"*"），全部不满足时 run 将判失败`, id);
@@ -211,7 +300,7 @@ function validateNode(node: FlowNode, byId: Map<string, FlowNode>, err: ErrFn, w
       if (node.mode === 'subflow' && !node.subflow) {
         err('E_TYPE_FIELD', `subagent 节点 "${id}" mode 为 subflow 但缺少内嵌子图`, id);
       }
-      if (node.mode === 'subflow' && node.subflow) validateSubflow(node.subflow, id, err);
+      if (node.mode === 'subflow' && node.subflow) validateSubflow(node.subflow, id, err, agentIds);
       if (node.mode === 'flowRef' && !node.flowRef?.trim()) {
         err('E_TYPE_FIELD', `subagent 节点 "${id}" mode 为 flowRef 但缺少 flowRef`, id);
       }
@@ -226,6 +315,22 @@ function validateNode(node: FlowNode, byId: Map<string, FlowNode>, err: ErrFn, w
           err('E_FANOUT_SOURCE', `fanOut.max 必须为正整数：${max}（节点 ${id}）`, id);
         }
       }
+      if (node.role !== undefined) {
+        if (!node.role.trim()) {
+          err('E_BAD_ROLE', `subagent 节点 "${id}" 的 role 为空`, id);
+        } else if (!agentIds.has(node.role)) {
+          err('E_BAD_ROLE', `subagent 节点 "${id}" 引用了不存在的角色：${node.role}`, id);
+        }
+      }
+      if (node.thread !== undefined) {
+        if (node.thread === 'role' && node.role === undefined) {
+          err('E_THREAD_NEEDS_ROLE', `subagent 节点 "${id}" 的 thread 为 role 但没有指定 role`, id);
+        } else if (node.thread !== 'new' && node.thread !== 'role' && !node.thread.trim()) {
+          err('E_TYPE_FIELD', `subagent 节点 "${id}" 的 thread 不能为空字符串`, id);
+        }
+      }
+      validateKeyList(node.produces, `subagent 节点 "${id}" 的 produces`, err, id);
+      validateKeyList(node.consumes, `subagent 节点 "${id}" 的 consumes`, err, id);
       break;
     }
     default:
@@ -234,7 +339,7 @@ function validateNode(node: FlowNode, byId: Map<string, FlowNode>, err: ErrFn, w
 }
 
 /** 内嵌子图（subflow）递归校验；只做结构校验，节点 id 作用域独立 */
-function validateSubflow(subflow: SubflowDef, parentId: string, err: ErrFn): void {
+function validateSubflow(subflow: SubflowDef, parentId: string, err: ErrFn, agentIds: Set<string>): void {
   if (!Array.isArray(subflow.nodes) || subflow.nodes.length === 0) {
     err('E_TYPE_FIELD', `subflow（节点 ${parentId}）没有任何节点`, parentId);
     return;
@@ -251,7 +356,7 @@ function validateSubflow(subflow: SubflowDef, parentId: string, err: ErrFn): voi
   }
   // 子图内引用自身节点表；嵌套 subflow 继续递归
   const noopWarn: WarnFn = () => {};
-  for (const node of subflow.nodes) validateNode(node, byId, err, noopWarn);
+  for (const node of subflow.nodes) validateNode(node, byId, err, noopWarn, agentIds);
   const edges = buildEdgeMap(subflow.nodes);
   const reachable = reachableFrom(subflow.entry, edges);
   const terminals = subflow.nodes.filter(isTerminal).map((n) => n.id);

@@ -4,4 +4,5 @@ export * from './runTypes.js';
 export * from './sql.js';
 export * from './progress.js';
 export * from './format.js';
+export * from './when.js';
 // 注：flows.ts 依赖 node:fs，只由 Host 半通过 `@shared/flows.js` 引入，不进浏览器 bundle。
