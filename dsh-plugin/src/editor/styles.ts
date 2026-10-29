@@ -135,6 +135,8 @@ button.wf-sum-chip:hover{border-color:var(--dsw-alias-brand-primary);color:var(-
 .wf-hint{font-size:11px;color:var(--dsw-alias-label-secondary);line-height:1.5}
 .wf-hint-warn{color:var(--dsw-alias-state-warn-primary)}
 .wf-section{display:flex;flex-direction:column;gap:10px}
+/* 核心字段：类型已经在头部标了，不再套一层同名区块标题 */
+.wf-core{display:flex;flex-direction:column;gap:10px}
 .wf-section-title{font-size:10.5px;font-weight:700;color:var(--dsw-alias-label-secondary);letter-spacing:.08em;
   text-transform:uppercase;padding-bottom:5px;border-bottom:1px solid var(--dsw-alias-border-l1)}
 .wf-kind{font-size:10.5px;font-weight:700;letter-spacing:.04em;padding:2px 7px;border-radius:6px;

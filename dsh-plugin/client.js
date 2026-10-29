@@ -11770,6 +11770,8 @@ button.wf-sum-chip:hover{border-color:var(--dsw-alias-brand-primary);color:var(-
 .wf-hint{font-size:11px;color:var(--dsw-alias-label-secondary);line-height:1.5}
 .wf-hint-warn{color:var(--dsw-alias-state-warn-primary)}
 .wf-section{display:flex;flex-direction:column;gap:10px}
+/* 核心字段：类型已经在头部标了，不再套一层同名区块标题 */
+.wf-core{display:flex;flex-direction:column;gap:10px}
 .wf-section-title{font-size:10.5px;font-weight:700;color:var(--dsw-alias-label-secondary);letter-spacing:.08em;
   text-transform:uppercase;padding-bottom:5px;border-bottom:1px solid var(--dsw-alias-border-l1)}
 .wf-kind{font-size:10.5px;font-weight:700;letter-spacing:.04em;padding:2px 7px;border-radius:6px;
@@ -12262,7 +12264,7 @@ function NodePanel(props) {
 			title: chip.action === "open-subflow" ? "打开子图" : "展开对应设置",
 			onClick: () => onChip(chip)
 		}, content);
-	}))), /* @__PURE__ */ react.createElement("div", { className: "wf-insp-scroll" }, props.issues.length > 0 && /* @__PURE__ */ react.createElement(IssueList, { issues: props.issues }), body.type === "prompt" && /* @__PURE__ */ react.createElement(Section, { title: "指令" }, /* @__PURE__ */ react.createElement(Field, {
+	}))), /* @__PURE__ */ react.createElement("div", { className: "wf-insp-scroll" }, props.issues.length > 0 && /* @__PURE__ */ react.createElement(IssueList, { issues: props.issues }), body.type === "prompt" && /* @__PURE__ */ react.createElement("div", { className: "wf-core" }, /* @__PURE__ */ react.createElement(Field, {
 		label: "指令",
 		hint: "这一步要 Agent 做什么；支持 {{节点.payload.字段}} 插值"
 	}, /* @__PURE__ */ react.createElement("textarea", {
@@ -12275,7 +12277,7 @@ function NodePanel(props) {
 		nodes: others,
 		payloadFields: props.payloadFields,
 		areaRef: instrRef
-	}))), body.type === "tool" && /* @__PURE__ */ react.createElement(Section, { title: "工具调用" }, /* @__PURE__ */ react.createElement(Field, {
+	}))), body.type === "tool" && /* @__PURE__ */ react.createElement("div", { className: "wf-core" }, /* @__PURE__ */ react.createElement(Field, {
 		label: "工具名",
 		hint: "例如 web_search、read"
 	}, /* @__PURE__ */ react.createElement("input", {
@@ -12288,7 +12290,7 @@ function NodePanel(props) {
 	}, /* @__PURE__ */ react.createElement(ParamsEditor, {
 		value: body.params,
 		onChange: (params) => patch({ params })
-	}))), body.type === "subagent" && /* @__PURE__ */ react.createElement(Section, { title: "任务" }, /* @__PURE__ */ react.createElement(Field, {
+	}))), body.type === "subagent" && /* @__PURE__ */ react.createElement("div", { className: "wf-core" }, /* @__PURE__ */ react.createElement(Field, {
 		label: "附加指令",
 		hint: "追加给子 Agent 的上下文；主指令来自上游节点"
 	}, /* @__PURE__ */ react.createElement("textarea", {
@@ -12334,7 +12336,7 @@ function NodePanel(props) {
 	}, /* @__PURE__ */ react.createElement("option", { value: "" }, "（选择一张图）"), props.flows.map((flow) => /* @__PURE__ */ react.createElement("option", {
 		key: flow.id,
 		value: flow.id
-	}, flow.name, " · ", flow.id)), body.flowRef !== void 0 && body.flowRef !== "" && !props.flows.some((flow) => flow.id === body.flowRef) && /* @__PURE__ */ react.createElement("option", { value: body.flowRef }, "（当前值 ", body.flowRef, "，不在列表）")), /* @__PURE__ */ react.createElement("span", { className: "wf-hint" }, "目标图必须已保存；run 启动时按 id 递归解析。")))), body.type === "gate" && /* @__PURE__ */ react.createElement(Section, { title: "人工卡点" }, /* @__PURE__ */ react.createElement(Field, {
+	}, flow.name, " · ", flow.id)), body.flowRef !== void 0 && body.flowRef !== "" && !props.flows.some((flow) => flow.id === body.flowRef) && /* @__PURE__ */ react.createElement("option", { value: body.flowRef }, "（当前值 ", body.flowRef, "，不在列表）")), /* @__PURE__ */ react.createElement("span", { className: "wf-hint" }, "目标图必须已保存；run 启动时按 id 递归解析。")))), body.type === "gate" && /* @__PURE__ */ react.createElement("div", { className: "wf-core" }, /* @__PURE__ */ react.createElement(Field, {
 		label: "问题",
 		hint: "卡点会挂起 run，等人工答复后才继续"
 	}, /* @__PURE__ */ react.createElement("textarea", {
@@ -12376,7 +12378,7 @@ function NodePanel(props) {
 			id: nextOptionId(options),
 			label: "新选项"
 		}] })
-	}, "+ 加选项"))), body.type === "join" && /* @__PURE__ */ react.createElement(Section, { title: "汇聚" }, /* @__PURE__ */ react.createElement(Field, {
+	}, "+ 加选项"))), body.type === "join" && /* @__PURE__ */ react.createElement("div", { className: "wf-core" }, /* @__PURE__ */ react.createElement(Field, {
 		label: "汇聚指令",
 		hint: "所有上游完成后追加给 Agent 的汇总指令"
 	}, /* @__PURE__ */ react.createElement("textarea", {
@@ -12398,7 +12400,7 @@ function NodePanel(props) {
 	}, /* @__PURE__ */ react.createElement("option", { value: "" }, "（等待全部子 run）"), others.map((node) => /* @__PURE__ */ react.createElement("option", {
 		key: node.id,
 		value: node.id
-	}, nodeLabel(node))), danglingRef(body.waitFor) !== void 0 && /* @__PURE__ */ react.createElement("option", { value: body.waitFor }, "（节点 ", body.waitFor, " 已不存在）")))), body.type === "end" && /* @__PURE__ */ react.createElement(Section, { title: "结束" }, /* @__PURE__ */ react.createElement(Field, {
+	}, nodeLabel(node))), danglingRef(body.waitFor) !== void 0 && /* @__PURE__ */ react.createElement("option", { value: body.waitFor }, "（节点 ", body.waitFor, " 已不存在）")))), body.type === "end" && /* @__PURE__ */ react.createElement("div", { className: "wf-core" }, /* @__PURE__ */ react.createElement(Field, {
 		label: "结果",
 		hint: "success 正常结束；fail 判 run 失败但仍记录轨迹"
 	}, /* @__PURE__ */ react.createElement(Segmented, {
@@ -12539,7 +12541,7 @@ function NodePanel(props) {
 	}, /* @__PURE__ */ react.createElement("option", { value: "" }, "（不设，判失败）"), others.map((node) => /* @__PURE__ */ react.createElement("option", {
 		key: node.id,
 		value: node.id
-	}, nodeLabel(node))), danglingRef(body.onLimitExceeded) !== void 0 && /* @__PURE__ */ react.createElement("option", { value: body.onLimitExceeded }, "（节点 ", body.onLimitExceeded, " 已不存在）"))))), body.type !== "prompt" && body.type !== "end" && /* @__PURE__ */ react.createElement(Accordion, {
+	}, nodeLabel(node))), danglingRef(body.onLimitExceeded) !== void 0 && /* @__PURE__ */ react.createElement("option", { value: body.onLimitExceeded }, "（节点 ", body.onLimitExceeded, " 已不存在）"))))), body.type !== "prompt" && body.type !== "end" && (body.type !== "join" || (body.instruction ?? "").trim() !== "") && /* @__PURE__ */ react.createElement(Accordion, {
 		id: "instruction",
 		title: "本步指令",
 		summary: orUndefined(body.instruction?.trim() === "" ? void 0 : firstLine(body.instruction ?? "")),
@@ -12747,18 +12749,20 @@ function ParamsEditor({ value, onChange }) {
 /** 插值提示：其他节点 + 历史 run 学到的 payload 字段，点 chip 插到光标处 */
 function InterpHints({ nodes, payloadFields, areaRef }) {
 	if (nodes.length === 0) return null;
-	return /* @__PURE__ */ react.createElement("details", { className: "wf-hints" }, /* @__PURE__ */ react.createElement("summary", null, "插值提示（引用之前节点的结果）"), nodes.map((node) => {
+	const anyFields = nodes.some((node) => (payloadFields[node.id] ?? []).length > 0);
+	return /* @__PURE__ */ react.createElement("details", { className: "wf-hints" }, /* @__PURE__ */ react.createElement("summary", null, "插值提示（引用之前节点的结果）"), !anyFields && /* @__PURE__ */ react.createElement("div", { className: "wf-hint" }, "这张图跑过一次后，这里会按节点提示 payload 的字段。"), nodes.map((node) => {
 		const fields = payloadFields[node.id] ?? [];
+		if (fields.length === 0) return null;
 		return /* @__PURE__ */ react.createElement("div", {
 			className: "wf-hints-node",
 			key: node.id
-		}, /* @__PURE__ */ react.createElement("span", { className: "wf-hints-name" }, node.data.title, " ", /* @__PURE__ */ react.createElement("code", null, node.id)), fields.length > 0 ? /* @__PURE__ */ react.createElement("span", { className: "wf-hints-chips" }, fields.map((field) => /* @__PURE__ */ react.createElement("button", {
+		}, /* @__PURE__ */ react.createElement("span", { className: "wf-hints-name" }, node.data.title, " ", /* @__PURE__ */ react.createElement("code", null, node.id)), /* @__PURE__ */ react.createElement("span", { className: "wf-hints-chips" }, fields.map((field) => /* @__PURE__ */ react.createElement("button", {
 			type: "button",
 			className: "wf-hints-chip",
 			key: field,
 			title: "插入到光标处",
 			onClick: () => insertToken(areaRef.current, `{{${node.id}.payload.${field}}}`)
-		}, `{{${node.id}.payload.${field}}}`))) : /* @__PURE__ */ react.createElement("span", { className: "wf-hint" }, "这张图跑过一次后，这里会提示该节点 payload 的字段"));
+		}, `{{${node.id}.payload.${field}}}`))));
 	}));
 }
 /** 往受控 textarea 的光标处插 token 后把光标放到 token 后面 */

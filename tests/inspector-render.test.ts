@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { SubagentNode } from '../shared/src/types.js';
 import { Inspector, type InspectorProps } from '../dsh-plugin/src/editor/inspector.js';
+import type { CanvasNode } from '../dsh-plugin/src/editor/model.js';
 
 const base: InspectorProps = {
   body: undefined,
@@ -86,7 +87,7 @@ describe('Inspector 信息分层', () => {
     expect(html).not.toContain('出口分支');
   });
 
-  it('汇聚节点把本步指令收进高级，不再常驻「补充说明」', () => {
+  it('汇聚节点的本步指令被引擎覆盖，未填时整组隐藏', () => {
     const html = render({
       id: 'j1',
       type: 'join',
@@ -95,7 +96,19 @@ describe('Inspector 信息分层', () => {
     });
     expect(html).toContain('汇聚');
     expect(html).not.toContain('补充说明');
+    expect(html).not.toContain('本步指令');
+  });
+
+  it('汇聚节点填过本步指令时保留入口，避免旧数据不可见', () => {
+    const html = render({
+      id: 'j1',
+      type: 'join',
+      title: '汇总',
+      aggregateInstruction: '汇总结果',
+      instruction: '旧值',
+    });
     expect(html).toContain('本步指令');
+    expect(html).toContain('旧值');
   });
 
   it('结束节点没有循环/本步指令分组', () => {
@@ -111,5 +124,25 @@ describe('Inspector 信息分层', () => {
     });
     expect(html).toContain('1 个问题');
     expect(html).toContain('E_NO_ENTRY');
+  });
+
+  it('prompt 不再套一层同名区块标题', () => {
+    const html = render({ id: 'n1', type: 'prompt', title: '开始', instruction: '读文档' });
+    expect(html).toContain('指令');
+    expect(html).not.toContain('wf-section-title">指令');
+  });
+
+  it('插值提示在没有历史 payload 时只说明一次，不按节点重复', () => {
+    const canvas = (id: string): CanvasNode => ({
+      id,
+      type: 'wf',
+      position: { x: 0, y: 0 },
+      data: { title: id, kind: 'prompt', detail: '', isEntry: false, outlets: [] },
+    });
+    const html = render(
+      { id: 'n1', type: 'prompt', title: '开始', instruction: '读文档' },
+      { nodes: [canvas('n2'), canvas('n3')], payloadFields: {} },
+    );
+    expect(html.match(/这张图跑过一次后/g)?.length).toBe(1);
   });
 });

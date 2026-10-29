@@ -332,7 +332,7 @@ function NodePanel(
         {props.issues.length > 0 && <IssueList issues={props.issues} />}
 
         {body.type === 'prompt' && (
-          <Section title="指令">
+          <div className="wf-core">
             <Field label="指令" hint="这一步要 Agent 做什么；支持 {{节点.payload.字段}} 插值">
               <textarea
                 ref={instrRef}
@@ -343,11 +343,11 @@ function NodePanel(
               />
               <InterpHints nodes={others} payloadFields={props.payloadFields} areaRef={instrRef} />
             </Field>
-          </Section>
+          </div>
         )}
 
         {body.type === 'tool' && (
-          <Section title="工具调用">
+          <div className="wf-core">
             <Field label="工具名" hint="例如 web_search、read">
               <input
                 className="wf-input"
@@ -358,11 +358,11 @@ function NodePanel(
             <Field label="参数" hint="键值对；会作为 view.tool.params 下发给 Agent">
               <ParamsEditor value={body.params} onChange={(params) => patch({ params })} />
             </Field>
-          </Section>
+          </div>
         )}
 
         {body.type === 'subagent' && (
-          <Section title="任务">
+          <div className="wf-core">
             <Field label="附加指令" hint="追加给子 Agent 的上下文；主指令来自上游节点">
               <textarea
                 ref={extraRef}
@@ -427,11 +427,11 @@ function NodePanel(
                 </div>
               )}
             </Field>
-          </Section>
+          </div>
         )}
 
         {body.type === 'gate' && (
-          <Section title="人工卡点">
+          <div className="wf-core">
             <Field label="问题" hint="卡点会挂起 run，等人工答复后才继续">
               <textarea
                 className="wf-area"
@@ -488,11 +488,11 @@ function NodePanel(
                 + 加选项
               </button>
             </Field>
-          </Section>
+          </div>
         )}
 
         {body.type === 'join' && (
-          <Section title="汇聚">
+          <div className="wf-core">
             <Field label="汇聚指令" hint="所有上游完成后追加给 Agent 的汇总指令">
               <textarea
                 ref={aggRef}
@@ -519,11 +519,11 @@ function NodePanel(
                 )}
               </select>
             </Field>
-          </Section>
+          </div>
         )}
 
         {body.type === 'end' && (
-          <Section title="结束">
+          <div className="wf-core">
             <Field label="结果" hint="success 正常结束；fail 判 run 失败但仍记录轨迹">
               <Segmented
                 ariaLabel="结束结果"
@@ -535,7 +535,7 @@ function NodePanel(
                 onChange={(outcome) => patch({ outcome })}
               />
             </Field>
-          </Section>
+          </div>
         )}
 
         <div className="wf-adv">
@@ -719,7 +719,9 @@ function NodePanel(
             </Accordion>
           )}
 
-          {body.type !== 'prompt' && body.type !== 'end' && (
+          {body.type !== 'prompt' &&
+            body.type !== 'end' &&
+            (body.type !== 'join' || (body.instruction ?? '').trim() !== '') && (
             <Accordion
               id="instruction"
               title="本步指令"
@@ -1050,33 +1052,32 @@ function InterpHints({
   areaRef: React.RefObject<HTMLTextAreaElement | null>;
 }): React.ReactElement | null {
   if (nodes.length === 0) return null;
+  const anyFields = nodes.some((node) => (payloadFields[node.id] ?? []).length > 0);
   return (
     <details className="wf-hints">
       <summary>插值提示（引用之前节点的结果）</summary>
+      {!anyFields && <div className="wf-hint">这张图跑过一次后，这里会按节点提示 payload 的字段。</div>}
       {nodes.map((node) => {
         const fields = payloadFields[node.id] ?? [];
+        if (fields.length === 0) return null;
         return (
           <div className="wf-hints-node" key={node.id}>
             <span className="wf-hints-name">
               {node.data.title} <code>{node.id}</code>
             </span>
-            {fields.length > 0 ? (
-              <span className="wf-hints-chips">
-                {fields.map((field) => (
-                  <button
-                    type="button"
-                    className="wf-hints-chip"
-                    key={field}
-                    title="插入到光标处"
-                    onClick={() => insertToken(areaRef.current, `{{${node.id}.payload.${field}}}`)}
-                  >
-                    {`{{${node.id}.payload.${field}}}`}
-                  </button>
-                ))}
-              </span>
-            ) : (
-              <span className="wf-hint">这张图跑过一次后，这里会提示该节点 payload 的字段</span>
-            )}
+            <span className="wf-hints-chips">
+              {fields.map((field) => (
+                <button
+                  type="button"
+                  className="wf-hints-chip"
+                  key={field}
+                  title="插入到光标处"
+                  onClick={() => insertToken(areaRef.current, `{{${node.id}.payload.${field}}}`)}
+                >
+                  {`{{${node.id}.payload.${field}}}`}
+                </button>
+              ))}
+            </span>
           </div>
         );
       })}
