@@ -175,4 +175,5 @@ npm run release:plugin -- --dry-run   # 只看会做什么，不动 git 历史
 ## 文档
 
 - 设计文档：[docs/2026-09-02-flowchart-driven-agent-design.md](docs/2026-09-02-flowchart-driven-agent-design.md)
+- 架构与关键流程图（装载 / 启动 / 步进闭环 / 子 Agent / 卡点）：[docs/2026-10-29-architecture-flows.md](docs/2026-10-29-architecture-flows.md)
 - 插件细节（界面、工具、边界）：[dsh-plugin/README.md](dsh-plugin/README.md)
