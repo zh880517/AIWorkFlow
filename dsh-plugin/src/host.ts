@@ -19,6 +19,7 @@ const ROUTE_PREFIX = '/aiworkflow';
 const STATE_PATHS = new Set(['/aiworkflow', '/aiworkflow/', '/aiworkflow/state']);
 const FLOWS_PATH = '/aiworkflow/flows';
 const RUNS_PATH = '/aiworkflow/runs';
+const ABANDON_PATH = '/aiworkflow/runs/abandon';
 
 /** apply 时记下的插件上下文，HTTP 处理里要用它拿 agents 服务 */
 let pluginCtx: any = null;
@@ -71,6 +72,22 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     if (STATE_PATHS.has(url.pathname)) {
       if (method !== 'GET' && method !== 'HEAD') return methodNotAllowed(res);
       send(res, 200, buildState(url.searchParams.get('run'), url.searchParams.get('session')));
+      return;
+    }
+
+    if (url.pathname === ABANDON_PATH) {
+      if (method !== 'POST') return methodNotAllowed(res);
+      const body = await readJson(req);
+      const runId = readRunId(body);
+      if (runId === null) {
+        send(res, 400, { ok: false, error: { code: 'bad-request', message: '需要 runId' } });
+        return;
+      }
+      try {
+        send(res, 200, { ok: true, result: workflowEngine().abandonRun({ runId }) });
+      } catch (error) {
+        send(res, 500, { ok: false, error: { code: 'abandon-failed', message: errorText(error) } });
+      }
       return;
     }
 
@@ -244,6 +261,12 @@ function readFlowId(body: unknown): string | null {
   return null;
 }
 
+function readRunId(body: unknown): string | null {
+  if (typeof body !== 'object' || body === null) return null;
+  const value = (body as Record<string, unknown>).runId;
+  return typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
+}
+
 function methodNotAllowed(res: ServerResponse): void {
   send(res, 405, { ok: false, error: { code: 'method-not-allowed', message: 'method not allowed' } });
 }
@@ -294,7 +317,7 @@ function payloadFieldsOf(flowId: string): Record<string, string[]> {
       .prepare(
         `SELECT ne.node_id, ne.payload FROM node_executions ne
          JOIN runs r ON r.id = ne.run_id
-         WHERE r.flow_id = ? AND r.parent_run_id IS NULL AND ne.status = 'completed'
+         WHERE r.flow_id = ? AND ne.status = 'completed'
          ORDER BY ne.id DESC LIMIT 200`,
       )
       .all(flowId) as Array<{ node_id: string; payload: string }>;

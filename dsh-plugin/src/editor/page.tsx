@@ -321,6 +321,8 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
   const historyRef = React.useRef(history);
   const selectedRef = React.useRef<string | null>(null);
   const saveRef = React.useRef<(() => void) | null>(null);
+  /** 上次保存/加载时的图签名：dirty 由"当前 composeRoot 签名 ≠ 基线"派生，撤销回原样后能自动归零 */
+  const savedSignatureRef = React.useRef<string | null>(null);
   /** frames 的同步副本：composeRoot 等事件处理里立刻要读，不等下一次 render */
   const framesRef = React.useRef<SubflowFrame[]>([]);
   // 事件处理器一律读这里：避免把 nodes/edges/bodies 全部塞进每个 useCallback 的依赖
@@ -363,7 +365,7 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
         current !== null && snapshot.nodes.some((node) => node.id === current) ? current : null,
       );
       mergeRef.current = null;
-      setDirty(true);
+      // dirty 由下面的签名 effect 统一计算：撤销回保存时的状态会自动变回"已同步"
     },
     [setNodes, setEdges],
   );
@@ -393,8 +395,11 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
   /** 把当前正在编辑的层（可能是最内层子图）折回主图，得到可保存/校验的根 Flow */
   const composeRoot = React.useCallback((): Flow => {
     const snapshot = liveRef.current;
+    // 角色表是全图共享的：子图层里编辑的 agents 就在当前 state 里，各层折回时都用它，
+    // 不能用 frame.snapshot.agents（进入子图前的旧数组）把编辑覆盖掉。
+    const currentAgents = snapshot.agents;
     let flow = buildFlow(
-      { ...baseRef.current, name: snapshot.name, entry: snapshot.entry, agents: snapshot.agents },
+      { ...baseRef.current, name: snapshot.name, entry: snapshot.entry, agents: currentAgents },
       snapshot.bodies,
       snapshot.nodes,
       snapshot.edges,
@@ -422,6 +427,7 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
       const parentSnapshot: Snapshot = {
         ...frame.snapshot,
         bodies: { ...frame.snapshot.bodies, [frame.parentNodeId]: updated },
+        agents: currentAgents,
       };
       flow = buildFlow(
         { ...frame.base, name: parentSnapshot.name, entry: parentSnapshot.entry, agents: parentSnapshot.agents },
@@ -432,6 +438,23 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
     }
     return flow;
   }, []);
+
+  /** 脏标记 = 当前根图签名 ≠ 上次保存/加载时的签名。
+   *  比每个交互手动 setDirty 更可靠：撤销回原样、切换子图层、无改动返回父层都不会误报。 */
+  React.useEffect(() => {
+    let signature: string;
+    try {
+      signature = JSON.stringify(composeRoot());
+    } catch {
+      return;
+    }
+    if (savedSignatureRef.current === null) {
+      savedSignatureRef.current = signature;
+      setDirty(false);
+      return;
+    }
+    setDirty(signature !== savedSignatureRef.current);
+  }, [composeRoot, nodes, edges, bodies, agents, entry, name, frames]);
 
   /** 进入某个 subagent 节点的内嵌子图；没有子图时先建一张最小合法子图 */
   const openSubflow = React.useCallback(
@@ -498,18 +521,32 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
     };
     const nextBodies = { ...frame.snapshot.bodies, [frame.parentNodeId]: subagent };
     const parentFlow = buildFlow(
-      { ...frame.base, name: frame.snapshot.name, entry: frame.snapshot.entry, agents: frame.snapshot.agents },
+      // 角色表是共享的：用当前 state（可能刚在子图层改过），不要回退到进入子图前的旧数组
+      { ...frame.base, name: frame.snapshot.name, entry: frame.snapshot.entry, agents: snapshot.agents },
       nextBodies,
       frame.snapshot.nodes,
       frame.snapshot.edges,
     );
+    // 子图是否真的有改动：有才把进入前的父层快照压进历史，让「返回主图」后还能撤销这次子图编辑
+    const before = JSON.stringify({
+      name: owner.subflow?.name,
+      entry: owner.subflow?.entry,
+      nodes: owner.subflow?.nodes,
+      _ui: owner.subflow?._ui,
+    });
+    const after = JSON.stringify({ name: built.name, entry: built.entry, nodes: built.nodes, _ui: built._ui });
+    const changed = before !== after;
     const nextFrames = framesRef.current.slice(0, -1);
     framesRef.current = nextFrames;
     setFrames(nextFrames);
     loadGraph(parentFlow);
-    // loadGraph 会清空历史；返回父层时把进入前的撤销栈还回去
-    setHistory(frame.history);
-    setDirty(true);
+    // loadGraph 会清空历史；返回父层时把进入前的撤销栈还回去（有改动则多压一条父层旧快照）
+    setHistory(
+      changed
+        ? { past: [...frame.history.past.slice(-(HISTORY_LIMIT - 1)), frame.snapshot], future: [] }
+        : frame.history,
+    );
+    // 不手动 setDirty：签名 effect 会按"根图是否真的变了"决定
   }, [loadGraph]);
 
   const undo = React.useCallback((): void => {
@@ -590,8 +627,14 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
       record();
       setEntry(id);
       setNodes((all) => withEntryFlags(all, id));
+      // 入口不渲染 target handle：已有的入边会变成画布上看不见、删不掉、却仍会被保存的幽灵边。
+      // 设入口时把指向它的边一起删掉（同一次 record，可整体撤销）。
+      if (liveRef.current.edges.some((edge) => edge.target === id)) {
+        setEdges((all) => all.filter((edge) => edge.target !== id));
+        reportInfo('已删除指向新入口的入线（入口不能有入边）');
+      }
     },
-    [record, setNodes],
+    [record, setNodes, setEdges],
   );
 
   const placePoint = React.useCallback((at?: Point): Point => {
@@ -742,9 +785,19 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
         reportInfo('入口节点不能有入线：先把别的节点设为入口');
         return;
       }
-      // 同一条有向边不重复连：重复边在 DSL 里会变成同 to 的重复分支
-      if (snapshot.edges.some((edge) => edge.source === connection.source && edge.target === connection.target)) return;
       const outlet = outletOfConnection(connection.source, connection.sourceHandle, snapshot);
+      // 同一条有向边不重复连：但卡点的不同出口可以指向同一个节点（两个选项都去"结束"是合法图），
+      // 所以要连 outlet 一起比，不能只看 source→target。
+      const duplicate = snapshot.edges.some(
+        (edge) =>
+          edge.source === connection.source &&
+          edge.target === connection.target &&
+          (edge.data?.outlet ?? '') === (outlet?.key ?? ''),
+      );
+      if (duplicate) {
+        reportInfo('这两个节点之间已经有这条连线了');
+        return;
+      }
       // 卡点一个出口只连一条：否则人工选中这个选项时不知道该走哪条
       if (
         outlet !== undefined &&
@@ -787,15 +840,27 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
         reportInfo('这两个节点之间已经有这条连线了');
         return;
       }
+      // 与 onConnect 对称：不能把第二条边也接到同一个卡点出口上（运行期只会取第一条）
+      const reconnectOutlet = outletOfConnection(source, connection.sourceHandle, snapshot);
+      if (
+        reconnectOutlet !== undefined &&
+        snapshot.edges.some(
+          (edge) =>
+            edge.id !== oldEdge.id && edge.source === source && edge.data?.outlet === reconnectOutlet.key,
+        )
+      ) {
+        reportInfo(`出口「${reconnectOutlet.label}」已经连了别的节点：先删掉那条线，或从别的出口连`);
+        return;
+      }
       record();
       setEdges((all) =>
         all.map((edge) => {
           if (edge.id !== oldEdge.id) return edge;
-          // 从哪个出口拖出来就归哪个选项；换成别的节点的入口就清掉 outlet
+          // 从哪个出口拖出来就归哪个选项；换成别的节点的入口就显式清空（''），
+          // 不能用 delete——buildFlow 会把缺失的 outlet 当成"没改过"从旧分支复活
           const outlet = outletOfConnection(source, connection.sourceHandle, snapshot);
           const data = { ...(edge.data ?? {}) };
-          if (outlet !== undefined) data.outlet = outlet.key;
-          else delete data.outlet;
+          data.outlet = outlet !== undefined ? outlet.key : '';
           return {
             ...edge,
             source,
@@ -906,7 +971,8 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
 
   const setWhen = (edgeId: string, value: string): void => {
     record(`when:${edgeId}`);
-    const when = value.trim() === '' ? undefined : value;
+    // 显式清空用 ''（不是 undefined）：'undefined' 在 buildFlow 里表示"没改过"，会从旧分支复活
+    const when = value.trim() === '' ? '' : value;
     setEdges((all) =>
       all.map((edge) =>
         edge.id === edgeId ? { ...edge, data: { ...(edge.data ?? {}), when } } : edge,
@@ -915,7 +981,7 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
     setDirty(true);
   };
 
-  /** 角色表改动：整体替换，撤销栈里也存一份 */
+  /** 角色表改动：整体替换，撤销栈里也存一份。角色表全图共享，各层读的都是这份 state。 */
   const changeAgents = (next: AgentDef[]): void => {
     record('agents');
     setAgents(next);
@@ -997,13 +1063,19 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
       }
 
       if (event.key === 'Escape') {
-        // 依次收起：待连线 → 校验浮层 → 右键菜单 → 取消选中
+        // 依次收起：待连线 → 校验浮层 → 右键菜单 → 取消选中（一次只收一层）
         if (pendingLink !== null) {
           setPendingLink(null);
           return;
         }
-        setValOpen(false);
-        setMenu(null);
+        if (valOpen) {
+          setValOpen(false);
+          return;
+        }
+        if (menu !== null) {
+          setMenu(null);
+          return;
+        }
         setSelectedId(null);
         return;
       }
@@ -1038,7 +1110,7 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [deleteSelected, redo, undo, copyNode, pasteNode, pendingLink]);
+  }, [deleteSelected, redo, undo, copyNode, pasteNode, pendingLink, valOpen, menu]);
 
   const handleApi = React.useCallback((next: CanvasApi): void => {
     canvasApiRef.current = next;
@@ -1095,6 +1167,8 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
         framesRef.current = nextFrames;
         setFrames(nextFrames);
         loadGraph(result.flow);
+        // 让签名 effect 在 loadGraph 的 state 落地后重新取基线（届时 composeRoot === 服务端存下的图）
+        savedSignatureRef.current = null;
         setDirty(false);
         setBanner({
           kind: 'ok',

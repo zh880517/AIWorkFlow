@@ -15,6 +15,34 @@ const repo = path.resolve(here, '..');
 
 execFileSync(process.execPath, [path.join(here, 'build.mjs')], { cwd: repo, stdio: 'inherit' });
 
+// 产物是用**工作区源码**构建的，但下面比较的是**暂存区产物**。
+// 如果源码还有未暂存/未跟踪的改动，就会出现"提交里是旧源码 + 新产物"的假通过。
+const SOURCE = [
+  'shared/src',
+  'dsh-plugin/src',
+  'dsh-plugin/package.json',
+  'dsh-plugin/cordis.patch.yml',
+  'dsh-plugin/locale',
+  'dsh-plugin/icon.svg',
+  'package.json',
+  'package-lock.json',
+];
+const unstaged = execFileSync('git', ['diff', '--name-only', '--', ...SOURCE], {
+  cwd: repo,
+  encoding: 'utf8',
+}).trim();
+const untracked = execFileSync('git', ['ls-files', '--others', '--exclude-standard', '--', ...SOURCE], {
+  cwd: repo,
+  encoding: 'utf8',
+}).trim();
+if (unstaged !== '' || untracked !== '') {
+  console.error('源码/清单还有未暂存或未跟踪的改动，check:plugin 无法代表提交内容：');
+  if (unstaged !== '') console.error(unstaged);
+  if (untracked !== '') console.error(untracked);
+  console.error('先把源码和产物一起 git add，再跑 npm run check:plugin。');
+  process.exit(1);
+}
+
 const hash = (data) => createHash('sha256').update(data).digest('hex');
 const stale = [];
 for (const file of ['index.js', 'client.js']) {

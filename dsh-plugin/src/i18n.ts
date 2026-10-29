@@ -43,6 +43,7 @@ const ZH: Record<string, string> = {
   'payload.hint': '点击查看 payload',
   'panel.label': '可视化工作流',
   'panel.runs': '运行图',
+  'panel.abandon': '放弃',
 };
 
 const EN: Record<string, string> = {
@@ -81,6 +82,7 @@ const EN: Record<string, string> = {
   'payload.hint': 'Click to inspect the payload',
   'panel.label': 'Visual workflows',
   'panel.runs': 'Run graph',
+  'panel.abandon': 'Abandon',
 };
 
 export function phaseKey(phase: RunPhase): string {

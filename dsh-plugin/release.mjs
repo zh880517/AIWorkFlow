@@ -1,7 +1,7 @@
 // 一键生成发布物料：构建插件 → 提交源码+产物 → 刷新市场索引 → 提交索引 → 打印安装方式。
 //
 //   npm run release:plugin               构建 + 提交 + 索引 + 提交
-//   npm run release:plugin -- --dry-run  只构建和暂存，打印会做什么，不动 git 历史
+//   npm run release:plugin -- --dry-run  只构建并打印将执行的步骤（会改写工作区产物），不提交、不生成索引
 //   npm run release:plugin -- --no-commit 只构建，不提交也不生成索引
 //
 // 为什么提交两笔：市场索引必须钉在一个「已包含构建产物」的 commit 上，
@@ -19,7 +19,16 @@ const flags = new Set(process.argv.slice(2));
 const dryRun = flags.has('--dry-run');
 const noCommit = flags.has('--no-commit') || dryRun;
 
-const ARTIFACTS = ['dsh-plugin/index.js', 'dsh-plugin/client.js'];
+const ARTIFACTS = [
+  'dsh-plugin/index.js',
+  'dsh-plugin/client.js',
+  'dsh-plugin/package.json',
+  'dsh-plugin/cordis.patch.yml',
+  'dsh-plugin/locale/en.json',
+  'dsh-plugin/locale/zh.json',
+  'dsh-plugin/icon.svg',
+  'dsh-plugin/README.md',
+];
 const INDEX = 'dsh-plugin/market/index.json';
 // 第一笔提交的范围：插件目录里的源码与产物，索引留到第二笔
 const PLUGIN = ['dsh-plugin', ':(exclude)dsh-plugin/market/index.json'];
@@ -34,10 +43,11 @@ function dirty(paths) {
   return git('status', '--porcelain', '--', ...paths) !== '';
 }
 
-function runScript(script) {
+function runScript(script, step) {
   const result = spawnSync(process.execPath, [script], { cwd: repo, stdio: 'inherit' });
   if (result.status !== 0) {
-    console.error(`\n${path.relative(repo, script)} 执行失败，什么都没提交。`);
+    console.error(`\n[${step}] ${path.relative(repo, script)} 执行失败。`);
+    console.error('注意：本脚本此前的提交不会自动回滚；请用 git status / git log 检查，必要时手动 revert。');
     process.exit(result.status ?? 1);
   }
 }
@@ -92,15 +102,15 @@ function indexStillValid(current) {
   return true;
 }
 
-// 0) 防呆：shared/ 会被内联进插件产物，必须先进版本库，否则产物对不上任何提交
-if (!noCommit && dirty(['shared/src'])) {
-  console.error('shared/src/ 有未提交改动：先提交它（插件产物包含这份代码），再跑一键生成。');
+// 0) 防呆：shared/ 与依赖清单会被内联/影响插件产物，必须先进版本库，否则产物对不上任何提交
+if (!noCommit && dirty(['shared/src', 'package.json', 'package-lock.json'])) {
+  console.error('shared/src 或 package.json / package-lock.json 有未提交改动：先提交它们（插件产物由这些输入决定），再跑一键生成。');
   process.exit(1);
 }
 
 // 1) 构建（build.mjs 自己会断言 Host 产物只依赖 node: 内建）
 console.log('\n[1/4] 构建插件产物…');
-runScript(path.join(here, 'build.mjs'));
+runScript(path.join(here, 'build.mjs'), '1/4');
 
 // 2) 提交源码 + 产物（同一笔，保证这个提交里产物和源码一致）
 const nonArtifactChanged = dirty([
@@ -123,7 +133,7 @@ if (noCommit) {
   indexSkipped = true;
 } else {
   console.log('[3/4] 生成市场索引…');
-  runScript(path.join(here, 'market', 'build.mjs'));
+  runScript(path.join(here, 'market', 'build.mjs'), '3/4');
 }
 
 // 4) 提交索引

@@ -67,11 +67,34 @@ export function buildPath(detail: RunDetail): PathStep[] {
   for (const exec of detail.executions) {
     const last = steps[steps.length - 1];
     const branch = branchLabel(flow, exec.nodeId, exec.branchId);
+    if (exec.status === 'dispatched') {
+      // 派发是"这一轮开始"的记账行，不是独立的一圈：
+      // - 同一节点还没有路径条目 → 先立一条（等子 Agent 时面板要能显示在这一步）
+      // - 已有同节点条目（上一圈已合并）→ 只更新指针，不能把圈数 +1
+      if (last !== undefined && last.nodeId === exec.nodeId) {
+        last.lastExecutionId = exec.id;
+        continue;
+      }
+      steps.push({
+        nodeId: exec.nodeId,
+        label: nodeLabel(flow, exec.nodeId),
+        count: 1,
+        statuses: ['dispatched'],
+        branch,
+        lastExecutionId: exec.id,
+      });
+      continue;
+    }
     if (last !== undefined && last.nodeId === exec.nodeId) {
-      last.count += 1;
-      last.statuses.push(exec.status);
       last.lastExecutionId = exec.id;
       if (branch !== null) last.branch = branch;
+      if (last.statuses.length === 1 && last.statuses[0] === 'dispatched') {
+        // dispatched → 本轮完成：同一圈，替换状态而不是再加一圈
+        last.statuses = [exec.status];
+      } else {
+        last.count += 1;
+        last.statuses.push(exec.status);
+      }
       continue;
     }
     steps.push({

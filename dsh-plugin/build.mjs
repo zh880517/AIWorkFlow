@@ -86,16 +86,22 @@ function assertSelfContained(code, label) {
   if (bad.length > 0) throw new Error(`${label} 仍有外部依赖：${bad.join(', ')}`);
 }
 
+/** Rolldown 的 //#region 注释会写依赖的物理路径（junction/pnpm 布局下是绝对路径）：
+ *  去掉路径只保留标记，保证不同 node_modules 布局构建出的产物字节一致。 */
+function stripRegionPaths(code) {
+  return code.replace(/^\/\/#region .+$/gm, '//#region');
+}
+
 await rm(work, { recursive: true, force: true });
 await mkdir(work, { recursive: true });
 
 await Promise.all([buildHost(), buildClient()]);
 
-const hostCode = await readFile(path.join(work, 'host', 'index.js'), 'utf8');
+const hostCode = stripRegionPaths(await readFile(path.join(work, 'host', 'index.js'), 'utf8'));
 assertSelfContained(hostCode, 'index.js');
 await writeFile(path.join(here, 'index.js'), hostCode, 'utf8');
 
-const clientCode = await readFile(path.join(work, 'client', 'client.bundle.cjs'), 'utf8');
+const clientCode = stripRegionPaths(await readFile(path.join(work, 'client', 'client.bundle.cjs'), 'utf8'));
 if (clientCode.includes('require("react/jsx-runtime")')) {
   throw new Error('client 包引用了 react/jsx-runtime；宿主只提供 React 本体，检查 JSX 转换设置');
 }

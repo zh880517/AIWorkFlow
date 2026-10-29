@@ -4,6 +4,7 @@
 // 顺序很重要：先 npm run build:plugin → 提交 index.js/client.js → 再跑本脚本 → 提交 market/index.json，
 // 这样索引里的 commit 一定包含构建产物，别人安装时不需要在本机构建。
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -19,6 +20,35 @@ function git(...args) {
 
 const commit = git('rev-parse', 'HEAD');
 const commitTime = Number(git('show', '-s', '--format=%ct', 'HEAD'));
+
+// 索引必须钉在一个"目录内容与工作区一致"的提交上：市场安装直接取该提交里的
+// dsh-plugin/，若产物/清单还没提交就会装到旧文件。逐文件比对后再生成索引。
+const SHIPPED = [
+  'index.js',
+  'client.js',
+  'package.json',
+  'cordis.patch.yml',
+  'locale/en.json',
+  'locale/zh.json',
+  'icon.svg',
+  'README.md',
+];
+const sha256 = (data) => createHash('sha256').update(data).digest('hex');
+for (const relative of SHIPPED) {
+  const repoRelative = `dsh-plugin/${relative}`;
+  let at;
+  try {
+    at = execFileSync('git', ['show', `${commit}:${repoRelative}`], { cwd: repo });
+  } catch {
+    throw new Error(`${repoRelative} 不在 HEAD（${commit.slice(0, 7)}）里：先把插件文件提交，再生成市场索引。`);
+  }
+  const working = readFileSync(path.join(pkgDir, relative));
+  if (sha256(at) !== sha256(working)) {
+    throw new Error(
+      `${repoRelative} 与 HEAD（${commit.slice(0, 7)}）不一致：先把这次改动提交，再生成市场索引（否则市场装到的是旧文件）。`,
+    );
+  }
+}
 
 /** origin 可能是 git@github.com:user/repo.git、https://github.com/user/repo.git，或本地路径（克隆自本地时） */
 function repositoryUrl() {

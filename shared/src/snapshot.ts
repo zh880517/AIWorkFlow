@@ -28,17 +28,24 @@ function collectFlows(
 ): void {
   if (flows[flow.id] !== undefined) return; // 同图被引用多次只收一份
   flows[flow.id] = flow;
-  for (const node of flow.nodes) {
-    if (node.type === 'subagent') {
-      // subflow 内嵌套的 flowRef 也要递归收进来（§5.2：引用的子图必须递归一起快照）
-      for (const sub of node.subflow?.nodes ?? []) {
-        if (sub.type === 'subagent' && sub.mode === 'flowRef' && sub.flowRef) {
-          collectRef(sub.flowRef, `${sub.id}（图 ${flow.id}）`, resolver, flows, visiting);
-        }
-      }
-      if (node.mode === 'flowRef' && node.flowRef) {
-        collectRef(node.flowRef, `${node.id}（图 ${flow.id}）`, resolver, flows, visiting);
-      }
+  collectNodeRefs(flow.nodes, flow.id, resolver, flows, visiting);
+}
+
+/** 递归扫描一层画布里的 subagent 节点：flowRef 收进快照，内嵌子图继续往里扫（栈深任意）。 */
+function collectNodeRefs(
+  nodes: Flow['nodes'],
+  ownerId: string,
+  resolver: FlowResolver,
+  flows: Record<string, Flow>,
+  visiting: Set<string>,
+): void {
+  for (const node of nodes) {
+    if (node.type !== 'subagent') continue;
+    if (node.mode === 'flowRef' && node.flowRef) {
+      collectRef(node.flowRef, `${node.id}（图 ${ownerId}）`, resolver, flows, visiting);
+    }
+    if (node.subflow !== undefined) {
+      collectNodeRefs(node.subflow.nodes, ownerId, resolver, flows, visiting);
     }
   }
 }

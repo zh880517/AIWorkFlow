@@ -64,6 +64,16 @@ export function getFlow(db: SqlDatabase, flowId: string): Flow | undefined {
   }
 }
 
+/** 镜像文件必须落在 jsonDir 一层内；id 带路径分隔符时拒绝，避免写到数据目录之外 */
+function mirrorPath(jsonDir: string, flowId: string): string {
+  const root = path.resolve(jsonDir);
+  const file = path.resolve(root, `${flowId}.json`);
+  if (path.dirname(file) !== root) {
+    throw new Error(`图 id 会写到 flows 目录之外，已拒绝：${JSON.stringify(flowId)}`);
+  }
+  return file;
+}
+
 export function saveFlow(db: SqlWriter, flow: Flow, jsonDir: string): FlowSaveResult {
   // 更新已有图时，调用方没带 kind 就沿用原类型，避免 Agent 用 flow update 把配置降级成主流程
   const existing = db.prepare('SELECT kind FROM flows WHERE id = ?').get(flow.id) as
@@ -73,6 +83,7 @@ export function saveFlow(db: SqlWriter, flow: Flow, jsonDir: string): FlowSaveRe
   const candidate: Flow = inherited === undefined ? flow : { ...flow, kind: inherited };
   const result = validateFlow(candidate);
   if (!result.ok) return result;
+  const mirror = mirrorPath(jsonDir, candidate.id);
   const kind = kindOf(candidate.kind);
   const stored: Flow = { ...candidate, kind };
   const now = new Date().toISOString();
@@ -84,14 +95,20 @@ export function saveFlow(db: SqlWriter, flow: Flow, jsonDir: string): FlowSaveRe
        content = excluded.content, updated_at = excluded.updated_at`,
   ).run(stored.id, stored.name, kind, content, now, now);
   fs.mkdirSync(jsonDir, { recursive: true });
-  fs.writeFileSync(path.join(jsonDir, `${stored.id}.json`), content, 'utf-8');
+  fs.writeFileSync(mirror, content, 'utf-8');
   return { ...result, flow: stored };
 }
 
 export function deleteFlow(db: SqlWriter, flowId: string, jsonDir: string): boolean {
   const info = db.prepare('DELETE FROM flows WHERE id = ?').run(flowId);
-  const mirror = path.join(jsonDir, `${flowId}.json`);
   const changes = Number(info.changes);
-  if (changes > 0 && fs.existsSync(mirror)) fs.rmSync(mirror);
+  // 老库可能有非法 id：删库照常，镜像路径不安全就跳过文件删除，绝不越界删文件
+  let mirror: string | null = null;
+  try {
+    mirror = mirrorPath(jsonDir, flowId);
+  } catch {
+    mirror = null;
+  }
+  if (changes > 0 && mirror !== null && fs.existsSync(mirror)) fs.rmSync(mirror);
   return changes > 0;
 }

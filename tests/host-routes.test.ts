@@ -182,4 +182,38 @@ describe('Host 路由：流程图 CRUD', () => {
     expect(res.statusCode).toBe(400);
     expect((JSON.parse(res.text) as any).error.code).toBe('bad-json');
   });
+
+  it('POST /runs/abandon 能把进行中的 run 置为 failed', async () => {
+    const runnable = {
+      id: 'f_host_abandon',
+      name: '可放弃的图',
+      kind: 'flow',
+      entry: 'a1',
+      nodes: [
+        { id: 'a1', type: 'prompt', instruction: '第一步', next: 'a2' },
+        { id: 'a2', type: 'end', outcome: 'success' },
+      ],
+    };
+    expect((await call(mounted, 'PUT', `/aiworkflow/flows/${runnable.id}`, runnable)).json.ok).toBe(true);
+
+    const started = await call(mounted, 'POST', '/aiworkflow/runs', { flowId: runnable.id });
+    expect(started.json.ok).toBe(true);
+    const runId = started.json.result.runId as string;
+    expect(runId).toMatch(/^run_/);
+
+    const abandoned = await call(mounted, 'POST', '/aiworkflow/runs/abandon', { runId });
+    expect(abandoned.status).toBe(200);
+    expect(abandoned.json.ok).toBe(true);
+    expect(abandoned.json.result.abandoned).toBeGreaterThanOrEqual(1);
+
+    const state = await call(mounted, 'GET', `/aiworkflow/state?run=${runId}`);
+    expect(state.json.detail.id).toBe(runId);
+    expect(state.json.detail.status).toBe('failed');
+    expect(state.json.detail.outcome).toBe('fail');
+  });
+
+  it('POST /runs/abandon 缺少 runId → 400', async () => {
+    const res = await call(mounted, 'POST', '/aiworkflow/runs/abandon', {});
+    expect(res.status).toBe(400);
+  });
 });

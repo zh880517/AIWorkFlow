@@ -208,11 +208,18 @@ export function readMonitorState(
   const all = listRuns(db, limits.runs ?? 60, hostSession ?? null);
   const active = all.filter((r) => isActiveStatus(r.status)).slice(0, limits.list ?? 8);
   const recent = all.filter((r) => !isActiveStatus(r.status)).slice(0, limits.list ?? 8);
+  // 显式选中的 run 不要求在列表里：child run 没有自己的 host_session，但它的 root 属于本会话；
+  // 面板/运行图点「子运行」卡片时要能进去（设计 §9.2）。
+  const requested =
+    selectedId !== null && selectedId !== undefined &&
+    (hostSession === null || hostSession === undefined || runSessionOf(db, selectedId) === hostSession)
+      ? selectedId
+      : undefined;
   // 默认选中根 run：child run 通过父 run 的“子运行”卡片进入，避免刷新后直接落到某个 child
   const rootActive = active.filter((r) => r.parentRunId === null);
   const rootRecent = recent.filter((r) => r.parentRunId === null);
   const chosen =
-    (selectedId !== null && selectedId !== undefined ? all.find((r) => r.id === selectedId)?.id : undefined) ??
+    requested ??
     rootActive[0]?.id ??
     rootRecent[0]?.id ??
     active[0]?.id ??
@@ -220,6 +227,18 @@ export function readMonitorState(
     null;
   const detail = chosen === null ? null : (getRunDetail(db, chosen) ?? null);
   return { active, recent, selectedId: chosen, detail };
+}
+
+/** run 所属的会话：child run 取它 root run 的 host_session（child 自己不带）。 */
+function runSessionOf(db: SqlDatabase, runId: string): string | null | undefined {
+  const row = db
+    .prepare(
+      `SELECT COALESCE(root.host_session, r.host_session) AS session
+       FROM runs r LEFT JOIN runs root ON root.id = r.root_run_id
+       WHERE r.id = ?`,
+    )
+    .get(runId) as { session: string | null } | undefined;
+  return row?.session;
 }
 
 function resolvePendingGate(

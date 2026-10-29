@@ -506,6 +506,14 @@ export function buildFlow(
     } else if (outs.length === 1) {
       const single = outs[0]!;
       const singleOutlet = single.data?.outlet;
+      // 这条边本来就属于一个分支（body 里有 branches，或边上带 branchId/condition/when）：
+      // 即使只剩一条也要保留 branches，否则 when/outlet 会被静默降级成 next。
+      const meta = single.data ?? {};
+      const wasBranch =
+        (body.branches?.length ?? 0) > 0 ||
+        meta.branchId !== undefined ||
+        meta.condition !== undefined ||
+        meta.when !== undefined;
       if (body.type === 'gate' && singleOutlet !== undefined) {
         // 卡点即使只有一条出边也写 branches：outlet 决定人工选中哪个选项时走它。
         // 写 next 会让所有选项都走这条，校验器还会报每个选项都没连线（W_GATE_OPTION_UNWIRED）。
@@ -521,6 +529,26 @@ export function buildFlow(
           },
         ];
         delete node.next;
+      } else if (wasBranch) {
+        const previous = body.branches?.find((branch) => branch.id === meta.branchId);
+        const dataCondition = meta.condition;
+        const condition = dataCondition !== undefined ? dataCondition : (previous?.condition ?? '*');
+        const branch: Branch = {
+          ...(previous ?? {}),
+          id: previous?.id ?? uniqueBranchId(meta.branchId ?? 'b1', new Set<string>()),
+          condition,
+          to: single.target,
+        };
+        // 显式清空（''）表示用户删掉了出口绑定，不能再从旧分支复活
+        const rawOutlet = meta.outlet;
+        const outlet = rawOutlet !== undefined ? (rawOutlet === '' ? undefined : rawOutlet) : previous?.outlet;
+        if (outlet !== undefined) branch.outlet = outlet;
+        const dataWhen = meta.when;
+        const when = dataWhen !== undefined ? (dataWhen.trim() === '' ? undefined : dataWhen.trim()) : previous?.when;
+        if (when !== undefined) branch.when = when;
+        else delete branch.when;
+        node.branches = [branch];
+        delete node.next;
       } else {
         node.next = single.target;
         delete node.branches;
@@ -534,10 +562,12 @@ export function buildFlow(
         // 让校验器报「condition 为空」。别把第二条边也补成 '*'——那会变成
         // E_MULTI_DEFAULT（多个默认分支），把真正的问题藏起来。
         const rawCondition =
-          dataCondition !== undefined ? dataCondition : previous?.condition ?? (index === 0 ? '*' : '');
-        const condition = rawCondition === '' && index === 0 ? '*' : rawCondition;
-        // 卡点的出口绑定（option id）优先取这次在面板里选的，其次沿用旧分支
-        const outlet = edge.data?.outlet ?? previous?.outlet;
+          dataCondition !== undefined ? dataCondition : (previous?.condition ?? (index === 0 ? '*' : ''));
+        // 显式清空（''）就保持空，让校验器统一报 E_EMPTY_CONDITION；不要偷偷补成 '*'。
+        const condition = rawCondition;
+        // 卡点的出口绑定（option id）优先取这次在面板里选的；'' = 显式清除，不能再从旧分支复活
+        const rawOutlet = edge.data?.outlet;
+        const outlet = rawOutlet !== undefined ? (rawOutlet === '' ? undefined : rawOutlet) : previous?.outlet;
         const dataWhen = edge.data?.when;
         const when = dataWhen !== undefined ? (dataWhen.trim() === '' ? undefined : dataWhen.trim()) : previous?.when;
         const branch: Branch =

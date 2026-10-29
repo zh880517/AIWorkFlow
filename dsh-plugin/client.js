@@ -6,7 +6,7 @@ window.__ModuleLoader__.load({
     var exports = module.exports;
     (function (module, exports, require) {
 Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
-//#region \0rolldown/runtime.js
+//#region
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -32,7 +32,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 let react = require("react");
 react = __toESM(react, 1);
 require("react-dom");
-//#region dsh-plugin/src/diagnostics.tsx
+//#region
 var message = null;
 var tone = "error";
 var infoTimer = null;
@@ -122,7 +122,7 @@ function Diagnostics() {
 	}, "aiworkflow 插件：", text);
 }
 //#endregion
-//#region dsh-plugin/src/jsx-runtime-shim.ts
+//#region
 var Fragment = react.Fragment;
 function jsx(type, props, key) {
 	return react.createElement(type, key === void 0 ? props : {
@@ -132,7 +132,7 @@ function jsx(type, props, key) {
 }
 var jsxs = jsx;
 //#endregion
-//#region node_modules/classcat/index.js
+//#region
 function cc(names) {
 	if (typeof names === "string" || typeof names === "number") return "" + names;
 	let out = "";
@@ -142,7 +142,7 @@ function cc(names) {
 	return out;
 }
 //#endregion
-//#region node_modules/d3-dispatch/src/dispatch.js
+//#region
 var noop = { value: () => {} };
 function dispatch() {
 	for (var i = 0, n = arguments.length, _ = {}, t; i < n; ++i) {
@@ -215,7 +215,7 @@ var namespaces_default = {
 	xmlns: "http://www.w3.org/2000/xmlns/"
 };
 //#endregion
-//#region node_modules/d3-selection/src/namespace.js
+//#region
 function namespace_default(name) {
 	var prefix = name += "", i = prefix.indexOf(":");
 	if (i >= 0 && (prefix = name.slice(0, i)) !== "xmlns") name = name.slice(i + 1);
@@ -225,7 +225,7 @@ function namespace_default(name) {
 	} : name;
 }
 //#endregion
-//#region node_modules/d3-selection/src/creator.js
+//#region
 function creatorInherit(name) {
 	return function() {
 		var document = this.ownerDocument, uri = this.namespaceURI;
@@ -242,7 +242,7 @@ function creator_default(name) {
 	return (fullname.local ? creatorFixed : creatorInherit)(fullname);
 }
 //#endregion
-//#region node_modules/d3-selection/src/selector.js
+//#region
 function none() {}
 function selector_default(selector) {
 	return selector == null ? none : function() {
@@ -250,7 +250,7 @@ function selector_default(selector) {
 	};
 }
 //#endregion
-//#region node_modules/d3-selection/src/selection/select.js
+//#region
 function select_default$2(select) {
 	if (typeof select !== "function") select = selector_default(select);
 	for (var groups = this._groups, m = groups.length, subgroups = new Array(m), j = 0; j < m; ++j) for (var group = groups[j], n = group.length, subgroup = subgroups[j] = new Array(n), node, subnode, i = 0; i < n; ++i) if ((node = group[i]) && (subnode = select.call(node, node.__data__, i, group))) {
@@ -260,12 +260,12 @@ function select_default$2(select) {
 	return new Selection$1(subgroups, this._parents);
 }
 //#endregion
-//#region node_modules/d3-selection/src/array.js
+//#region
 function array(x) {
 	return x == null ? [] : Array.isArray(x) ? x : Array.from(x);
 }
 //#endregion
-//#region node_modules/d3-selection/src/selectorAll.js
+//#region
 function empty() {
 	return [];
 }
@@ -275,7 +275,7 @@ function selectorAll_default(selector) {
 	};
 }
 //#endregion
-//#region node_modules/d3-selection/src/selection/selectAll.js
+//#region
 function arrayAll(select) {
 	return function() {
 		return array(select.apply(this, arguments));
@@ -291,7 +291,7 @@ function selectAll_default$1(select) {
 	return new Selection$1(subgroups, parents);
 }
 //#endregion
-//#region node_modules/d3-selection/src/matcher.js
+//#region
 function matcher_default(selector) {
 	return function() {
 		return this.matches(selector);
@@ -303,7 +303,7 @@ function childMatcher(selector) {
 	};
 }
 //#endregion
-//#region node_modules/d3-selection/src/selection/selectChild.js
+//#region
 var find = Array.prototype.find;
 function childFind(match) {
 	return function() {
@@ -317,7 +317,7 @@ function selectChild_default(match) {
 	return this.select(match == null ? childFirst : childFind(typeof match === "function" ? match : childMatcher(match)));
 }
 //#endregion
-//#region node_modules/d3-selection/src/selection/selectChildren.js
+//#region
 var filter = Array.prototype.filter;
 function children() {
 	return Array.from(this.children);
@@ -331,19 +331,19 @@ function selectChildren_default(match) {
 	return this.selectAll(match == null ? children : childrenFilter(typeof match === "function" ? match : childMatcher(match)));
 }
 //#endregion
-//#region node_modules/d3-selection/src/selection/filter.js
+//#region
 function filter_default$1(match) {
 	if (typeof match !== "function") match = matcher_default(match);
 	for (var groups = this._groups, m = groups.length, subgroups = new Array(m), j = 0; j < m; ++j) for (var group = groups[j], n = group.length, subgroup = subgroups[j] = [], node, i = 0; i < n; ++i) if ((node = group[i]) && match.call(node, node.__data__, i, group)) subgroup.push(node);
 	return new Selection$1(subgroups, this._parents);
 }
 //#endregion
-//#region node_modules/d3-selection/src/selection/sparse.js
+//#region
 function sparse_default(update) {
 	return new Array(update.length);
 }
 //#endregion
-//#region node_modules/d3-selection/src/selection/enter.js
+//#region
 function enter_default() {
 	return new Selection$1(this._enter || this._groups.map(sparse_default), this._parents);
 }
@@ -370,14 +370,14 @@ EnterNode.prototype = {
 	}
 };
 //#endregion
-//#region node_modules/d3-selection/src/constant.js
+//#region
 function constant_default$3(x) {
 	return function() {
 		return x;
 	};
 }
 //#endregion
-//#region node_modules/d3-selection/src/selection/data.js
+//#region
 function bindIndex(parent, group, enter, update, exit, data) {
 	var i = 0, node, groupLength = group.length, dataLength = data.length;
 	for (; i < dataLength; ++i) if (node = group[i]) {
@@ -428,12 +428,12 @@ function arraylike(data) {
 	return typeof data === "object" && "length" in data ? data : Array.from(data);
 }
 //#endregion
-//#region node_modules/d3-selection/src/selection/exit.js
+//#region
 function exit_default() {
 	return new Selection$1(this._exit || this._groups.map(sparse_default), this._parents);
 }
 //#endregion
-//#region node_modules/d3-selection/src/selection/join.js
+//#region
 function join_default(onenter, onupdate, onexit) {
 	var enter = this.enter(), update = this, exit = this.exit();
 	if (typeof onenter === "function") {
@@ -449,7 +449,7 @@ function join_default(onenter, onupdate, onexit) {
 	return enter && update ? enter.merge(update).order() : update;
 }
 //#endregion
-//#region node_modules/d3-selection/src/selection/merge.js
+//#region
 function merge_default$1(context) {
 	var selection = context.selection ? context.selection() : context;
 	for (var groups0 = this._groups, groups1 = selection._groups, m0 = groups0.length, m1 = groups1.length, m = Math.min(m0, m1), merges = new Array(m0), j = 0; j < m; ++j) for (var group0 = groups0[j], group1 = groups1[j], n = group0.length, merge = merges[j] = new Array(n), node, i = 0; i < n; ++i) if (node = group0[i] || group1[i]) merge[i] = node;
@@ -457,7 +457,7 @@ function merge_default$1(context) {
 	return new Selection$1(merges, this._parents);
 }
 //#endregion
-//#region node_modules/d3-selection/src/selection/order.js
+//#region
 function order_default() {
 	for (var groups = this._groups, j = -1, m = groups.length; ++j < m;) for (var group = groups[j], i = group.length - 1, next = group[i], node; --i >= 0;) if (node = group[i]) {
 		if (next && node.compareDocumentPosition(next) ^ 4) next.parentNode.insertBefore(node, next);
@@ -466,7 +466,7 @@ function order_default() {
 	return this;
 }
 //#endregion
-//#region node_modules/d3-selection/src/selection/sort.js
+//#region
 function sort_default(compare) {
 	if (!compare) compare = ascending;
 	function compareNode(a, b) {
@@ -482,7 +482,7 @@ function ascending(a, b) {
 	return a < b ? -1 : a > b ? 1 : a >= b ? 0 : NaN;
 }
 //#endregion
-//#region node_modules/d3-selection/src/selection/call.js
+//#region
 function call_default() {
 	var callback = arguments[0];
 	arguments[0] = this;
@@ -490,12 +490,12 @@ function call_default() {
 	return this;
 }
 //#endregion
-//#region node_modules/d3-selection/src/selection/nodes.js
+//#region
 function nodes_default() {
 	return Array.from(this);
 }
 //#endregion
-//#region node_modules/d3-selection/src/selection/node.js
+//#region
 function node_default() {
 	for (var groups = this._groups, j = 0, m = groups.length; j < m; ++j) for (var group = groups[j], i = 0, n = group.length; i < n; ++i) {
 		var node = group[i];
@@ -504,25 +504,25 @@ function node_default() {
 	return null;
 }
 //#endregion
-//#region node_modules/d3-selection/src/selection/size.js
+//#region
 function size_default() {
 	let size = 0;
 	for (const node of this) ++size;
 	return size;
 }
 //#endregion
-//#region node_modules/d3-selection/src/selection/empty.js
+//#region
 function empty_default() {
 	return !this.node();
 }
 //#endregion
-//#region node_modules/d3-selection/src/selection/each.js
+//#region
 function each_default(callback) {
 	for (var groups = this._groups, j = 0, m = groups.length; j < m; ++j) for (var group = groups[j], i = 0, n = group.length, node; i < n; ++i) if (node = group[i]) callback.call(node, node.__data__, i, group);
 	return this;
 }
 //#endregion
-//#region node_modules/d3-selection/src/selection/attr.js
+//#region
 function attrRemove$1(name) {
 	return function() {
 		this.removeAttribute(name);
@@ -566,12 +566,12 @@ function attr_default$1(name, value) {
 	return this.each((value == null ? fullname.local ? attrRemoveNS$1 : attrRemove$1 : typeof value === "function" ? fullname.local ? attrFunctionNS$1 : attrFunction$1 : fullname.local ? attrConstantNS$1 : attrConstant$1)(fullname, value));
 }
 //#endregion
-//#region node_modules/d3-selection/src/window.js
+//#region
 function window_default(node) {
 	return node.ownerDocument && node.ownerDocument.defaultView || node.document && node || node.defaultView;
 }
 //#endregion
-//#region node_modules/d3-selection/src/selection/style.js
+//#region
 function styleRemove$1(name) {
 	return function() {
 		this.style.removeProperty(name);
@@ -596,7 +596,7 @@ function styleValue(node, name) {
 	return node.style.getPropertyValue(name) || window_default(node).getComputedStyle(node, null).getPropertyValue(name);
 }
 //#endregion
-//#region node_modules/d3-selection/src/selection/property.js
+//#region
 function propertyRemove(name) {
 	return function() {
 		delete this[name];
@@ -618,7 +618,7 @@ function property_default(name, value) {
 	return arguments.length > 1 ? this.each((value == null ? propertyRemove : typeof value === "function" ? propertyFunction : propertyConstant)(name, value)) : this.node()[name];
 }
 //#endregion
-//#region node_modules/d3-selection/src/selection/classed.js
+//#region
 function classArray(string) {
 	return string.trim().split(/^|\s+/);
 }
@@ -680,7 +680,7 @@ function classed_default(name, value) {
 	return this.each((typeof value === "function" ? classedFunction : value ? classedTrue : classedFalse)(names, value));
 }
 //#endregion
-//#region node_modules/d3-selection/src/selection/text.js
+//#region
 function textRemove() {
 	this.textContent = "";
 }
@@ -699,7 +699,7 @@ function text_default$1(value) {
 	return arguments.length ? this.each(value == null ? textRemove : (typeof value === "function" ? textFunction$1 : textConstant$1)(value)) : this.node().textContent;
 }
 //#endregion
-//#region node_modules/d3-selection/src/selection/html.js
+//#region
 function htmlRemove() {
 	this.innerHTML = "";
 }
@@ -718,7 +718,7 @@ function html_default(value) {
 	return arguments.length ? this.each(value == null ? htmlRemove : (typeof value === "function" ? htmlFunction : htmlConstant)(value)) : this.node().innerHTML;
 }
 //#endregion
-//#region node_modules/d3-selection/src/selection/raise.js
+//#region
 function raise() {
 	if (this.nextSibling) this.parentNode.appendChild(this);
 }
@@ -726,7 +726,7 @@ function raise_default() {
 	return this.each(raise);
 }
 //#endregion
-//#region node_modules/d3-selection/src/selection/lower.js
+//#region
 function lower() {
 	if (this.previousSibling) this.parentNode.insertBefore(this, this.parentNode.firstChild);
 }
@@ -734,7 +734,7 @@ function lower_default() {
 	return this.each(lower);
 }
 //#endregion
-//#region node_modules/d3-selection/src/selection/append.js
+//#region
 function append_default(name) {
 	var create = typeof name === "function" ? name : creator_default(name);
 	return this.select(function() {
@@ -742,7 +742,7 @@ function append_default(name) {
 	});
 }
 //#endregion
-//#region node_modules/d3-selection/src/selection/insert.js
+//#region
 function constantNull() {
 	return null;
 }
@@ -753,7 +753,7 @@ function insert_default(name, before) {
 	});
 }
 //#endregion
-//#region node_modules/d3-selection/src/selection/remove.js
+//#region
 function remove() {
 	var parent = this.parentNode;
 	if (parent) parent.removeChild(this);
@@ -762,7 +762,7 @@ function remove_default$1() {
 	return this.each(remove);
 }
 //#endregion
-//#region node_modules/d3-selection/src/selection/clone.js
+//#region
 function selection_cloneShallow() {
 	var clone = this.cloneNode(false), parent = this.parentNode;
 	return parent ? parent.insertBefore(clone, this.nextSibling) : clone;
@@ -775,12 +775,12 @@ function clone_default(deep) {
 	return this.select(deep ? selection_cloneDeep : selection_cloneShallow);
 }
 //#endregion
-//#region node_modules/d3-selection/src/selection/datum.js
+//#region
 function datum_default(value) {
 	return arguments.length ? this.property("__data__", value) : this.node().__data__;
 }
 //#endregion
-//#region node_modules/d3-selection/src/selection/on.js
+//#region
 function contextListener(listener) {
 	return function(event) {
 		listener.call(this, event, this.__data__);
@@ -843,7 +843,7 @@ function on_default$1(typename, value, options) {
 	return this;
 }
 //#endregion
-//#region node_modules/d3-selection/src/selection/dispatch.js
+//#region
 function dispatchEvent(node, type, params) {
 	var window = window_default(node), event = window.CustomEvent;
 	if (typeof event === "function") event = new event(type, params);
@@ -868,12 +868,12 @@ function dispatch_default(type, params) {
 	return this.each((typeof params === "function" ? dispatchFunction : dispatchConstant)(type, params));
 }
 //#endregion
-//#region node_modules/d3-selection/src/selection/iterator.js
+//#region
 function* iterator_default() {
 	for (var groups = this._groups, j = 0, m = groups.length; j < m; ++j) for (var group = groups[j], i = 0, n = group.length, node; i < n; ++i) if (node = group[i]) yield node;
 }
 //#endregion
-//#region node_modules/d3-selection/src/selection/index.js
+//#region
 var root = [null];
 function Selection$1(groups, parents) {
 	this._groups = groups;
@@ -924,19 +924,19 @@ Selection$1.prototype = selection.prototype = {
 	[Symbol.iterator]: iterator_default
 };
 //#endregion
-//#region node_modules/d3-selection/src/select.js
+//#region
 function select_default$1(selector) {
 	return typeof selector === "string" ? new Selection$1([[document.querySelector(selector)]], [document.documentElement]) : new Selection$1([[selector]], root);
 }
 //#endregion
-//#region node_modules/d3-selection/src/sourceEvent.js
+//#region
 function sourceEvent_default(event) {
 	let sourceEvent;
 	while (sourceEvent = event.sourceEvent) event = sourceEvent;
 	return event;
 }
 //#endregion
-//#region node_modules/d3-selection/src/pointer.js
+//#region
 function pointer_default(event, node) {
 	event = sourceEvent_default(event);
 	if (node === void 0) node = event.currentTarget;
@@ -956,7 +956,7 @@ function pointer_default(event, node) {
 	return [event.pageX, event.pageY];
 }
 //#endregion
-//#region node_modules/d3-drag/src/noevent.js
+//#region
 var nonpassive = { passive: false };
 var nonpassivecapture = {
 	capture: true,
@@ -970,7 +970,7 @@ function noevent_default$1(event) {
 	event.stopImmediatePropagation();
 }
 //#endregion
-//#region node_modules/d3-drag/src/nodrag.js
+//#region
 function nodrag_default(view) {
 	var root = view.document.documentElement, selection = select_default$1(view).on("dragstart.drag", noevent_default$1, nonpassivecapture);
 	if ("onselectstart" in root) selection.on("selectstart.drag", noevent_default$1, nonpassivecapture);
@@ -994,10 +994,10 @@ function yesdrag(view, noclick) {
 	}
 }
 //#endregion
-//#region node_modules/d3-drag/src/constant.js
+//#region
 var constant_default$2 = (x) => () => x;
 //#endregion
-//#region node_modules/d3-drag/src/event.js
+//#region
 function DragEvent(type, { sourceEvent, subject, target, identifier, active, x, y, dx, dy, dispatch }) {
 	Object.defineProperties(this, {
 		type: {
@@ -1058,7 +1058,7 @@ DragEvent.prototype.on = function() {
 	return value === this._ ? this : value;
 };
 //#endregion
-//#region node_modules/d3-drag/src/drag.js
+//#region
 function defaultFilter$1(event) {
 	return !event.ctrlKey && !event.button;
 }
@@ -1191,7 +1191,7 @@ function drag_default() {
 	return drag;
 }
 //#endregion
-//#region node_modules/d3-color/src/define.js
+//#region
 function define_default(constructor, factory, prototype) {
 	constructor.prototype = factory.prototype = prototype;
 	prototype.constructor = constructor;
@@ -1202,7 +1202,7 @@ function extend(parent, definition) {
 	return prototype;
 }
 //#endregion
-//#region node_modules/d3-color/src/color.js
+//#region
 function Color() {}
 var darker = .7;
 var brighter = 1 / darker;
@@ -1529,10 +1529,10 @@ function hsl2rgb(h, m1, m2) {
 	return (h < 60 ? m1 + (m2 - m1) * h / 60 : h < 180 ? m2 : h < 240 ? m1 + (m2 - m1) * (240 - h) / 60 : m1) * 255;
 }
 //#endregion
-//#region node_modules/d3-interpolate/src/constant.js
+//#region
 var constant_default$1 = (x) => () => x;
 //#endregion
-//#region node_modules/d3-interpolate/src/color.js
+//#region
 function linear(a, d) {
 	return function(t) {
 		return a + t * d;
@@ -1553,7 +1553,7 @@ function nogamma(a, b) {
 	return d ? linear(a, d) : constant_default$1(isNaN(a) ? b : a);
 }
 //#endregion
-//#region node_modules/d3-interpolate/src/rgb.js
+//#region
 var rgb_default = (function rgbGamma(y) {
 	var color = gamma(y);
 	function rgb$1(start, end) {
@@ -1570,7 +1570,7 @@ var rgb_default = (function rgbGamma(y) {
 	return rgb$1;
 })(1);
 //#endregion
-//#region node_modules/d3-interpolate/src/numberArray.js
+//#region
 function numberArray_default(a, b) {
 	if (!b) b = [];
 	var n = a ? Math.min(b.length, a.length) : 0, c = b.slice(), i;
@@ -1583,7 +1583,7 @@ function isNumberArray(x) {
 	return ArrayBuffer.isView(x) && !(x instanceof DataView);
 }
 //#endregion
-//#region node_modules/d3-interpolate/src/array.js
+//#region
 function genericArray(a, b) {
 	var nb = b ? b.length : 0, na = a ? Math.min(nb, a.length) : 0, x = new Array(na), c = new Array(nb), i;
 	for (i = 0; i < na; ++i) x[i] = value_default(a[i], b[i]);
@@ -1594,7 +1594,7 @@ function genericArray(a, b) {
 	};
 }
 //#endregion
-//#region node_modules/d3-interpolate/src/date.js
+//#region
 function date_default(a, b) {
 	var d = /* @__PURE__ */ new Date();
 	return a = +a, b = +b, function(t) {
@@ -1602,14 +1602,14 @@ function date_default(a, b) {
 	};
 }
 //#endregion
-//#region node_modules/d3-interpolate/src/number.js
+//#region
 function number_default(a, b) {
 	return a = +a, b = +b, function(t) {
 		return a * (1 - t) + b * t;
 	};
 }
 //#endregion
-//#region node_modules/d3-interpolate/src/object.js
+//#region
 function object_default(a, b) {
 	var i = {}, c = {}, k;
 	if (a === null || typeof a !== "object") a = {};
@@ -1622,7 +1622,7 @@ function object_default(a, b) {
 	};
 }
 //#endregion
-//#region node_modules/d3-interpolate/src/string.js
+//#region
 var reA = /[-+]?(?:\d+\.?\d*|\.?\d+)(?:[eE][-+]?\d+)?/g;
 var reB = new RegExp(reA.source, "g");
 function zero(b) {
@@ -1667,13 +1667,13 @@ function string_default(a, b) {
 	});
 }
 //#endregion
-//#region node_modules/d3-interpolate/src/value.js
+//#region
 function value_default(a, b) {
 	var t = typeof b, c;
 	return b == null || t === "boolean" ? constant_default$1(b) : (t === "number" ? number_default : t === "string" ? (c = color(b)) ? (b = c, rgb_default) : string_default : b instanceof color ? rgb_default : b instanceof Date ? date_default : isNumberArray(b) ? numberArray_default : Array.isArray(b) ? genericArray : typeof b.valueOf !== "function" && typeof b.toString !== "function" || isNaN(b) ? object_default : number_default)(a, b);
 }
 //#endregion
-//#region node_modules/d3-interpolate/src/transform/decompose.js
+//#region
 var degrees = 180 / Math.PI;
 var identity$2 = {
 	translateX: 0,
@@ -1699,7 +1699,7 @@ function decompose_default(a, b, c, d, e, f) {
 	};
 }
 //#endregion
-//#region node_modules/d3-interpolate/src/transform/parse.js
+//#region
 var svgNode;
 function parseCss(value) {
 	const m = new (typeof DOMMatrix === "function" ? DOMMatrix : WebKitCSSMatrix)(value + "");
@@ -1714,7 +1714,7 @@ function parseSvg(value) {
 	return decompose_default(value.a, value.b, value.c, value.d, value.e, value.f);
 }
 //#endregion
-//#region node_modules/d3-interpolate/src/transform/index.js
+//#region
 function interpolateTransform(parse, pxComma, pxParen, degParen) {
 	function pop(s) {
 		return s.length ? s.pop() + " " : "";
@@ -1778,7 +1778,7 @@ function interpolateTransform(parse, pxComma, pxParen, degParen) {
 var interpolateTransformCss = interpolateTransform(parseCss, "px, ", "px)", "deg)");
 var interpolateTransformSvg = interpolateTransform(parseSvg, ", ", ")", ")");
 //#endregion
-//#region node_modules/d3-interpolate/src/zoom.js
+//#region
 var epsilon2 = 1e-12;
 function cosh(x) {
 	return ((x = Math.exp(x)) + 1 / x) / 2;
@@ -1823,7 +1823,7 @@ var zoom_default$1 = (function zoomRho(rho, rho2, rho4) {
 	return zoom;
 })(Math.SQRT2, 2, 4);
 //#endregion
-//#region node_modules/d3-timer/src/timer.js
+//#region
 var frame = 0;
 var timeout = 0;
 var interval = 0;
@@ -1922,7 +1922,7 @@ function sleep(time) {
 	}
 }
 //#endregion
-//#region node_modules/d3-timer/src/timeout.js
+//#region
 function timeout_default(callback, delay, time) {
 	var t = new Timer();
 	delay = delay == null ? 0 : +delay;
@@ -1933,7 +1933,7 @@ function timeout_default(callback, delay, time) {
 	return t;
 }
 //#endregion
-//#region node_modules/d3-transition/src/transition/schedule.js
+//#region
 var emptyOn = dispatch("start", "end", "cancel", "interrupt");
 var emptyTween = [];
 function schedule_default(node, name, id, index, group, timing) {
@@ -2029,7 +2029,7 @@ function create(node, id, self) {
 	}
 }
 //#endregion
-//#region node_modules/d3-transition/src/interrupt.js
+//#region
 function interrupt_default$1(node, name) {
 	var schedules = node.__transition, schedule, active, empty = true, i;
 	if (!schedules) return;
@@ -2048,14 +2048,14 @@ function interrupt_default$1(node, name) {
 	if (empty) delete node.__transition;
 }
 //#endregion
-//#region node_modules/d3-transition/src/selection/interrupt.js
+//#region
 function interrupt_default(name) {
 	return this.each(function() {
 		interrupt_default$1(this, name);
 	});
 }
 //#endregion
-//#region node_modules/d3-transition/src/transition/tween.js
+//#region
 function tweenRemove(id, name) {
 	var tween0, tween1;
 	return function() {
@@ -2111,13 +2111,13 @@ function tweenValue(transition, name, value) {
 	};
 }
 //#endregion
-//#region node_modules/d3-transition/src/transition/interpolate.js
+//#region
 function interpolate_default(a, b) {
 	var c;
 	return (typeof b === "number" ? number_default : b instanceof color ? rgb_default : (c = color(b)) ? (b = c, rgb_default) : string_default)(a, b);
 }
 //#endregion
-//#region node_modules/d3-transition/src/transition/attr.js
+//#region
 function attrRemove(name) {
 	return function() {
 		this.removeAttribute(name);
@@ -2167,7 +2167,7 @@ function attr_default(name, value) {
 	return this.attrTween(name, typeof value === "function" ? (fullname.local ? attrFunctionNS : attrFunction)(fullname, i, tweenValue(this, "attr." + name, value)) : value == null ? (fullname.local ? attrRemoveNS : attrRemove)(fullname) : (fullname.local ? attrConstantNS : attrConstant)(fullname, i, value));
 }
 //#endregion
-//#region node_modules/d3-transition/src/transition/attrTween.js
+//#region
 function attrInterpolate(name, i) {
 	return function(t) {
 		this.setAttribute(name, i.call(this, t));
@@ -2207,7 +2207,7 @@ function attrTween_default(name, value) {
 	return this.tween(key, (fullname.local ? attrTweenNS : attrTween)(fullname, value));
 }
 //#endregion
-//#region node_modules/d3-transition/src/transition/delay.js
+//#region
 function delayFunction(id, value) {
 	return function() {
 		init(this, id).delay = +value.apply(this, arguments);
@@ -2223,7 +2223,7 @@ function delay_default(value) {
 	return arguments.length ? this.each((typeof value === "function" ? delayFunction : delayConstant)(id, value)) : get(this.node(), id).delay;
 }
 //#endregion
-//#region node_modules/d3-transition/src/transition/duration.js
+//#region
 function durationFunction(id, value) {
 	return function() {
 		set(this, id).duration = +value.apply(this, arguments);
@@ -2239,7 +2239,7 @@ function duration_default(value) {
 	return arguments.length ? this.each((typeof value === "function" ? durationFunction : durationConstant)(id, value)) : get(this.node(), id).duration;
 }
 //#endregion
-//#region node_modules/d3-transition/src/transition/ease.js
+//#region
 function easeConstant(id, value) {
 	if (typeof value !== "function") throw new Error();
 	return function() {
@@ -2251,7 +2251,7 @@ function ease_default(value) {
 	return arguments.length ? this.each(easeConstant(id, value)) : get(this.node(), id).ease;
 }
 //#endregion
-//#region node_modules/d3-transition/src/transition/easeVarying.js
+//#region
 function easeVarying(id, value) {
 	return function() {
 		var v = value.apply(this, arguments);
@@ -2264,14 +2264,14 @@ function easeVarying_default(value) {
 	return this.each(easeVarying(this._id, value));
 }
 //#endregion
-//#region node_modules/d3-transition/src/transition/filter.js
+//#region
 function filter_default(match) {
 	if (typeof match !== "function") match = matcher_default(match);
 	for (var groups = this._groups, m = groups.length, subgroups = new Array(m), j = 0; j < m; ++j) for (var group = groups[j], n = group.length, subgroup = subgroups[j] = [], node, i = 0; i < n; ++i) if ((node = group[i]) && match.call(node, node.__data__, i, group)) subgroup.push(node);
 	return new Transition(subgroups, this._parents, this._name, this._id);
 }
 //#endregion
-//#region node_modules/d3-transition/src/transition/merge.js
+//#region
 function merge_default(transition) {
 	if (transition._id !== this._id) throw new Error();
 	for (var groups0 = this._groups, groups1 = transition._groups, m0 = groups0.length, m1 = groups1.length, m = Math.min(m0, m1), merges = new Array(m0), j = 0; j < m; ++j) for (var group0 = groups0[j], group1 = groups1[j], n = group0.length, merge = merges[j] = new Array(n), node, i = 0; i < n; ++i) if (node = group0[i] || group1[i]) merge[i] = node;
@@ -2279,7 +2279,7 @@ function merge_default(transition) {
 	return new Transition(merges, this._parents, this._name, this._id);
 }
 //#endregion
-//#region node_modules/d3-transition/src/transition/on.js
+//#region
 function start(name) {
 	return (name + "").trim().split(/^|\s+/).every(function(t) {
 		var i = t.indexOf(".");
@@ -2300,7 +2300,7 @@ function on_default(name, listener) {
 	return arguments.length < 2 ? get(this.node(), id).on.on(name) : this.each(onFunction(id, name, listener));
 }
 //#endregion
-//#region node_modules/d3-transition/src/transition/remove.js
+//#region
 function removeFunction(id) {
 	return function() {
 		var parent = this.parentNode;
@@ -2312,7 +2312,7 @@ function remove_default() {
 	return this.on("end.remove", removeFunction(this._id));
 }
 //#endregion
-//#region node_modules/d3-transition/src/transition/select.js
+//#region
 function select_default(select) {
 	var name = this._name, id = this._id;
 	if (typeof select !== "function") select = selector_default(select);
@@ -2324,7 +2324,7 @@ function select_default(select) {
 	return new Transition(subgroups, this._parents, name, id);
 }
 //#endregion
-//#region node_modules/d3-transition/src/transition/selectAll.js
+//#region
 function selectAll_default(select) {
 	var name = this._name, id = this._id;
 	if (typeof select !== "function") select = selectorAll_default(select);
@@ -2336,13 +2336,13 @@ function selectAll_default(select) {
 	return new Transition(subgroups, parents, name, id);
 }
 //#endregion
-//#region node_modules/d3-transition/src/transition/selection.js
+//#region
 var Selection = selection.prototype.constructor;
 function selection_default() {
 	return new Selection(this._groups, this._parents);
 }
 //#endregion
-//#region node_modules/d3-transition/src/transition/style.js
+//#region
 function styleNull(name, interpolate) {
 	var string00, string10, interpolate0;
 	return function() {
@@ -2383,7 +2383,7 @@ function style_default$1(name, value, priority) {
 	return value == null ? this.styleTween(name, styleNull(name, i)).on("end.style." + name, styleRemove(name)) : typeof value === "function" ? this.styleTween(name, styleFunction(name, i, tweenValue(this, "style." + name, value))).each(styleMaybeRemove(this._id, name)) : this.styleTween(name, styleConstant(name, i, value), priority).on("end.style." + name, null);
 }
 //#endregion
-//#region node_modules/d3-transition/src/transition/styleTween.js
+//#region
 function styleInterpolate(name, i, priority) {
 	return function(t) {
 		this.style.setProperty(name, i.call(this, t), priority);
@@ -2407,7 +2407,7 @@ function styleTween_default(name, value, priority) {
 	return this.tween(key, styleTween(name, value, priority == null ? "" : priority));
 }
 //#endregion
-//#region node_modules/d3-transition/src/transition/text.js
+//#region
 function textConstant(value) {
 	return function() {
 		this.textContent = value;
@@ -2423,7 +2423,7 @@ function text_default(value) {
 	return this.tween("text", typeof value === "function" ? textFunction(tweenValue(this, "text", value)) : textConstant(value == null ? "" : value + ""));
 }
 //#endregion
-//#region node_modules/d3-transition/src/transition/textTween.js
+//#region
 function textInterpolate(i) {
 	return function(t) {
 		this.textContent = i.call(this, t);
@@ -2447,7 +2447,7 @@ function textTween_default(value) {
 	return this.tween(key, textTween(value));
 }
 //#endregion
-//#region node_modules/d3-transition/src/transition/transition.js
+//#region
 function transition_default$1() {
 	var name = this._name, id0 = this._id, id1 = newId();
 	for (var groups = this._groups, m = groups.length, j = 0; j < m; ++j) for (var group = groups[j], n = group.length, node, i = 0; i < n; ++i) if (node = group[i]) {
@@ -2462,7 +2462,7 @@ function transition_default$1() {
 	return new Transition(groups, this._parents, name, id1);
 }
 //#endregion
-//#region node_modules/d3-transition/src/transition/end.js
+//#region
 function end_default() {
 	var on0, on1, that = this, id = that._id, size = that.size();
 	return new Promise(function(resolve, reject) {
@@ -2483,7 +2483,7 @@ function end_default() {
 	});
 }
 //#endregion
-//#region node_modules/d3-transition/src/transition/index.js
+//#region
 var id = 0;
 function Transition(groups, parents, name, id) {
 	this._groups = groups;
@@ -2531,12 +2531,12 @@ Transition.prototype = transition.prototype = {
 	[Symbol.iterator]: selection_prototype[Symbol.iterator]
 };
 //#endregion
-//#region node_modules/d3-ease/src/cubic.js
+//#region
 function cubicInOut(t) {
 	return ((t *= 2) <= 1 ? t * t * t : (t -= 2) * t * t + 2) / 2;
 }
 //#endregion
-//#region node_modules/d3-transition/src/selection/transition.js
+//#region
 var defaultTiming = {
 	time: null,
 	delay: 0,
@@ -2556,14 +2556,14 @@ function transition_default(name) {
 	return new Transition(groups, this._parents, name, id);
 }
 //#endregion
-//#region node_modules/d3-transition/src/selection/index.js
+//#region
 selection.prototype.interrupt = interrupt_default;
 selection.prototype.transition = transition_default;
 //#endregion
-//#region node_modules/d3-zoom/src/constant.js
+//#region
 var constant_default = (x) => () => x;
 //#endregion
-//#region node_modules/d3-zoom/src/event.js
+//#region
 function ZoomEvent(type, { sourceEvent, target, transform, dispatch }) {
 	Object.defineProperties(this, {
 		type: {
@@ -2590,7 +2590,7 @@ function ZoomEvent(type, { sourceEvent, target, transform, dispatch }) {
 	});
 }
 //#endregion
-//#region node_modules/d3-zoom/src/transform.js
+//#region
 function Transform(k, x, y) {
 	this.k = k;
 	this.x = x;
@@ -2639,7 +2639,7 @@ function transform(node) {
 	return node.__zoom;
 }
 //#endregion
-//#region node_modules/d3-zoom/src/noevent.js
+//#region
 function nopropagation(event) {
 	event.stopImmediatePropagation();
 }
@@ -2648,7 +2648,7 @@ function noevent_default(event) {
 	event.stopImmediatePropagation();
 }
 //#endregion
-//#region node_modules/d3-zoom/src/zoom.js
+//#region
 function defaultFilter(event) {
 	return (!event.ctrlKey || event.type === "wheel") && !event.button;
 }
@@ -2947,7 +2947,7 @@ function zoom_default() {
 	return zoom;
 }
 //#endregion
-//#region node_modules/@xyflow/system/dist/esm/index.js
+//#region
 var errorMessages = {
 	error001: (lib = "react") => `Seems like you have not used ${lib === "svelte" ? "SvelteFlowProvider" : "ReactFlowProvider"} as an ancestor. Help: https://${lib}flow.dev/error#001`,
 	error002: () => "It looks like you've created a new nodeTypes or edgeTypes object. If this wasn't on purpose please define the nodeTypes/edgeTypes outside of the component or memoize them.",
@@ -5760,7 +5760,7 @@ function XYResizer({ domNode, nodeId, getStoreItems, onChange, onEnd }) {
 	};
 }
 //#endregion
-//#region node_modules/use-sync-external-store/cjs/use-sync-external-store-shim.production.js
+//#region
 /**
 * @license React
 * use-sync-external-store-shim.production.js
@@ -5820,12 +5820,12 @@ var require_use_sync_external_store_shim_production = /* @__PURE__ */ __commonJS
 	exports.useSyncExternalStore = void 0 !== React$1.useSyncExternalStore ? React$1.useSyncExternalStore : shim;
 }));
 //#endregion
-//#region node_modules/use-sync-external-store/shim/index.js
+//#region
 var require_shim = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	module.exports = require_use_sync_external_store_shim_production();
 }));
 //#endregion
-//#region node_modules/use-sync-external-store/cjs/use-sync-external-store-shim/with-selector.production.js
+//#region
 /**
 * @license React
 * use-sync-external-store-shim/with-selector.production.js
@@ -5897,7 +5897,7 @@ var require_with_selector_production = /* @__PURE__ */ __commonJSMin(((exports) 
 	};
 }));
 //#endregion
-//#region node_modules/zustand/esm/vanilla.mjs
+//#region
 var import_with_selector = /* @__PURE__ */ __toESM((/* @__PURE__ */ __commonJSMin(((exports, module) => {
 	module.exports = require_with_selector_production();
 })))(), 1);
@@ -5933,7 +5933,7 @@ var createStoreImpl = (createState) => {
 };
 var createStore$1 = (createState) => createState ? createStoreImpl(createState) : createStoreImpl;
 //#endregion
-//#region node_modules/zustand/esm/traditional.mjs
+//#region
 var { useDebugValue } = react.default;
 var { useSyncExternalStoreWithSelector } = import_with_selector.default;
 var identity = (arg) => arg;
@@ -5950,7 +5950,7 @@ var createWithEqualityFnImpl = (createState, defaultEqualityFn) => {
 };
 var createWithEqualityFn = (createState, defaultEqualityFn) => createState ? createWithEqualityFnImpl(createState, defaultEqualityFn) : createWithEqualityFnImpl;
 //#endregion
-//#region node_modules/zustand/esm/shallow.mjs
+//#region
 function shallow$1(objA, objB) {
 	if (Object.is(objA, objB)) return true;
 	if (typeof objA !== "object" || objA === null || typeof objB !== "object" || objB === null) return false;
@@ -5970,7 +5970,7 @@ function shallow$1(objA, objB) {
 	return true;
 }
 //#endregion
-//#region node_modules/@xyflow/react/dist/esm/index.js
+//#region
 var StoreContext = (0, react.createContext)(null);
 var Provider$1 = StoreContext.Provider;
 var zustandErrorMessage = errorMessages["error001"]("react");
@@ -10874,7 +10874,7 @@ function ResizeControl({ nodeId, position, variant = ResizeControlVariant.Handle
 }
 (0, react.memo)(ResizeControl);
 //#endregion
-//#region shared/src/progress.ts
+//#region
 var PHASE_BY_STATUS = {
 	running: "running",
 	waiting_gate: "gate",
@@ -10918,11 +10918,29 @@ function buildPath(detail) {
 	for (const exec of detail.executions) {
 		const last = steps[steps.length - 1];
 		const branch = branchLabel(flow, exec.nodeId, exec.branchId);
+		if (exec.status === "dispatched") {
+			if (last !== void 0 && last.nodeId === exec.nodeId) {
+				last.lastExecutionId = exec.id;
+				continue;
+			}
+			steps.push({
+				nodeId: exec.nodeId,
+				label: nodeLabel$1(flow, exec.nodeId),
+				count: 1,
+				statuses: ["dispatched"],
+				branch,
+				lastExecutionId: exec.id
+			});
+			continue;
+		}
 		if (last !== void 0 && last.nodeId === exec.nodeId) {
-			last.count += 1;
-			last.statuses.push(exec.status);
 			last.lastExecutionId = exec.id;
 			if (branch !== null) last.branch = branch;
+			if (last.statuses.length === 1 && last.statuses[0] === "dispatched") last.statuses = [exec.status];
+			else {
+				last.count += 1;
+				last.statuses.push(exec.status);
+			}
 			continue;
 		}
 		steps.push({
@@ -10956,7 +10974,7 @@ function oneLine(text, max = 160) {
 	return flat.length <= max ? flat : `${flat.slice(0, max)}…`;
 }
 //#endregion
-//#region shared/src/format.ts
+//#region
 function relTime(iso, now = Date.now()) {
 	if (iso === null || iso === void 0 || iso === "") return "—";
 	const diff = now - new Date(iso).getTime();
@@ -10994,7 +11012,7 @@ function elapsedOf(run, now = Date.now()) {
 	return Math.max(0, end - start);
 }
 //#endregion
-//#region dsh-plugin/src/endpoint.ts
+//#region
 function resolveEndpoint(relativePath) {
 	const protocol = globalThis.location?.protocol;
 	if (protocol === "http:" || protocol === "https:") return new URL(relativePath, document.baseURI);
@@ -11008,7 +11026,7 @@ function resolveEndpoint(relativePath) {
 	return new URL(relativePath, document.baseURI);
 }
 //#endregion
-//#region dsh-plugin/src/editor/api.ts
+//#region
 async function request(path, init) {
 	const url = resolveEndpoint(`aiworkflow/${path}`);
 	const response = await fetch(url, {
@@ -11050,10 +11068,10 @@ async function payloadFields(id) {
 	return (await request(`flows/${encodeURIComponent(id)}/payload-fields`)).fields;
 }
 //#endregion
-//#region node_modules/@xyflow/react/dist/style.css?inline
+//#region
 var style_default = "/* this gets exported as style.css and can be used for the default theming */\n/* these are the necessary styles for React/Svelte Flow, they get used by base.css and style.css */\n.react-flow {\n  direction: ltr;\n\n  --xy-edge-stroke-default: #b1b1b7;\n  --xy-edge-stroke-width-default: 1;\n  --xy-edge-stroke-selected-default: #555;\n\n  --xy-connectionline-stroke-default: #b1b1b7;\n  --xy-connectionline-stroke-width-default: 1;\n\n  --xy-attribution-background-color-default: rgba(255, 255, 255, 0.5);\n\n  --xy-minimap-background-color-default: #fff;\n  --xy-minimap-mask-background-color-default: rgba(240, 240, 240, 0.6);\n  --xy-minimap-mask-stroke-color-default: transparent;\n  --xy-minimap-mask-stroke-width-default: 1;\n  --xy-minimap-node-background-color-default: #e2e2e2;\n  --xy-minimap-node-stroke-color-default: transparent;\n  --xy-minimap-node-stroke-width-default: 2;\n\n  --xy-background-color-default: transparent;\n  --xy-background-pattern-dots-color-default: #91919a;\n  --xy-background-pattern-lines-color-default: #eee;\n  --xy-background-pattern-cross-color-default: #e2e2e2;\n  background-color: var(--xy-background-color, var(--xy-background-color-default));\n  --xy-node-color-default: inherit;\n  --xy-node-border-default: 1px solid #1a192b;\n  --xy-node-background-color-default: #fff;\n  --xy-node-group-background-color-default: rgba(240, 240, 240, 0.25);\n  --xy-node-boxshadow-hover-default: 0 1px 4px 1px rgba(0, 0, 0, 0.08);\n  --xy-node-boxshadow-selected-default: 0 0 0 0.5px #1a192b;\n  --xy-node-border-radius-default: 3px;\n\n  --xy-handle-background-color-default: #1a192b;\n  --xy-handle-border-color-default: #fff;\n\n  --xy-selection-background-color-default: rgba(0, 89, 220, 0.08);\n  --xy-selection-border-default: 1px dotted rgba(0, 89, 220, 0.8);\n\n  --xy-controls-button-background-color-default: #fefefe;\n  --xy-controls-button-background-color-hover-default: #f4f4f4;\n  --xy-controls-button-color-default: inherit;\n  --xy-controls-button-color-hover-default: inherit;\n  --xy-controls-button-border-color-default: #eee;\n  --xy-controls-box-shadow-default: 0 0 2px 1px rgba(0, 0, 0, 0.08);\n\n  --xy-edge-label-background-color-default: #ffffff;\n  --xy-edge-label-color-default: inherit;\n  --xy-resize-background-color-default: #3367d9;\n}\n.react-flow.dark {\n  --xy-edge-stroke-default: #3e3e3e;\n  --xy-edge-stroke-width-default: 1;\n  --xy-edge-stroke-selected-default: #727272;\n\n  --xy-connectionline-stroke-default: #b1b1b7;\n  --xy-connectionline-stroke-width-default: 1;\n\n  --xy-attribution-background-color-default: rgba(150, 150, 150, 0.25);\n\n  --xy-minimap-background-color-default: #141414;\n  --xy-minimap-mask-background-color-default: rgba(60, 60, 60, 0.6);\n  --xy-minimap-mask-stroke-color-default: transparent;\n  --xy-minimap-mask-stroke-width-default: 1;\n  --xy-minimap-node-background-color-default: #2b2b2b;\n  --xy-minimap-node-stroke-color-default: transparent;\n  --xy-minimap-node-stroke-width-default: 2;\n\n  --xy-background-color-default: #141414;\n  --xy-background-pattern-dots-color-default: #555;\n  --xy-background-pattern-lines-color-default: #333;\n  --xy-background-pattern-cross-color-default: #333;\n  --xy-node-color-default: #f8f8f8;\n  --xy-node-border-default: 1px solid #3c3c3c;\n  --xy-node-background-color-default: #1e1e1e;\n  --xy-node-group-background-color-default: rgba(240, 240, 240, 0.25);\n  --xy-node-boxshadow-hover-default: 0 1px 4px 1px rgba(255, 255, 255, 0.08);\n  --xy-node-boxshadow-selected-default: 0 0 0 0.5px #999;\n\n  --xy-handle-background-color-default: #bebebe;\n  --xy-handle-border-color-default: #1e1e1e;\n\n  --xy-selection-background-color-default: rgba(200, 200, 220, 0.08);\n  --xy-selection-border-default: 1px dotted rgba(200, 200, 220, 0.8);\n\n  --xy-controls-button-background-color-default: #2b2b2b;\n  --xy-controls-button-background-color-hover-default: #3e3e3e;\n  --xy-controls-button-color-default: #f8f8f8;\n  --xy-controls-button-color-hover-default: #fff;\n  --xy-controls-button-border-color-default: #5b5b5b;\n  --xy-controls-box-shadow-default: 0 0 2px 1px rgba(0, 0, 0, 0.08);\n\n  --xy-edge-label-background-color-default: #141414;\n  --xy-edge-label-color-default: #f8f8f8;\n}\n.react-flow__background {\n  background-color: var(--xy-background-color-props, var(--xy-background-color, var(--xy-background-color-default)));\n  pointer-events: none;\n  z-index: -1;\n}\n.react-flow__container {\n  position: absolute;\n  width: 100%;\n  height: 100%;\n  top: 0;\n  left: 0;\n}\n.react-flow__pane {\n  z-index: 1;\n  touch-action: none;\n}\n.react-flow__pane.draggable {\n    cursor: grab;\n  }\n.react-flow__pane.dragging {\n    cursor: grabbing;\n  }\n.react-flow__pane.selection {\n    cursor: pointer;\n  }\n.react-flow__viewport {\n  transform-origin: 0 0;\n  z-index: 2;\n  pointer-events: none;\n}\n.react-flow__renderer {\n  z-index: 4;\n}\n.react-flow__selection {\n  z-index: 6;\n}\n.react-flow__nodesselection-rect:focus,\n.react-flow__nodesselection-rect:focus-visible {\n  outline: none;\n}\n.react-flow__edge-path {\n  stroke: var(--xy-edge-stroke, var(--xy-edge-stroke-default));\n  stroke-width: var(--xy-edge-stroke-width, var(--xy-edge-stroke-width-default));\n  fill: none;\n}\n.react-flow__connection-path {\n  stroke: var(--xy-connectionline-stroke, var(--xy-connectionline-stroke-default));\n  stroke-width: var(--xy-connectionline-stroke-width, var(--xy-connectionline-stroke-width-default));\n  fill: none;\n}\n.react-flow .react-flow__edges {\n  position: absolute;\n}\n.react-flow .react-flow__edges svg {\n    overflow: visible;\n    position: absolute;\n    pointer-events: none;\n  }\n.react-flow__edge {\n  pointer-events: visibleStroke;\n}\n.react-flow__edge.selectable {\n    cursor: pointer;\n  }\n.react-flow__edge.animated path {\n    stroke-dasharray: 5;\n    animation: dashdraw 0.5s linear infinite;\n  }\n.react-flow__edge.animated path.react-flow__edge-interaction {\n    stroke-dasharray: none;\n    animation: none;\n  }\n.react-flow__edge.inactive {\n    pointer-events: none;\n  }\n.react-flow__edge.selected,\n  .react-flow__edge:focus,\n  .react-flow__edge:focus-visible {\n    outline: none;\n  }\n.react-flow__edge.selected .react-flow__edge-path,\n  .react-flow__edge.selectable:focus .react-flow__edge-path,\n  .react-flow__edge.selectable:focus-visible .react-flow__edge-path {\n    stroke: var(--xy-edge-stroke-selected, var(--xy-edge-stroke-selected-default));\n  }\n.react-flow__edge-textwrapper {\n    pointer-events: all;\n  }\n.react-flow__edge .react-flow__edge-text {\n    pointer-events: none;\n    -webkit-user-select: none;\n       -moz-user-select: none;\n            user-select: none;\n  }\n/* Arrowhead marker styles - use CSS custom properties as default */\n.react-flow__arrowhead polyline {\n  stroke: var(--xy-edge-stroke, var(--xy-edge-stroke-default));\n}\n.react-flow__arrowhead polyline.arrowclosed {\n  fill: var(--xy-edge-stroke, var(--xy-edge-stroke-default));\n}\n.react-flow__connection {\n  pointer-events: none;\n}\n.react-flow__connection .animated {\n    stroke-dasharray: 5;\n    animation: dashdraw 0.5s linear infinite;\n  }\nsvg.react-flow__connectionline {\n  z-index: 1001;\n  overflow: visible;\n  position: absolute;\n}\n.react-flow__nodes {\n  pointer-events: none;\n  transform-origin: 0 0;\n}\n.react-flow__node {\n  position: absolute;\n  -webkit-user-select: none;\n     -moz-user-select: none;\n          user-select: none;\n  pointer-events: all;\n  transform-origin: 0 0;\n  box-sizing: border-box;\n  cursor: default;\n}\n.react-flow__node.selectable {\n    cursor: pointer;\n  }\n.react-flow__node.draggable {\n    cursor: grab;\n    pointer-events: all;\n  }\n.react-flow__node.draggable.dragging {\n      cursor: grabbing;\n    }\n.react-flow__nodesselection {\n  z-index: 3;\n  transform-origin: left top;\n  pointer-events: none;\n}\n.react-flow__nodesselection-rect {\n    position: absolute;\n    pointer-events: all;\n    cursor: grab;\n  }\n.react-flow__handle {\n  position: absolute;\n  pointer-events: none;\n  min-width: 5px;\n  min-height: 5px;\n  width: 6px;\n  height: 6px;\n  background-color: var(--xy-handle-background-color, var(--xy-handle-background-color-default));\n  border: 1px solid var(--xy-handle-border-color, var(--xy-handle-border-color-default));\n  border-radius: 100%;\n}\n.react-flow__handle.connectingfrom {\n    pointer-events: all;\n  }\n.react-flow__handle.connectionindicator {\n    pointer-events: all;\n    cursor: crosshair;\n  }\n.react-flow__handle-bottom {\n    top: auto;\n    left: 50%;\n    bottom: 0;\n    transform: translate(-50%, 50%);\n  }\n.react-flow__handle-top {\n    top: 0;\n    left: 50%;\n    transform: translate(-50%, -50%);\n  }\n.react-flow__handle-left {\n    top: 50%;\n    left: 0;\n    transform: translate(-50%, -50%);\n  }\n.react-flow__handle-right {\n    top: 50%;\n    right: 0;\n    transform: translate(50%, -50%);\n  }\n.react-flow__edgeupdater {\n  cursor: move;\n  pointer-events: all;\n}\n.react-flow__pane.selection .react-flow__panel {\n  pointer-events: none;\n}\n.react-flow__panel {\n  position: absolute;\n  z-index: 5;\n  margin: 15px;\n}\n.react-flow__panel.top {\n    top: 0;\n  }\n.react-flow__panel.bottom {\n    bottom: 0;\n  }\n.react-flow__panel.top.center, .react-flow__panel.bottom.center {\n      left: 50%;\n      transform: translateX(-15px) translateX(-50%);\n    }\n.react-flow__panel.left {\n    left: 0;\n  }\n.react-flow__panel.right {\n    right: 0;\n  }\n.react-flow__panel.left.center, .react-flow__panel.right.center {\n      top: 50%;\n      transform: translateY(-15px) translateY(-50%);\n    }\n.react-flow__attribution {\n  font-size: 10px;\n  background: var(--xy-attribution-background-color, var(--xy-attribution-background-color-default));\n  padding: 2px 3px;\n  margin: 0;\n}\n.react-flow__attribution a {\n    text-decoration: none;\n    color: #999;\n  }\n@keyframes dashdraw {\n  from {\n    stroke-dashoffset: 10;\n  }\n}\n.react-flow__edgelabel-renderer {\n  position: absolute;\n  width: 100%;\n  height: 100%;\n  pointer-events: none;\n  -webkit-user-select: none;\n     -moz-user-select: none;\n          user-select: none;\n  left: 0;\n  top: 0;\n}\n.react-flow__viewport-portal {\n  position: absolute;\n  width: 100%;\n  height: 100%;\n  left: 0;\n  top: 0;\n  -webkit-user-select: none;\n     -moz-user-select: none;\n          user-select: none;\n}\n.react-flow__minimap {\n  background: var(\n    --xy-minimap-background-color-props,\n    var(--xy-minimap-background-color, var(--xy-minimap-background-color-default))\n  );\n}\n.react-flow__minimap-svg {\n    display: block;\n  }\n.react-flow__minimap-mask {\n    fill: var(\n      --xy-minimap-mask-background-color-props,\n      var(--xy-minimap-mask-background-color, var(--xy-minimap-mask-background-color-default))\n    );\n    stroke: var(\n      --xy-minimap-mask-stroke-color-props,\n      var(--xy-minimap-mask-stroke-color, var(--xy-minimap-mask-stroke-color-default))\n    );\n    stroke-width: var(\n      --xy-minimap-mask-stroke-width-props,\n      var(--xy-minimap-mask-stroke-width, var(--xy-minimap-mask-stroke-width-default))\n    );\n  }\n.react-flow__minimap-node {\n    fill: var(\n      --xy-minimap-node-background-color-props,\n      var(--xy-minimap-node-background-color, var(--xy-minimap-node-background-color-default))\n    );\n    stroke: var(\n      --xy-minimap-node-stroke-color-props,\n      var(--xy-minimap-node-stroke-color, var(--xy-minimap-node-stroke-color-default))\n    );\n    stroke-width: var(\n      --xy-minimap-node-stroke-width-props,\n      var(--xy-minimap-node-stroke-width, var(--xy-minimap-node-stroke-width-default))\n    );\n  }\n.react-flow__background-pattern.dots {\n    fill: var(\n      --xy-background-pattern-color-props,\n      var(--xy-background-pattern-color, var(--xy-background-pattern-dots-color-default))\n    );\n  }\n.react-flow__background-pattern.lines {\n    stroke: var(\n      --xy-background-pattern-color-props,\n      var(--xy-background-pattern-color, var(--xy-background-pattern-lines-color-default))\n    );\n  }\n.react-flow__background-pattern.cross {\n    stroke: var(\n      --xy-background-pattern-color-props,\n      var(--xy-background-pattern-color, var(--xy-background-pattern-cross-color-default))\n    );\n  }\n.react-flow__controls {\n  display: flex;\n  flex-direction: column;\n  box-shadow: var(--xy-controls-box-shadow, var(--xy-controls-box-shadow-default));\n}\n.react-flow__controls.horizontal {\n    flex-direction: row;\n  }\n.react-flow__controls-button {\n    display: flex;\n    justify-content: center;\n    align-items: center;\n    height: 26px;\n    width: 26px;\n    padding: 4px;\n    border: none;\n    background: var(--xy-controls-button-background-color, var(--xy-controls-button-background-color-default));\n    border-bottom: 1px solid\n      var(\n        --xy-controls-button-border-color-props,\n        var(--xy-controls-button-border-color, var(--xy-controls-button-border-color-default))\n      );\n    color: var(\n      --xy-controls-button-color-props,\n      var(--xy-controls-button-color, var(--xy-controls-button-color-default))\n    );\n    cursor: pointer;\n    -webkit-user-select: none;\n       -moz-user-select: none;\n            user-select: none;\n  }\n.react-flow__controls-button svg {\n      width: 100%;\n      max-width: 12px;\n      max-height: 12px;\n      fill: currentColor;\n    }\n.react-flow__edge.updating .react-flow__edge-path {\n      stroke: #777;\n    }\n.react-flow__edge-text {\n    font-size: 10px;\n  }\n.react-flow__node.selectable:focus,\n  .react-flow__node.selectable:focus-visible {\n    outline: none;\n  }\n.react-flow__node-input,\n.react-flow__node-default,\n.react-flow__node-output,\n.react-flow__node-group {\n  padding: 10px;\n  border-radius: var(--xy-node-border-radius, var(--xy-node-border-radius-default));\n  width: 150px;\n  font-size: 12px;\n  color: var(--xy-node-color, var(--xy-node-color-default));\n  text-align: center;\n  border: var(--xy-node-border, var(--xy-node-border-default));\n  background-color: var(--xy-node-background-color, var(--xy-node-background-color-default));\n}\n.react-flow__node-input.selectable:hover, .react-flow__node-default.selectable:hover, .react-flow__node-output.selectable:hover, .react-flow__node-group.selectable:hover {\n      box-shadow: var(--xy-node-boxshadow-hover, var(--xy-node-boxshadow-hover-default));\n    }\n.react-flow__node-input.selectable.selected,\n    .react-flow__node-input.selectable:focus,\n    .react-flow__node-input.selectable:focus-visible,\n    .react-flow__node-default.selectable.selected,\n    .react-flow__node-default.selectable:focus,\n    .react-flow__node-default.selectable:focus-visible,\n    .react-flow__node-output.selectable.selected,\n    .react-flow__node-output.selectable:focus,\n    .react-flow__node-output.selectable:focus-visible,\n    .react-flow__node-group.selectable.selected,\n    .react-flow__node-group.selectable:focus,\n    .react-flow__node-group.selectable:focus-visible {\n      box-shadow: var(--xy-node-boxshadow-selected, var(--xy-node-boxshadow-selected-default));\n    }\n.react-flow__node-group {\n  background-color: var(--xy-node-group-background-color, var(--xy-node-group-background-color-default));\n}\n.react-flow__nodesselection-rect,\n.react-flow__selection {\n  background: var(--xy-selection-background-color, var(--xy-selection-background-color-default));\n  border: var(--xy-selection-border, var(--xy-selection-border-default));\n}\n.react-flow__nodesselection-rect:focus,\n  .react-flow__nodesselection-rect:focus-visible,\n  .react-flow__selection:focus,\n  .react-flow__selection:focus-visible {\n    outline: none;\n  }\n.react-flow__controls-button:hover {\n      background: var(\n        --xy-controls-button-background-color-hover-props,\n        var(--xy-controls-button-background-color-hover, var(--xy-controls-button-background-color-hover-default))\n      );\n      color: var(\n        --xy-controls-button-color-hover-props,\n        var(--xy-controls-button-color-hover, var(--xy-controls-button-color-hover-default))\n      );\n    }\n.react-flow__controls-button:disabled {\n      pointer-events: none;\n    }\n.react-flow__controls-button:disabled svg {\n        fill-opacity: 0.4;\n      }\n.react-flow__controls-button:last-child {\n    border-bottom: none;\n  }\n.react-flow__controls.horizontal .react-flow__controls-button {\n    border-bottom: none;\n    border-right: 1px solid\n      var(\n        --xy-controls-button-border-color-props,\n        var(--xy-controls-button-border-color, var(--xy-controls-button-border-color-default))\n      );\n  }\n.react-flow__controls.horizontal .react-flow__controls-button:last-child {\n    border-right: none;\n  }\n.react-flow__resize-control {\n  position: absolute;\n}\n.react-flow__resize-control.left,\n.react-flow__resize-control.right {\n  cursor: ew-resize;\n}\n.react-flow__resize-control.top,\n.react-flow__resize-control.bottom {\n  cursor: ns-resize;\n}\n.react-flow__resize-control.top.left,\n.react-flow__resize-control.bottom.right {\n  cursor: nwse-resize;\n}\n.react-flow__resize-control.bottom.left,\n.react-flow__resize-control.top.right {\n  cursor: nesw-resize;\n}\n/* handle styles */\n.react-flow__resize-control.handle {\n  width: 5px;\n  height: 5px;\n  border: 1px solid #fff;\n  border-radius: 1px;\n  background-color: var(--xy-resize-background-color, var(--xy-resize-background-color-default));\n  translate: -50% -50%;\n}\n.react-flow__resize-control.handle.left {\n  left: 0;\n  top: 50%;\n}\n.react-flow__resize-control.handle.right {\n  left: 100%;\n  top: 50%;\n}\n.react-flow__resize-control.handle.top {\n  left: 50%;\n  top: 0;\n}\n.react-flow__resize-control.handle.bottom {\n  left: 50%;\n  top: 100%;\n}\n.react-flow__resize-control.handle.top.left {\n  left: 0;\n}\n.react-flow__resize-control.handle.bottom.left {\n  left: 0;\n}\n.react-flow__resize-control.handle.top.right {\n  left: 100%;\n}\n.react-flow__resize-control.handle.bottom.right {\n  left: 100%;\n}\n/* line styles */\n.react-flow__resize-control.line {\n  border-color: var(--xy-resize-background-color, var(--xy-resize-background-color-default));\n  border-width: 0;\n  border-style: solid;\n}\n.react-flow__resize-control.line.left,\n.react-flow__resize-control.line.right {\n  width: 1px;\n  transform: translate(-50%, 0);\n  top: 0;\n  height: 100%;\n}\n.react-flow__resize-control.line.left {\n  left: 0;\n  border-left-width: 1px;\n}\n.react-flow__resize-control.line.right {\n  left: 100%;\n  border-right-width: 1px;\n}\n.react-flow__resize-control.line.top,\n.react-flow__resize-control.line.bottom {\n  height: 1px;\n  transform: translate(0, -50%);\n  left: 0;\n  width: 100%;\n}\n.react-flow__resize-control.line.top {\n  top: 0;\n  border-top-width: 1px;\n}\n.react-flow__resize-control.line.bottom {\n  border-bottom-width: 1px;\n  top: 100%;\n}\n.react-flow__edge-textbg {\n  fill: var(--xy-edge-label-background-color, var(--xy-edge-label-background-color-default));\n}\n.react-flow__edge-text {\n  fill: var(--xy-edge-label-color, var(--xy-edge-label-color-default));\n}\n";
 //#endregion
-//#region dsh-plugin/src/editor/model.ts
+//#region
 var PALETTE = [
 	{
 		type: "prompt",
@@ -11566,6 +11584,8 @@ function buildFlow(base, bodies, nodes, edges) {
 		} else if (outs.length === 1) {
 			const single = outs[0];
 			const singleOutlet = single.data?.outlet;
+			const meta = single.data ?? {};
+			const wasBranch = (body.branches?.length ?? 0) > 0 || meta.branchId !== void 0 || meta.condition !== void 0 || meta.when !== void 0;
 			if (body.type === "gate" && singleOutlet !== void 0) {
 				const previous = body.branches?.find((branch) => branch.id === single.data?.branchId);
 				const option = (body.options ?? []).find((item) => item.id === singleOutlet);
@@ -11577,6 +11597,25 @@ function buildFlow(base, bodies, nodes, edges) {
 					outlet: singleOutlet
 				}];
 				delete node.next;
+			} else if (wasBranch) {
+				const previous = body.branches?.find((branch) => branch.id === meta.branchId);
+				const dataCondition = meta.condition;
+				const condition = dataCondition !== void 0 ? dataCondition : previous?.condition ?? "*";
+				const branch = {
+					...previous ?? {},
+					id: previous?.id ?? uniqueBranchId(meta.branchId ?? "b1", /* @__PURE__ */ new Set()),
+					condition,
+					to: single.target
+				};
+				const rawOutlet = meta.outlet;
+				const outlet = rawOutlet !== void 0 ? rawOutlet === "" ? void 0 : rawOutlet : previous?.outlet;
+				if (outlet !== void 0) branch.outlet = outlet;
+				const dataWhen = meta.when;
+				const when = dataWhen !== void 0 ? dataWhen.trim() === "" ? void 0 : dataWhen.trim() : previous?.when;
+				if (when !== void 0) branch.when = when;
+				else delete branch.when;
+				node.branches = [branch];
+				delete node.next;
 			} else {
 				node.next = single.target;
 				delete node.branches;
@@ -11586,9 +11625,9 @@ function buildFlow(base, bodies, nodes, edges) {
 			node.branches = outs.map((edge, index) => {
 				const previous = body.branches?.find((branch) => branch.id === edge.data?.branchId);
 				const dataCondition = edge.data?.condition;
-				const rawCondition = dataCondition !== void 0 ? dataCondition : previous?.condition ?? (index === 0 ? "*" : "");
-				const condition = rawCondition === "" && index === 0 ? "*" : rawCondition;
-				const outlet = edge.data?.outlet ?? previous?.outlet;
+				const condition = dataCondition !== void 0 ? dataCondition : previous?.condition ?? (index === 0 ? "*" : "");
+				const rawOutlet = edge.data?.outlet;
+				const outlet = rawOutlet !== void 0 ? rawOutlet === "" ? void 0 : rawOutlet : previous?.outlet;
 				const dataWhen = edge.data?.when;
 				const when = dataWhen !== void 0 ? dataWhen.trim() === "" ? void 0 : dataWhen.trim() : previous?.when;
 				const branch = previous !== void 0 ? {
@@ -11636,7 +11675,7 @@ function buildFlow(base, bodies, nodes, edges) {
 	};
 }
 //#endregion
-//#region dsh-plugin/src/editor/styles.ts
+//#region
 var editorCss = `
 .wf-page{display:flex;flex-direction:column;height:100%;min-height:420px;min-width:0;position:relative;color:var(--dsw-alias-label-primary);font-size:13px}
 .wf-head{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--dsw-alias-border-l1);flex:none;flex-wrap:wrap}
@@ -11898,7 +11937,7 @@ button.wf-sum-chip:hover{border-color:var(--dsw-alias-brand-primary);color:var(-
 .wf-outlet-name{font-weight:600;font-size:12px;color:var(--dsw-alias-label-primary);word-break:break-word}
 `;
 //#endregion
-//#region dsh-plugin/src/editor/canvas.tsx
+//#region
 /** 点卡片右侧的出口名字 = 开始连一条线（再点目标节点完成），回调由页面给 */
 var OutletClickContext = react.createContext(() => {});
 /** 点子图卡片里的「打开」= 进入内嵌子图编辑，回调由页面给 */
@@ -12085,7 +12124,7 @@ function FlowCanvas(props) {
 	return /* @__PURE__ */ react.createElement("div", { className: "wf-canvas" }, /* @__PURE__ */ react.createElement("style", null, style_default), /* @__PURE__ */ react.createElement("style", null, editorCss), /* @__PURE__ */ react.createElement(ReactFlowProvider, null, /* @__PURE__ */ react.createElement(CanvasFlow, props)));
 }
 //#endregion
-//#region dsh-plugin/src/editor/inspector.tsx
+//#region
 function Field({ label, hint, tip, children }) {
 	return /* @__PURE__ */ react.createElement("div", { className: "wf-field" }, /* @__PURE__ */ react.createElement("span", { className: "wf-label" }, label, tip !== void 0 && /* @__PURE__ */ react.createElement("span", {
 		className: "wf-tip",
@@ -12798,7 +12837,7 @@ function insertToken(area, token) {
 	area.setSelectionRange(caret, caret);
 }
 //#endregion
-//#region dsh-plugin/src/editor/menu.tsx
+//#region
 function ContextMenu(props) {
 	const rootRef = react.useRef(null);
 	const [pos, setPos] = react.useState({
@@ -12928,7 +12967,7 @@ function SubMenu({ items, onPick }) {
 	}, /* @__PURE__ */ react.createElement("span", { className: "wf-menu-label" }, item.label), item.hint !== void 0 && /* @__PURE__ */ react.createElement("span", { className: "wf-menu-hint" }, item.hint))));
 }
 //#endregion
-//#region dsh-plugin/src/editor/page.tsx
+//#region
 var PAGE_STYLE$1 = {
 	background: "var(--dsw-alias-bg-base, Canvas)",
 	color: "var(--dsw-alias-label-primary, CanvasText)",
@@ -13144,6 +13183,8 @@ function Editor({ initial, flows, onBack, onExit }) {
 	const historyRef = react.useRef(history);
 	const selectedRef = react.useRef(null);
 	const saveRef = react.useRef(null);
+	/** 上次保存/加载时的图签名：dirty 由"当前 composeRoot 签名 ≠ 基线"派生，撤销回原样后能自动归零 */
+	const savedSignatureRef = react.useRef(null);
 	/** frames 的同步副本：composeRoot 等事件处理里立刻要读，不等下一次 render */
 	const framesRef = react.useRef([]);
 	const liveRef = react.useRef({
@@ -13192,7 +13233,6 @@ function Editor({ initial, flows, onBack, onExit }) {
 		setName(snapshot.name);
 		setSelectedId((current) => current !== null && snapshot.nodes.some((node) => node.id === current) ? current : null);
 		mergeRef.current = null;
-		setDirty(true);
 	}, [setNodes, setEdges]);
 	/** 切换当前编辑的画布（主图 / 子图）：整份状态换掉，不走进度历史 */
 	const loadGraph = react.useCallback((flow) => {
@@ -13217,11 +13257,12 @@ function Editor({ initial, flows, onBack, onExit }) {
 	/** 把当前正在编辑的层（可能是最内层子图）折回主图，得到可保存/校验的根 Flow */
 	const composeRoot = react.useCallback(() => {
 		const snapshot = liveRef.current;
+		const currentAgents = snapshot.agents;
 		let flow = buildFlow({
 			...baseRef.current,
 			name: snapshot.name,
 			entry: snapshot.entry,
-			agents: snapshot.agents
+			agents: currentAgents
 		}, snapshot.bodies, snapshot.nodes, snapshot.edges);
 		const stack = framesRef.current;
 		for (let index = stack.length - 1; index >= 0; index -= 1) {
@@ -13246,7 +13287,8 @@ function Editor({ initial, flows, onBack, onExit }) {
 				bodies: {
 					...frame.snapshot.bodies,
 					[frame.parentNodeId]: updated
-				}
+				},
+				agents: currentAgents
 			};
 			flow = buildFlow({
 				...frame.base,
@@ -13257,6 +13299,31 @@ function Editor({ initial, flows, onBack, onExit }) {
 		}
 		return flow;
 	}, []);
+	/** 脏标记 = 当前根图签名 ≠ 上次保存/加载时的签名。
+	*  比每个交互手动 setDirty 更可靠：撤销回原样、切换子图层、无改动返回父层都不会误报。 */
+	react.useEffect(() => {
+		let signature;
+		try {
+			signature = JSON.stringify(composeRoot());
+		} catch {
+			return;
+		}
+		if (savedSignatureRef.current === null) {
+			savedSignatureRef.current = signature;
+			setDirty(false);
+			return;
+		}
+		setDirty(signature !== savedSignatureRef.current);
+	}, [
+		composeRoot,
+		nodes,
+		edges,
+		bodies,
+		agents,
+		entry,
+		name,
+		frames
+	]);
 	/** 进入某个 subagent 节点的内嵌子图；没有子图时先建一张最小合法子图 */
 	const openSubflow = react.useCallback((nodeId) => {
 		const snapshot = liveRef.current;
@@ -13335,14 +13402,27 @@ function Editor({ initial, flows, onBack, onExit }) {
 			...frame.base,
 			name: frame.snapshot.name,
 			entry: frame.snapshot.entry,
-			agents: frame.snapshot.agents
+			agents: snapshot.agents
 		}, nextBodies, frame.snapshot.nodes, frame.snapshot.edges);
+		const changed = JSON.stringify({
+			name: owner.subflow?.name,
+			entry: owner.subflow?.entry,
+			nodes: owner.subflow?.nodes,
+			_ui: owner.subflow?._ui
+		}) !== JSON.stringify({
+			name: built.name,
+			entry: built.entry,
+			nodes: built.nodes,
+			_ui: built._ui
+		});
 		const nextFrames = framesRef.current.slice(0, -1);
 		framesRef.current = nextFrames;
 		setFrames(nextFrames);
 		loadGraph(parentFlow);
-		setHistory(frame.history);
-		setDirty(true);
+		setHistory(changed ? {
+			past: [...frame.history.past.slice(-49), frame.snapshot],
+			future: []
+		} : frame.history);
 	}, [loadGraph]);
 	const undo = react.useCallback(() => {
 		const { past, future } = historyRef.current;
@@ -13406,7 +13486,15 @@ function Editor({ initial, flows, onBack, onExit }) {
 		record();
 		setEntry(id);
 		setNodes((all) => withEntryFlags(all, id));
-	}, [record, setNodes]);
+		if (liveRef.current.edges.some((edge) => edge.target === id)) {
+			setEdges((all) => all.filter((edge) => edge.target !== id));
+			reportInfo("已删除指向新入口的入线（入口不能有入边）");
+		}
+	}, [
+		record,
+		setNodes,
+		setEdges
+	]);
 	const placePoint = react.useCallback((at) => {
 		if (at !== void 0) return {
 			x: Math.round(at.x),
@@ -13566,8 +13654,11 @@ function Editor({ initial, flows, onBack, onExit }) {
 			reportInfo("入口节点不能有入线：先把别的节点设为入口");
 			return;
 		}
-		if (snapshot.edges.some((edge) => edge.source === connection.source && edge.target === connection.target)) return;
 		const outlet = outletOfConnection(connection.source, connection.sourceHandle, snapshot);
+		if (snapshot.edges.some((edge) => edge.source === connection.source && edge.target === connection.target && (edge.data?.outlet ?? "") === (outlet?.key ?? ""))) {
+			reportInfo("这两个节点之间已经有这条连线了");
+			return;
+		}
 		if (outlet !== void 0 && snapshot.edges.some((edge) => edge.source === connection.source && edge.data?.outlet === outlet.key)) {
 			reportInfo(`出口「${outlet.label}」已经连了别的节点：先删掉那条线，或从别的出口连`);
 			return;
@@ -13600,13 +13691,17 @@ function Editor({ initial, flows, onBack, onExit }) {
 			reportInfo("这两个节点之间已经有这条连线了");
 			return;
 		}
+		const reconnectOutlet = outletOfConnection(source, connection.sourceHandle, snapshot);
+		if (reconnectOutlet !== void 0 && snapshot.edges.some((edge) => edge.id !== oldEdge.id && edge.source === source && edge.data?.outlet === reconnectOutlet.key)) {
+			reportInfo(`出口「${reconnectOutlet.label}」已经连了别的节点：先删掉那条线，或从别的出口连`);
+			return;
+		}
 		record();
 		setEdges((all) => all.map((edge) => {
 			if (edge.id !== oldEdge.id) return edge;
 			const outlet = outletOfConnection(source, connection.sourceHandle, snapshot);
 			const data = { ...edge.data ?? {} };
-			if (outlet !== void 0) data.outlet = outlet.key;
-			else delete data.outlet;
+			data.outlet = outlet !== void 0 ? outlet.key : "";
 			return {
 				...edge,
 				source,
@@ -13698,7 +13793,7 @@ function Editor({ initial, flows, onBack, onExit }) {
 	};
 	const setWhen = (edgeId, value) => {
 		record(`when:${edgeId}`);
-		const when = value.trim() === "" ? void 0 : value;
+		const when = value.trim() === "" ? "" : value;
 		setEdges((all) => all.map((edge) => edge.id === edgeId ? {
 			...edge,
 			data: {
@@ -13708,7 +13803,7 @@ function Editor({ initial, flows, onBack, onExit }) {
 		} : edge));
 		setDirty(true);
 	};
-	/** 角色表改动：整体替换，撤销栈里也存一份 */
+	/** 角色表改动：整体替换，撤销栈里也存一份。角色表全图共享，各层读的都是这份 state。 */
 	const changeAgents = (next) => {
 		record("agents");
 		setAgents(next);
@@ -13775,8 +13870,14 @@ function Editor({ initial, flows, onBack, onExit }) {
 					setPendingLink(null);
 					return;
 				}
-				setValOpen(false);
-				setMenu(null);
+				if (valOpen) {
+					setValOpen(false);
+					return;
+				}
+				if (menu !== null) {
+					setMenu(null);
+					return;
+				}
 				setSelectedId(null);
 				return;
 			}
@@ -13816,7 +13917,9 @@ function Editor({ initial, flows, onBack, onExit }) {
 		undo,
 		copyNode,
 		pasteNode,
-		pendingLink
+		pendingLink,
+		valOpen,
+		menu
 	]);
 	const handleApi = react.useCallback((next) => {
 		canvasApiRef.current = next;
@@ -13866,6 +13969,7 @@ function Editor({ initial, flows, onBack, onExit }) {
 				framesRef.current = nextFrames;
 				setFrames(nextFrames);
 				loadGraph(result.flow);
+				savedSignatureRef.current = null;
 				setDirty(false);
 				setBanner({
 					kind: "ok",
@@ -14260,7 +14364,7 @@ function errorText$2(error) {
 	return error instanceof Error ? error.message : String(error);
 }
 //#endregion
-//#region dsh-plugin/src/i18n.ts
+//#region
 var NS = "aiworkflow-progress";
 var ZH = {
 	"btn.open": "打开 aiworkflow 执行进度",
@@ -14297,7 +14401,8 @@ var ZH = {
 	nodes: "个节点",
 	"payload.hint": "点击查看 payload",
 	"panel.label": "可视化工作流",
-	"panel.runs": "运行图"
+	"panel.runs": "运行图",
+	"panel.abandon": "放弃"
 };
 var EN = {
 	"btn.open": "Open aiworkflow progress",
@@ -14334,7 +14439,8 @@ var EN = {
 	nodes: " nodes",
 	"payload.hint": "Click to inspect the payload",
 	"panel.label": "Visual workflows",
-	"panel.runs": "Run graph"
+	"panel.runs": "Run graph",
+	"panel.abandon": "Abandon"
 };
 function phaseKey(phase) {
 	return `phase.${phase}`;
@@ -14365,7 +14471,7 @@ function bindTranslate(ctx) {
 	};
 }
 //#endregion
-//#region dsh-plugin/src/runview/styles.ts
+//#region
 var runCss = `
 .awr-page{display:flex;flex-direction:column;height:100%;min-height:420px;min-width:0;
   color:var(--dsw-alias-label-primary);font-size:13px;background:var(--dsw-alias-bg-base)}
@@ -14486,7 +14592,7 @@ var runCss = `
 .awr-dialog-close:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-1)}
 `;
 //#endregion
-//#region dsh-plugin/src/runview/canvas.tsx
+//#region
 function RunNode({ id, data, selected }) {
 	const shown = data.detail.length > 64 ? `${data.detail.slice(0, 64)}…` : data.detail;
 	const outCount = useStore((state) => state.edges.reduce((total, edge) => edge.source === id ? total + 1 : total, 0));
@@ -14535,7 +14641,7 @@ function RunCanvas({ nodes, edges, selectedId, onSelect }) {
 	}), /* @__PURE__ */ react.createElement(Controls, { showInteractive: false })));
 }
 //#endregion
-//#region dsh-plugin/src/runview/model.ts
+//#region
 var ACTIVE_RUN = /* @__PURE__ */ new Set([
 	"running",
 	"waiting_gate",
@@ -14641,7 +14747,7 @@ function buildRunGraph(detail) {
 	};
 }
 //#endregion
-//#region dsh-plugin/src/runview/page.tsx
+//#region
 var PHASE_TEXT = {
 	running: "进行中",
 	gate: "等人工确认",
@@ -14876,7 +14982,7 @@ function errorText$1(error) {
 	return error instanceof Error ? error.message : String(error);
 }
 //#endregion
-//#region dsh-plugin/src/runview/overlay.tsx
+//#region
 var open$1 = false;
 var listeners$1 = /* @__PURE__ */ new Set();
 var runOverlay = {
@@ -14931,7 +15037,7 @@ function RunGraphOverlay({ store }) {
 	}, "✕")));
 }
 //#endregion
-//#region dsh-plugin/src/styles.tsx
+//#region
 var css = `
 .awp-pill{display:inline-flex;align-items:center;gap:7px;height:26px;padding:0 10px;border-radius:999px;
   border:1px solid var(--dsw-alias-border-l1);background:transparent;color:var(--dsw-alias-label-secondary);
@@ -15086,7 +15192,7 @@ function Dot({ phase }) {
 	});
 }
 //#endregion
-//#region dsh-plugin/src/panel.tsx
+//#region
 function ProgressPanel({ store, t }) {
 	const snap = react.useSyncExternalStore(store.subscribe, store.getSnapshot);
 	const [openExec, setOpenExec] = react.useState(null);
@@ -15102,6 +15208,24 @@ function ProgressPanel({ store, t }) {
 	const executions = detail === null ? [] : detail.executions;
 	const rows = [...executions].reverse();
 	const runs = dedupeRuns([...snap.active, ...snap.recent]);
+	/** 放弃当前 run：把 root 及未终结 child 一起判失败（引擎不按时间自动清僵尸 run） */
+	const abandon = async (runId, label) => {
+		if (!window.confirm(`放弃「${label}」（${runId}）？当前 run 与未完成的子任务会立即判失败，不可恢复。`)) return;
+		try {
+			const body = await (await fetch(resolveEndpoint("aiworkflow/runs/abandon"), {
+				method: "POST",
+				headers: {
+					"content-type": "application/json",
+					accept: "application/json"
+				},
+				body: JSON.stringify({ runId })
+			})).json();
+			if (body.ok !== true || body.result?.error === true) window.alert(body.result?.what ?? "放弃失败，请刷新后重试");
+		} catch (cause) {
+			window.alert(`无法连接插件 Host 半：${cause instanceof Error ? cause.message : String(cause)}`);
+		}
+		store.refresh();
+	};
 	return /* @__PURE__ */ react.createElement(react.Fragment, null, /* @__PURE__ */ react.createElement(Styles, null), /* @__PURE__ */ react.createElement("aside", {
 		className: "awp-panel",
 		role: "dialog",
@@ -15109,7 +15233,12 @@ function ProgressPanel({ store, t }) {
 	}, /* @__PURE__ */ react.createElement("header", { className: "awp-head" }, /* @__PURE__ */ react.createElement("span", { className: "awp-title" }, t("title")), phase !== null && /* @__PURE__ */ react.createElement("span", {
 		className: "awp-chip",
 		"data-phase": phase
-	}, /* @__PURE__ */ react.createElement(Dot, { phase }), t(phaseKey(phase))), /* @__PURE__ */ react.createElement("span", { className: "awp-spacer" }), /* @__PURE__ */ react.createElement("button", {
+	}, /* @__PURE__ */ react.createElement(Dot, { phase }), t(phaseKey(phase))), /* @__PURE__ */ react.createElement("span", { className: "awp-spacer" }), live && detail !== null && /* @__PURE__ */ react.createElement("button", {
+		type: "button",
+		className: "awp-textbtn",
+		onClick: () => void abandon(detail.id, detail.flowName ?? detail.flowId),
+		title: "放弃当前 run（连同未完成的子任务）"
+	}, t("panel.abandon")), /* @__PURE__ */ react.createElement("button", {
 		type: "button",
 		className: "awp-textbtn",
 		onClick: () => runOverlay.set(true),
@@ -15231,7 +15360,7 @@ function EmptyState({ title, hint, dbPath, label, endpoint }) {
 	})), /* @__PURE__ */ react.createElement("b", null, title), /* @__PURE__ */ react.createElement("p", null, hint), dbPath !== "" && /* @__PURE__ */ react.createElement("code", null, label, ": ", dbPath), endpoint !== void 0 && endpoint !== "" && dbPath === "" && /* @__PURE__ */ react.createElement("code", null, endpoint));
 }
 //#endregion
-//#region dsh-plugin/src/pill.tsx
+//#region
 function ProgressPill({ store, t, sessionId }) {
 	const snap = react.useSyncExternalStore(store.subscribe, store.getSnapshot);
 	react.useEffect(() => {
@@ -15255,7 +15384,7 @@ function ProgressPill({ store, t, sessionId }) {
 	}, /* @__PURE__ */ react.createElement(Dot, { phase }), run === null ? /* @__PURE__ */ react.createElement("span", { className: "awp-pill-name" }, t("idle")) : live ? /* @__PURE__ */ react.createElement(react.Fragment, null, /* @__PURE__ */ react.createElement("span", { className: "awp-pill-name" }, run.flowName ?? run.flowId), /* @__PURE__ */ react.createElement("span", { className: "awp-pill-sep" }), /* @__PURE__ */ react.createElement("span", { className: "awp-pill-sub" }, nodeName === "" ? t(phaseKey(phase)) : nodeName), /* @__PURE__ */ react.createElement("span", { className: "awp-pill-count" }, run.stepsUsed, " ", t("steps"))) : /* @__PURE__ */ react.createElement(react.Fragment, null, /* @__PURE__ */ react.createElement("span", { className: "awp-pill-name" }, run.flowName ?? run.flowId), /* @__PURE__ */ react.createElement("span", { className: "awp-pill-sep" }), /* @__PURE__ */ react.createElement("span", { className: "awp-pill-sub" }, t(phaseKey(phase))))));
 }
 //#endregion
-//#region dsh-plugin/src/picker.tsx
+//#region
 var open = false;
 var connection = null;
 var listeners = /* @__PURE__ */ new Set();
@@ -15426,7 +15555,7 @@ function WorkflowPickerDialog({ onStarted }) {
 	}, /* @__PURE__ */ react.createElement("span", { className: "awp-pick-name" }, flow.name), /* @__PURE__ */ react.createElement("span", { className: "awp-pick-meta" }, busy === flow.id ? "启动中…" : `${flow.id} · ${relTime(flow.updatedAt)}`))))))));
 }
 //#endregion
-//#region dsh-plugin/src/store.ts
+//#region
 var ENDPOINT = "aiworkflow/";
 var OPEN_INTERVAL = 2e3;
 var CLOSED_INTERVAL = 6e3;
@@ -15603,7 +15732,7 @@ function errorText(error) {
 	return String(error);
 }
 //#endregion
-//#region dsh-plugin/src/client.tsx
+//#region
 var inject = ["slots", "locale"];
 var HEADER_SLOT = "conversation.session.header.utilities";
 var OVERLAY_SLOT = "shell.overlay";

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path, { join } from "node:path";
 import os from "node:os";
 import { DatabaseSync } from "node:sqlite";
-//#region shared/src/sql.ts
+//#region
 var ACTIVE_STATUSES = [
 	"running",
 	"waiting_gate",
@@ -65,15 +65,22 @@ function readMonitorState(db, selectedId, limits = {}, hostSession) {
 	const all = listRuns(db, limits.runs ?? 60, hostSession ?? null);
 	const active = all.filter((r) => isActiveStatus(r.status)).slice(0, limits.list ?? 8);
 	const recent = all.filter((r) => !isActiveStatus(r.status)).slice(0, limits.list ?? 8);
+	const requested = selectedId !== null && selectedId !== void 0 && (hostSession === null || hostSession === void 0 || runSessionOf(db, selectedId) === hostSession) ? selectedId : void 0;
 	const rootActive = active.filter((r) => r.parentRunId === null);
 	const rootRecent = recent.filter((r) => r.parentRunId === null);
-	const chosen = (selectedId !== null && selectedId !== void 0 ? all.find((r) => r.id === selectedId)?.id : void 0) ?? rootActive[0]?.id ?? rootRecent[0]?.id ?? active[0]?.id ?? recent[0]?.id ?? null;
+	const chosen = requested ?? rootActive[0]?.id ?? rootRecent[0]?.id ?? active[0]?.id ?? recent[0]?.id ?? null;
 	return {
 		active,
 		recent,
 		selectedId: chosen,
 		detail: chosen === null ? null : getRunDetail(db, chosen) ?? null
 	};
+}
+/** run 所属的会话：child run 取它 root run 的 host_session（child 自己不带）。 */
+function runSessionOf(db, runId) {
+	return db.prepare(`SELECT COALESCE(root.host_session, r.host_session) AS session
+       FROM runs r LEFT JOIN runs root ON root.id = r.root_run_id
+       WHERE r.id = ?`).get(runId)?.session;
 }
 function resolvePendingGate(row, snapshot, gateRows) {
 	if (row.current_node === null || !isActiveStatus(row.status)) return null;
@@ -163,7 +170,7 @@ function trimPayload(value, maxChars = 4e3) {
 	};
 }
 //#endregion
-//#region shared/src/when.ts
+//#region
 var OPS = [
 	"==",
 	"!=",
@@ -320,7 +327,7 @@ function oneOf(value, candidates) {
 	return looseEqual(value, candidates);
 }
 //#endregion
-//#region shared/src/validate.ts
+//#region
 var TERMINAL_TYPES = /* @__PURE__ */ new Set(["end"]);
 var SUBAGENT_MODES = /* @__PURE__ */ new Set([
 	"inline",
@@ -344,10 +351,16 @@ function validateFlow(flow) {
 		nodeId
 	});
 	if (!flow.id || typeof flow.id !== "string") err("E_FLOW_ID", "图缺少 id");
+	else if (/[\\/:*?"<>|\u0000-\u001f]/.test(flow.id) || flow.id === "." || flow.id === ".." || flow.id !== flow.id.trim() || flow.id.endsWith(".")) err("E_FLOW_ID", `图 id 不能包含路径分隔符或文件名非法字符，也不能是 . / ..：${JSON.stringify(flow.id)}`);
 	if (!flow.name || typeof flow.name !== "string") err("E_FLOW_NAME", "图缺少 name");
 	if (flow.kind !== void 0 && flow.kind !== "flow" && flow.kind !== "agent") err("E_FLOW_KIND", `flow.kind 必须是 flow 或 agent：${String(flow.kind)}`);
+	if (flow.maxSteps !== void 0 && (!Number.isInteger(flow.maxSteps) || flow.maxSteps < 1)) err("E_MAX_STEPS", `flow.maxSteps 必须为正整数：${String(flow.maxSteps)}`);
 	if (!Array.isArray(flow.nodes) || flow.nodes.length === 0) {
 		err("E_NO_NODES", "图没有任何节点");
+		return finish(errors, warnings);
+	}
+	for (const node of flow.nodes) if (node === null || typeof node !== "object" || typeof node.id !== "string") {
+		err("E_NODE_SHAPE", "节点必须是带字符串 id 的对象");
 		return finish(errors, warnings);
 	}
 	for (const node of flow.nodes) if (node.type === "subagent" && node.mode === "flowRef" && node.flowRef === flow.id) err("E_FLOW_REF_SELF", `节点 "${node.id}" 引用了当前图自身`, node.id);
@@ -431,20 +444,33 @@ function validateNode(node, byId, err, warn, agentIds = /* @__PURE__ */ new Set(
 		if (!Number.isInteger(node.maxRounds) || node.maxRounds < 1) err("E_BAD_LOOP_LIMIT", `maxRounds 必须为正整数：${node.maxRounds}（节点 ${id}）`, id);
 		if (node.onLimitExceeded === void 0) warn("W_LIMIT_NO_ESCAPE", `节点 "${id}" 配了 maxRounds 但没有 onLimitExceeded，撞上限时将判 run 失败`, id);
 	}
-	if (node.branches !== void 0) {
+	if (node.branches !== void 0 && !Array.isArray(node.branches)) err("E_BRANCHES_TYPE", `节点 "${id}" 的 branches 必须是数组`, id);
+	if (Array.isArray(node.branches)) {
 		const branchIds = /* @__PURE__ */ new Set();
 		let defaults = 0;
 		let whenCount = 0;
+		const gateOptionIds = node.type === "gate" && Array.isArray(node.options) ? new Set(node.options.map((opt) => opt?.id).filter((value) => typeof value === "string")) : null;
+		const usedOutlets = /* @__PURE__ */ new Set();
 		for (const branch of node.branches) {
+			if (branch === null || typeof branch !== "object") {
+				err("E_BRANCH_SHAPE", `节点 "${id}" 存在非对象分支`, id);
+				continue;
+			}
 			if (!branch.id) err("E_BRANCH_ID", `节点 "${id}" 存在缺少 id 的分支`, id);
 			else if (branchIds.has(branch.id)) err("E_DUP_BRANCH", `分支 id 重复：${branch.id}（节点 ${id}）`, id);
 			else branchIds.add(branch.id);
-			if (!branch.condition || !branch.condition.trim()) err("E_EMPTY_CONDITION", `分支 "${branch.id}" 的 condition 为空（节点 ${id}）`, id);
+			if (typeof branch.condition !== "string" || branch.condition.trim() === "") err("E_EMPTY_CONDITION", `分支 "${branch.id}" 的 condition 为空（节点 ${id}）`, id);
 			if (branch.condition === "*") defaults++;
 			if (branch.to === void 0 || !byId.has(branch.to)) err("E_BAD_REF", `分支 "${branch.id}" 指向不存在的节点：${branch.to}（节点 ${id}）`, id);
+			if (branch.outlet !== void 0 && gateOptionIds !== null) {
+				if (typeof branch.outlet !== "string" || !gateOptionIds.has(branch.outlet)) err("E_BAD_OUTLET", `分支 "${branch.id}" 的 outlet 指向不存在的选项：${String(branch.outlet)}（节点 ${id}）`, id);
+				else if (usedOutlets.has(branch.outlet)) err("E_DUP_OUTLET", `卡点 "${id}" 的选项 ${branch.outlet} 连了多条出口分支`, id);
+				else usedOutlets.add(branch.outlet);
+			}
 			if (branch.when !== void 0) {
 				whenCount++;
-				if (branch.condition === "*") err("E_WHEN_DEFAULT", `默认分支 "${branch.id}" 不应再配 when（默认分支由“其他都不命中”兜底）`, id);
+				if (typeof branch.when !== "string") err("E_BAD_WHEN", `分支 "${branch.id}" 的 when 必须是字符串（节点 ${id}）`, id);
+				else if (branch.condition === "*") err("E_WHEN_DEFAULT", `默认分支 "${branch.id}" 不应再配 when（默认分支由“其他都不命中”兜底）`, id);
 				else {
 					const parsed = parseWhen(branch.when);
 					if (!parsed.ok) err("E_BAD_WHEN", `分支 "${branch.id}" 的 when 不合法：${parsed.error}`, id);
@@ -497,6 +523,7 @@ function validateNode(node, byId, err, warn, agentIds = /* @__PURE__ */ new Set(
 				const { from, count, max } = node.fanOut;
 				if (from !== void 0 === (count !== void 0)) err("E_FANOUT_SOURCE", `fanOut 必须且只能指定 from（插值）或 count（固定数）之一（节点 ${id}）`, id);
 				if (max !== void 0 && (!Number.isInteger(max) || max < 1)) err("E_FANOUT_SOURCE", `fanOut.max 必须为正整数：${max}（节点 ${id}）`, id);
+				if (count !== void 0 && (!Number.isInteger(count) || count < 1)) err("E_FANOUT_SOURCE", `fanOut.count 必须为正整数：${String(count)}（节点 ${id}）`, id);
 			}
 			if (node.role !== void 0) {
 				if (!node.role.trim()) err("E_BAD_ROLE", `subagent 节点 "${id}" 的 role 为空`, id);
@@ -555,6 +582,8 @@ function validateSubflow(subflow, parentId, err, warn, agentIds) {
 	}
 	const reachable = reachableFrom(subflow.entry, edges);
 	const terminals = subflow.nodes.filter(isTerminal).map((n) => n.id);
+	if (subflow.maxSteps !== void 0 && (!Number.isInteger(subflow.maxSteps) || subflow.maxSteps < 1)) err("E_MAX_STEPS", `subflow（节点 ${parentId}）的 maxSteps 必须为正整数：${String(subflow.maxSteps)}`, parentId);
+	for (const node of subflow.nodes) if (!reachable.has(node.id)) err("E_UNREACHABLE", `subflow（节点 ${parentId}）内的孤立节点：从 entry 不可达（${node.id}）`, node.id);
 	if (terminals.length === 0) err("E_NO_TERMINAL", `subflow（节点 ${parentId}）不存在任何终点`, parentId);
 	else {
 		const canTerminate = reverseReachable(terminals, edges);
@@ -628,7 +657,7 @@ function reachableExcludingStart(start, edges) {
 	return false;
 }
 //#endregion
-//#region shared/src/flows.ts
+//#region
 function kindOf(value) {
 	return value === "agent" ? "agent" : "flow";
 }
@@ -657,6 +686,13 @@ function getFlow(db, flowId) {
 		return;
 	}
 }
+/** 镜像文件必须落在 jsonDir 一层内；id 带路径分隔符时拒绝，避免写到数据目录之外 */
+function mirrorPath(jsonDir, flowId) {
+	const root = path.resolve(jsonDir);
+	const file = path.resolve(root, `${flowId}.json`);
+	if (path.dirname(file) !== root) throw new Error(`图 id 会写到 flows 目录之外，已拒绝：${JSON.stringify(flowId)}`);
+	return file;
+}
 function saveFlow(db, flow, jsonDir) {
 	const existing = db.prepare("SELECT kind FROM flows WHERE id = ?").get(flow.id);
 	const inherited = flow.kind ?? existing?.kind;
@@ -666,6 +702,7 @@ function saveFlow(db, flow, jsonDir) {
 	};
 	const result = validateFlow(candidate);
 	if (!result.ok) return result;
+	const mirror = mirrorPath(jsonDir, candidate.id);
 	const kind = kindOf(candidate.kind);
 	const stored = {
 		...candidate,
@@ -678,7 +715,7 @@ function saveFlow(db, flow, jsonDir) {
      ON CONFLICT(id) DO UPDATE SET name = excluded.name, kind = excluded.kind,
        content = excluded.content, updated_at = excluded.updated_at`).run(stored.id, stored.name, kind, content, now, now);
 	fs.mkdirSync(jsonDir, { recursive: true });
-	fs.writeFileSync(path.join(jsonDir, `${stored.id}.json`), content, "utf-8");
+	fs.writeFileSync(mirror, content, "utf-8");
 	return {
 		...result,
 		flow: stored
@@ -686,13 +723,18 @@ function saveFlow(db, flow, jsonDir) {
 }
 function deleteFlow(db, flowId, jsonDir) {
 	const info = db.prepare("DELETE FROM flows WHERE id = ?").run(flowId);
-	const mirror = path.join(jsonDir, `${flowId}.json`);
 	const changes = Number(info.changes);
-	if (changes > 0 && fs.existsSync(mirror)) fs.rmSync(mirror);
+	let mirror = null;
+	try {
+		mirror = mirrorPath(jsonDir, flowId);
+	} catch {
+		mirror = null;
+	}
+	if (changes > 0 && mirror !== null && fs.existsSync(mirror)) fs.rmSync(mirror);
 	return changes > 0;
 }
 //#endregion
-//#region shared/src/paths.ts
+//#region
 function homeDir() {
 	return process.env.AIWORKFLOW_HOME ?? path.join(os.homedir(), ".aiworkflow");
 }
@@ -708,7 +750,7 @@ function ensureLayout() {
 	fs.mkdirSync(cacheDir(), { recursive: true });
 }
 //#endregion
-//#region shared/src/schema.ts
+//#region
 var MIGRATIONS = [
 	`
   CREATE TABLE IF NOT EXISTS flows (
@@ -829,7 +871,7 @@ function migrateSchema(db) {
 	})();
 }
 //#endregion
-//#region dsh-plugin/src/sqlite.ts
+//#region
 var NodeSqliteDb = class {
 	raw;
 	depth = 0;
@@ -879,7 +921,7 @@ var NodeSqliteDb = class {
 	}
 };
 //#endregion
-//#region dsh-plugin/src/db.ts
+//#region
 var opened = null;
 function aiworkflowHome() {
 	return homeDir();
@@ -919,7 +961,7 @@ function closeDatabase() {
 	opened = null;
 }
 //#endregion
-//#region shared/src/canonical.ts
+//#region
 /** 按键排序的 JSON 序列化，保证同内容同串 */
 function stableStringify(value) {
 	return JSON.stringify(sortValue(value));
@@ -938,7 +980,7 @@ function contentHash(value) {
 	return crypto.createHash("sha256").update(stableStringify(value)).digest("hex").slice(0, 16);
 }
 //#endregion
-//#region shared/src/snapshot.ts
+//#region
 /** 递归解析 flowRef，构建完整快照。引用缺失或跨图循环时抛错。 */
 function buildSnapshot(rootFlow, resolver) {
 	const flows = {};
@@ -952,9 +994,14 @@ function buildSnapshot(rootFlow, resolver) {
 function collectFlows(flow, resolver, flows, visiting) {
 	if (flows[flow.id] !== void 0) return;
 	flows[flow.id] = flow;
-	for (const node of flow.nodes) if (node.type === "subagent") {
-		for (const sub of node.subflow?.nodes ?? []) if (sub.type === "subagent" && sub.mode === "flowRef" && sub.flowRef) collectRef(sub.flowRef, `${sub.id}（图 ${flow.id}）`, resolver, flows, visiting);
-		if (node.mode === "flowRef" && node.flowRef) collectRef(node.flowRef, `${node.id}（图 ${flow.id}）`, resolver, flows, visiting);
+	collectNodeRefs(flow.nodes, flow.id, resolver, flows, visiting);
+}
+/** 递归扫描一层画布里的 subagent 节点：flowRef 收进快照，内嵌子图继续往里扫（栈深任意）。 */
+function collectNodeRefs(nodes, ownerId, resolver, flows, visiting) {
+	for (const node of nodes) {
+		if (node.type !== "subagent") continue;
+		if (node.mode === "flowRef" && node.flowRef) collectRef(node.flowRef, `${node.id}（图 ${ownerId}）`, resolver, flows, visiting);
+		if (node.subflow !== void 0) collectNodeRefs(node.subflow.nodes, ownerId, resolver, flows, visiting);
 	}
 }
 function collectRef(refId, where, resolver, flows, visiting) {
@@ -994,7 +1041,7 @@ function loadSnapshot(db, hash) {
 	return row === void 0 ? void 0 : JSON.parse(row.content);
 }
 //#endregion
-//#region shared/src/engine.ts
+//#region
 /** 支持推进的节点类型（阶段 6 起六种全支持） */
 var SUPPORTED_TYPES = /* @__PURE__ */ new Set([
 	"prompt",
@@ -1040,6 +1087,21 @@ var ExecutionEngine = class {
 			const list = unsupported.map((n) => `${n.type}（${n.title ?? n.id}）`).join("、");
 			return selfHeal(`流程「${flow.name}」包含当前版本不认识的节点类型：${list}。`, "这张图可能由更新版本的服务创建，请升级 aiworkflow 后再跑。");
 		}
+		if (params.hostSession !== void 0) {
+			const active = this.latestActiveRunByHostSession(params.hostSession);
+			if (active !== null) {
+				let label = active.flow_id;
+				let nodeLabel = active.current_node ?? "—";
+				let current = null;
+				try {
+					const activeSnapshot = this.snapshotOf(active);
+					label = activeSnapshot.flows[activeSnapshot.rootFlowId]?.name ?? label;
+					nodeLabel = (active.current_node !== null ? findNode(activeSnapshot, active.current_node) : void 0)?.title ?? nodeLabel;
+					current = this.currentRef(active);
+				} catch {}
+				return selfHeal(`当前会话已有进行中的 run：${active.id}（${label} · 当前节点 ${nodeLabel}）。同一会话同时只能有一个活跃 run，否则后续 complete_step 会打到最新的那个。`, "先把它跑完；确实要换流程，请在「执行进度」面板点「放弃」结束当前 run，再 start_run。", current);
+			}
+		}
 		let snapshot;
 		try {
 			snapshot = buildSnapshot(flow, { get: (id) => this.resolveFlow(id) });
@@ -1072,7 +1134,10 @@ var ExecutionEngine = class {
 		}
 		if (entryNode !== void 0 && entryNode.type === "subagent") {
 			const spawned = this.enterSubagent(runId, entryNode, now);
-			if (spawned !== void 0) return spawned;
+			if (spawned !== void 0) {
+				this.failRunById(runId);
+				return selfHeal(spawned.what, `${spawned.guidance}入口派发失败，run 已判失败；修好后重新 start_run。`, null);
+			}
 		}
 		return this.stepResult(runId);
 	}
@@ -1122,7 +1187,7 @@ var ExecutionEngine = class {
 			kind: "advance",
 			targetId: null,
 			limitRows: []
-		} : this.resolveAdvance(run, snapshot, successorId);
+		} : this.resolveAdvance(run, snapshot, successorId, node.id);
 		this.advanceTransaction(run, snapshot, plan, {
 			nodeId: node.id,
 			status: "completed",
@@ -1195,7 +1260,7 @@ var ExecutionEngine = class {
 			}, blockedRow, now);
 			return this.finishedResult(run.id, "fail", `节点 ${node.id} 上报阻塞：${params.reason}。没有可用出口，run 判失败。`);
 		}
-		const plan = this.resolveAdvance(run, snapshot, exitId);
+		const plan = this.resolveAdvance(run, snapshot, exitId, node.id);
 		this.advanceTransaction(run, snapshot, plan, blockedRow, now);
 		const spawned = this.ensureChildrenSpawned(run.id);
 		if (spawned !== void 0) {
@@ -1214,7 +1279,7 @@ var ExecutionEngine = class {
 			const decided = this.gateRowById(params.gateId);
 			if (decided !== void 0) {
 				const r = this.runById(decided.run_id);
-				return selfHeal(`卡点 ${params.gateId} 已经被答复过了（不能重复作答）。`, "调 get_current_step() 看当前进展；如果流程又走到新的卡点，用新下发的 gateId 作答。", r !== null ? this.currentOf(r) : null);
+				return selfHeal(`卡点 ${params.gateId} 已经被答复或关闭（不能重复作答）。`, "调 get_current_step() 看当前进展；如果流程又走到新的卡点，用新下发的 gateId 作答。", r !== null ? this.currentOf(r) : null);
 			}
 			return selfHeal(`gateId 无效：「${params.gateId}」不对应任何卡点。`, "gateId 从 gate 步骤的下发内容里取；也可以省略 gateId，按当前 run 的挂起卡点作答。", null);
 		}
@@ -1289,7 +1354,7 @@ var ExecutionEngine = class {
 			kind: "advance",
 			targetId: null,
 			limitRows: []
-		} : this.resolveAdvance(run, snapshot, successorId);
+		} : this.resolveAdvance(run, snapshot, successorId, node.id);
 		this.advanceTransaction(run, snapshot, plan, gateRow, now, {
 			decisionId: row.id,
 			optionId: option.id,
@@ -1323,6 +1388,41 @@ var ExecutionEngine = class {
 			await sleep(Math.min(400, Math.max(1, deadline - Date.now())));
 		}
 	}
+	/** 主动放弃一个 run（面板/用户操作）：root 及其未终结的 child 一起判失败，落一条 blocked 轨迹说明原因。
+	*  这是唯一能把僵尸 run 从 running/waiting_* 里清出来的入口（引擎不按时间自动标 stale）。 */
+	abandonRun(params) {
+		const run = this.resolveRun(params);
+		if (run === null) return selfHeal("没有找到要放弃的 run。", "先调 get_current_step 确认当前 run；面板里请刷新后重试。");
+		if (isTerminalRun(run)) return selfHeal(`run ${run.id} 已经结束（${run.status}），不需要放弃。`, "调 get_current_step 查看状态；要跑新流程直接 start_run。", this.currentOf(run));
+		const root = run.root_run_id ?? run.id;
+		const now = (/* @__PURE__ */ new Date()).toISOString();
+		const reason = params.reason?.trim() || "用户放弃（面板操作）";
+		const active = this.db.prepare(`SELECT id, current_node FROM runs
+         WHERE (id = ? OR root_run_id = ?) AND status IN ('running', 'waiting_gate', 'waiting_children')
+         ORDER BY created_at, rowid`).all(run.id, root);
+		this.db.transaction(() => {
+			const update = this.db.prepare(`UPDATE runs SET status = 'failed', outcome = 'fail', last_activity = ?, finished_at = ? WHERE id = ?`);
+			const insert = this.db.prepare(`INSERT INTO node_executions (run_id, node_id, iteration, status, summary, payload, branch_id, started_at, finished_at)
+         VALUES (?, ?, ?, 'blocked', ?, '{}', NULL, ?, ?)`);
+			const closeGates = this.db.prepare(`UPDATE gate_decisions SET option_id = NULL, note = ?, source = 'abandoned', decided_at = ?
+         WHERE run_id = ? AND decided_at IS NULL`);
+			for (const row of active) {
+				update.run(now, now, row.id);
+				closeGates.run(reason, now, row.id);
+				if (row.current_node !== null) insert.run(row.id, row.current_node, this.execCount(row.id, row.current_node) + 1, reason, now, now);
+			}
+		})();
+		for (const row of active) this.emit({
+			type: "run_finished",
+			runId: row.id,
+			outcome: "fail",
+			at: now
+		});
+		return {
+			runId: run.id,
+			abandoned: active.length
+		};
+	}
 	/** child run 从入口直接开始时（entry 是 gate/subagent），第一次领步补做 startRun 的入口特判 */
 	bootstrapEntry(run) {
 		if (run.status !== "running" || run.current_node === null || run.steps_used !== 0) return void 0;
@@ -1343,7 +1443,11 @@ var ExecutionEngine = class {
 		}
 		if (node.type === "subagent") {
 			const spawned = this.enterSubagent(run.id, node, now);
-			return spawned !== void 0 ? spawned : this.stepResult(run.id);
+			if (spawned !== void 0) {
+				this.failRunById(run.id);
+				return selfHeal(spawned.what, `${spawned.guidance}入口派发失败，run 已判失败。`, null);
+			}
+			return this.stepResult(run.id);
 		}
 	}
 	/** 入口即派发：start 后直接建 child 并挂 waiting_children（与入口即 gate 对称） */
@@ -1362,6 +1466,7 @@ var ExecutionEngine = class {
 		this.db.transaction(() => {
 			this.db.prepare(`UPDATE runs SET status = 'waiting_children', last_activity = ? WHERE id = ?`).run(now, runId);
 			this.insertChildRuns(run, node.id, plans, events, now);
+			if (list.fanOuted) this.insertDispatchedRow(run, node.id, plans, list.dropped, now);
 		})();
 		for (const e of events) this.emit(e);
 	}
@@ -1446,6 +1551,11 @@ var ExecutionEngine = class {
 	*  只在节点显式声明 branches 时生效；无分支节点仍走 next。 */
 	completeSubagentRoute(run, params) {
 		const snapshot = this.snapshotOf(run);
+		const maxSteps = this.maxStepsOf(snapshot);
+		if (run.steps_used >= maxSteps) {
+			this.failRun(run);
+			return this.finishedResult(run.id, "fail", `已超出全局步数上限（${maxSteps} 步），run 判失败。`);
+		}
 		const node = run.current_node !== null ? findNode(snapshot, run.current_node) : void 0;
 		if (node === void 0 || node.type !== "subagent") return selfHeal(`run ${run.id} 处于 waiting_children 但当前节点不是 subagent（${run.current_node}），数据异常。`, "这是服务端数据问题，请把这条错误原样反馈给用户。", null);
 		if ((node.branches ?? []).length === 0) return selfHeal("这一步是子 Agent 派发步，完成由子任务回报驱动，不用 complete_step。", "把每个 child 的 preamble 原样放进子任务开头派出；等全部子任务返回后调 get_current_step()，服务端会汇聚结果给出下一步。", this.currentRef(run));
@@ -1471,7 +1581,7 @@ var ExecutionEngine = class {
 			branchId: selected.branch.id,
 			artifacts: params.artifacts
 		};
-		const plan = this.resolveAdvance(run, snapshot, selected.branch.to);
+		const plan = this.resolveAdvance(run, snapshot, selected.branch.to, node.id);
 		this.advanceTransaction(run, snapshot, plan, sRow, now);
 		const spawned = this.ensureChildrenSpawned(run.id);
 		if (spawned !== void 0) {
@@ -1552,6 +1662,11 @@ var ExecutionEngine = class {
 	*  对稳定的 child 终态收敛（重复调用幂等）：要么推进离开派发步，要么重派后仍在派发步等新一轮回报。 */
 	gatherChildren(run) {
 		const snapshot = this.snapshotOf(run);
+		const maxSteps = this.maxStepsOf(snapshot);
+		if (run.steps_used >= maxSteps) {
+			this.failRun(run);
+			return this.finishedResult(run.id, "fail", `已超出全局步数上限（${maxSteps} 步），run 判失败。`);
+		}
 		const node = run.current_node !== null ? findNode(snapshot, run.current_node) : void 0;
 		if (node === void 0 || node.type !== "subagent") return selfHeal(`run ${run.id} 处于 waiting_children 但当前节点不是 subagent（${run.current_node}），数据异常。`, "这是服务端数据问题，请把这条错误原样反馈给用户。", null);
 		let slots = this.childSlots(run.id, node.id);
@@ -1565,7 +1680,12 @@ var ExecutionEngine = class {
 				plans.push(planned);
 			}
 			this.spawnChildren(run, node.id, plans, list.fanOuted ? { dropped: list.dropped } : void 0);
-			slots = this.childSlots(run.id, node.id);
+			const step = this.stepResult(run.id);
+			const note = "派发步的 child 记录缺失（上次推进后进程中断），已按节点配置补建；把下面的 preamble 发给子 Agent，全部返回后再调 get_current_step()。";
+			return "step" in step ? {
+				...step,
+				note
+			} : step;
 		}
 		const now = (/* @__PURE__ */ new Date()).toISOString();
 		const stuck = slots.filter((s) => !isTerminalRun(s.latest));
@@ -1617,7 +1737,7 @@ var ExecutionEngine = class {
 				payload: JSON.stringify(merged),
 				branchId: chosen.id
 			};
-			const plan = this.resolveAdvance(run, snapshot, chosen.to);
+			const plan = this.resolveAdvance(run, snapshot, chosen.to, node.id);
 			this.advanceTransaction(run, snapshot, plan, routeRow, now);
 			const spawned = this.ensureChildrenSpawned(run.id);
 			if (spawned !== void 0) {
@@ -1645,7 +1765,7 @@ var ExecutionEngine = class {
 			kind: "advance",
 			targetId: null,
 			limitRows: []
-		} : this.resolveAdvance(run, snapshot, successorId);
+		} : this.resolveAdvance(run, snapshot, successorId, node.id);
 		this.advanceTransaction(run, snapshot, plan, sRow, now);
 		const spawned = this.ensureChildrenSpawned(run.id);
 		if (spawned !== void 0) {
@@ -1669,16 +1789,18 @@ var ExecutionEngine = class {
 		this.db.transaction(() => {
 			this.db.prepare(`UPDATE runs SET last_activity = ? WHERE id = ?`).run(now, run.id);
 			this.insertChildRuns(run, parentNodeId, plans, events, now);
-			if (fanout !== void 0) {
-				const droppedNote = fanout.dropped.length > 0 ? `（max 截断，丢弃 ${fanout.dropped.length} 个：${fanout.dropped.map(formatItem).join("、")}）` : "";
-				this.db.prepare(`INSERT INTO node_executions (run_id, node_id, iteration, status, summary, payload, branch_id, started_at, finished_at)
-             VALUES (?, ?, ?, 'dispatched', ?, ?, NULL, ?, ?)`).run(run.id, parentNodeId, this.execCount(run.id, parentNodeId) + 1, `派出 ${plans.length} 个子任务${droppedNote}`, JSON.stringify({
-					children: plans.map((p) => p.runId),
-					dropped: fanout.dropped
-				}), now, now);
-			}
+			if (fanout !== void 0) this.insertDispatchedRow(run, parentNodeId, plans, fanout.dropped, now);
 		})();
 		for (const e of events) this.emit(e);
+	}
+	/** 派发轨迹（dispatched）：N 个 child 与被 max 截断丢弃的条目都显性在案，面板/步骤视图都读它 */
+	insertDispatchedRow(run, parentNodeId, plans, dropped, now) {
+		const droppedNote = dropped.length > 0 ? `（max 截断，丢弃 ${dropped.length} 个：${dropped.map(formatItem).join("、")}）` : "";
+		this.db.prepare(`INSERT INTO node_executions (run_id, node_id, iteration, status, summary, payload, branch_id, started_at, finished_at)
+         VALUES (?, ?, ?, 'dispatched', ?, ?, NULL, ?, ?)`).run(run.id, parentNodeId, this.execCount(run.id, parentNodeId) + 1, `派出 ${plans.length} 个子任务${droppedNote}`, JSON.stringify({
+			children: plans.map((p) => p.runId),
+			dropped
+		}), now, now);
 	}
 	/** child 落库（在事务内调用）；child_spawned 事件随事务提交后发出 */
 	insertChildRuns(run, parentNodeId, plans, events, now) {
@@ -1725,9 +1847,13 @@ var ExecutionEngine = class {
 		return this.db.prepare(`SELECT * FROM runs WHERE parent_run_id = ? AND parent_node = ? AND retry_of IS NULL
          AND COALESCE(parent_iteration, 0) = ? ORDER BY created_at, rowid`).all(runId, nodeId, iteration);
 	}
-	/** child 置 failed（§7.5 "未回报"路径）；run_finished 事件让面板立即看到 */
+	/** child 置 failed（§7.5 "未回报"路径）；落一条 blocked 轨迹说明原因，run_finished 事件让面板立即看到 */
 	failChild(child, now) {
-		this.db.prepare(`UPDATE runs SET status = 'failed', outcome = 'fail', last_activity = ?, finished_at = ? WHERE id = ?`).run(now, now, child.id);
+		this.db.transaction(() => {
+			this.db.prepare(`UPDATE runs SET status = 'failed', outcome = 'fail', last_activity = ?, finished_at = ? WHERE id = ?`).run(now, now, child.id);
+			if (child.current_node !== null) this.db.prepare(`INSERT INTO node_executions (run_id, node_id, iteration, status, summary, payload, branch_id, started_at, finished_at)
+             VALUES (?, ?, ?, 'blocked', ?, '{}', NULL, ?, ?)`).run(child.id, child.current_node, this.execCount(child.id, child.current_node) + 1, "未回报：Task 调用已返回，但子任务没有在结束前 complete_step", now, now);
+		})();
 		this.emit({
 			type: "run_finished",
 			runId: child.id,
@@ -1979,7 +2105,6 @@ var ExecutionEngine = class {
 		}
 		if (expr === "inputs") return parseJsonObject(run?.inputs ?? null);
 		if (expr.startsWith("inputs.")) return walkPath(parseJsonObject(run?.inputs ?? null), expr.slice(7).split("."));
-		if (expr === "artifacts") return this.latestArtifact(run, "");
 		if (expr.startsWith("artifacts.")) {
 			const [key, ...path] = expr.slice(10).split(".");
 			const artifact = this.latestArtifact(run, key ?? "");
@@ -2029,9 +2154,13 @@ var ExecutionEngine = class {
 	}
 	/** 按 DSH 会话定位：优先活跃 run；没有时回落到最近的 run（已终结也能答"跑完了"而不是"找不到"）。rowid 决胜同一毫秒的建 run */
 	latestRunByHostSession(hostSession) {
-		const active = this.db.prepare(`SELECT * FROM runs WHERE host_session = ? AND status IN ('running', 'waiting_gate', 'waiting_children') ORDER BY created_at DESC, rowid DESC LIMIT 1`).get(hostSession);
-		if (active !== void 0) return active;
+		const active = this.latestActiveRunByHostSession(hostSession);
+		if (active !== null) return active;
 		return this.db.prepare(`SELECT * FROM runs WHERE host_session = ? ORDER BY created_at DESC, rowid DESC LIMIT 1`).get(hostSession) ?? null;
+	}
+	/** 该会话最新一个未终结的 run（用于 start_run 的"一会话一活跃 run"守卫） */
+	latestActiveRunByHostSession(hostSession) {
+		return this.db.prepare(`SELECT * FROM runs WHERE host_session = ? AND status IN ('running', 'waiting_gate', 'waiting_children') ORDER BY created_at DESC, rowid DESC LIMIT 1`).get(hostSession) ?? null;
 	}
 	runBy(where, arg) {
 		return this.db.prepare(`SELECT * FROM runs WHERE ${where}`).get(arg) ?? null;
@@ -2082,9 +2211,16 @@ var ExecutionEngine = class {
 	}
 	/** 解析最终推进目标（§4.5）：目标撞 iterationLimit / 回路 maxRounds 时不执行它，落 limit_exceeded 轨迹并改走逃生出口；
 	*  无逃生出口判失败。校验器已保证逃生边可达终点，逃生链成环只是防御性兜底。 */
-	resolveAdvance(run, snapshot, successorId) {
+	resolveAdvance(run, snapshot, successorId, pendingNodeId) {
 		const limitRows = [];
 		const seen = /* @__PURE__ */ new Set();
+		/**
+		* 该节点已经执行过几次（用于上限判定）。
+		* 刚完成、还没落库的这一行只在我们“正要再次进入它自己”时补上：
+		* - 自环 / 重新进入同一节点：+1（否则会比上限多跑一次）；
+		* - 进入回路里的另一个节点：控制器这次完成不影响“还能不能再进一次”的判定，不补。
+		*/
+		const countFor = (nodeId, targetId) => this.executionCount(run.id, nodeId) + (nodeId === targetId && nodeId === pendingNodeId ? 1 : 0);
 		let targetId = successorId;
 		while (typeof targetId === "string") {
 			const target = findNode(snapshot, targetId);
@@ -2093,7 +2229,7 @@ var ExecutionEngine = class {
 				nodeId: targetId
 			};
 			const loop = target.type === "end" ? void 0 : this.loopLimitOf(snapshot, target);
-			if (loop !== void 0 && this.execCount(run.id, loop.controllerId) >= loop.limit) {
+			if (loop !== void 0 && countFor(loop.controllerId, target.id) >= loop.limit) {
 				const escape = target.onLimitExceeded ?? loop.controller.onLimitExceeded ?? target.branches?.find((branch) => branch.condition === "*")?.to;
 				if (escape === void 0) return {
 					kind: "fail",
@@ -2113,7 +2249,7 @@ var ExecutionEngine = class {
 				targetId = escape;
 				continue;
 			}
-			if (target.type !== "end" && target.iterationLimit !== void 0 && this.execCount(run.id, target.id) >= target.iterationLimit) {
+			if (target.type !== "end" && target.iterationLimit !== void 0 && countFor(target.id, target.id) >= target.iterationLimit) {
 				if (target.onLimitExceeded === void 0) return {
 					kind: "fail",
 					reason: `节点 ${target.id} 已到迭代上限（${target.iterationLimit} 次）且没有配 onLimitExceeded 逃生出口，run 判失败。`
@@ -2250,6 +2386,10 @@ var ExecutionEngine = class {
 		};
 		return step;
 	}
+	/** 该节点真正执行过的次数（completed/blocked 轨迹）；dispatched/limit_exceeded 只是记录，不占迭代配额 */
+	executionCount(runId, nodeId) {
+		return this.db.prepare("SELECT COUNT(*) AS c FROM node_executions WHERE run_id = ? AND node_id = ? AND status IN ('completed','blocked')").get(runId, nodeId).c;
+	}
 	/** 该节点在本次 run 里的轨迹条数（completed / blocked / limit_exceeded 都算占了一次迭代） */
 	execCount(runId, nodeId) {
 		return this.db.prepare("SELECT COUNT(*) AS c FROM node_executions WHERE run_id = ? AND node_id = ?").get(runId, nodeId).c;
@@ -2267,6 +2407,11 @@ var ExecutionEngine = class {
 			outcome: "fail",
 			at: now
 		});
+	}
+	/** 按 id 判失败（入口派发失败等只拿得到 runId 的路径） */
+	failRunById(runId) {
+		const run = this.runById(runId);
+		if (run !== null) this.failRun(run);
 	}
 	snapshotOf(run) {
 		const snapshot = loadSnapshot(this.db, run.flow_snapshot_hash);
@@ -2351,7 +2496,7 @@ function sleep(ms) {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 //#endregion
-//#region dsh-plugin/src/engine.ts
+//#region
 var engine = null;
 var engineDb = null;
 /** 按 id 或展示名解析流程（与面板、aiworkflow_flow 同一套数据） */
@@ -2374,7 +2519,7 @@ function workflowEngine() {
 	return engine;
 }
 //#endregion
-//#region dsh-plugin/src/tools.ts
+//#region
 var FLOW_ACTIONS = [
 	"list",
 	"get",
@@ -2849,7 +2994,7 @@ function describeDatabaseError$1(error) {
 	return `读取 ${databasePath()} 失败：${error instanceof Error ? error.message : String(error)}`;
 }
 //#endregion
-//#region dsh-plugin/src/host.ts
+//#region
 /** 路由前缀：不以 `/` 结尾（宿主按 `path === prefix || path.startsWith(prefix + '/')` 匹配） */
 var ROUTE_PREFIX = "/aiworkflow";
 var STATE_PATHS = /* @__PURE__ */ new Set([
@@ -2859,6 +3004,7 @@ var STATE_PATHS = /* @__PURE__ */ new Set([
 ]);
 var FLOWS_PATH = "/aiworkflow/flows";
 var RUNS_PATH = "/aiworkflow/runs";
+var ABANDON_PATH = "/aiworkflow/runs/abandon";
 /** apply 时记下的插件上下文，HTTP 处理里要用它拿 agents 服务 */
 var pluginCtx = null;
 var inject = ["webServer", "tools"];
@@ -2890,6 +3036,35 @@ async function handleRequest(req, res) {
 		if (STATE_PATHS.has(url.pathname)) {
 			if (method !== "GET" && method !== "HEAD") return methodNotAllowed(res);
 			send(res, 200, buildState(url.searchParams.get("run"), url.searchParams.get("session")));
+			return;
+		}
+		if (url.pathname === ABANDON_PATH) {
+			if (method !== "POST") return methodNotAllowed(res);
+			const runId = readRunId(await readJson(req));
+			if (runId === null) {
+				send(res, 400, {
+					ok: false,
+					error: {
+						code: "bad-request",
+						message: "需要 runId"
+					}
+				});
+				return;
+			}
+			try {
+				send(res, 200, {
+					ok: true,
+					result: workflowEngine().abandonRun({ runId })
+				});
+			} catch (error) {
+				send(res, 500, {
+					ok: false,
+					error: {
+						code: "abandon-failed",
+						message: errorText(error)
+					}
+				});
+			}
 			return;
 		}
 		if (url.pathname === RUNS_PATH || url.pathname === `${RUNS_PATH}/`) {
@@ -3103,6 +3278,11 @@ function readFlowId(body) {
 	}
 	return null;
 }
+function readRunId(body) {
+	if (typeof body !== "object" || body === null) return null;
+	const value = body.runId;
+	return typeof value === "string" && value.trim() !== "" ? value.trim() : null;
+}
 function methodNotAllowed(res) {
 	send(res, 405, {
 		ok: false,
@@ -3158,7 +3338,7 @@ function payloadFieldsOf(flowId) {
 	try {
 		const rows = database().prepare(`SELECT ne.node_id, ne.payload FROM node_executions ne
          JOIN runs r ON r.id = ne.run_id
-         WHERE r.flow_id = ? AND r.parent_run_id IS NULL AND ne.status = 'completed'
+         WHERE r.flow_id = ? AND ne.status = 'completed'
          ORDER BY ne.id DESC LIMIT 200`).all(flowId);
 		for (const row of rows) {
 			let payload;

@@ -37,7 +37,7 @@ npm run typecheck:plugin && npm run build:plugin
 3. **颜色只能来自 `--dsw-alias-*`**。品牌色填充的按钮文字用 `var(--dsw-alias-bg-base)`（写死 `#fff` 会在深色主题下白底白字——这个 bug 修过一次）。
 4. **Client 半不能 require Harness 客户端包**（`@deepseek-ai/dsh-client-*`）；React Flow 是唯一允许的第三方依赖，已在 bundle 里。
 5. **主面板注册要 try/catch**：`main` 是 keyed 槽，注册失败曾导致主区域黑屏。当前顺序是：先注册 `sidebar.panellist`，再注册 `main`，都包在 `ctx.effect` 里。
-6. **保存走公用层同一套 `validateFlow`**（`shared/flows.ts`）。硬拒不落库、原图不变；错误码 + nodeId 原样展示。别在前端另写一套校验结论。
+6. **保存走公用层同一套 `validateFlow`**（`shared/src/validate.ts`）。硬拒不落库、原图不变；错误码 + nodeId 原样展示。别在前端另写一套校验结论。
 
 ## 已修过的问题（别回退）
 
@@ -59,19 +59,20 @@ npm run typecheck:plugin && npm run build:plugin
 ## 当前实现的事实（改之前先确认，别按记忆）
 
 - 画布节点/边的唯一数据源是 `canvasOf(flow)`：位置优先取 `flow._ui.positions`，缺省按 `autoPosition(index)` 网格铺开。
-- **连线即后继**：`buildFlow` 从边重建 DSL——单出边写 `next`，多出边写 `branches`；索引 0 的空条件补 `*`，其余空条件**保持空**（交给校验器报 `E_EMPTY_CONDITION`；补成 `*` 会变成多个 default）。
-- **卡点出口**：多出边时每条边绑定一个选项（`edge.data.outlet`），优先于按顺序兜底；`condition` 引擎不用但校验器要求非空，所以用选项文案补齐。只有一条出边且**没绑定选项**时才写 `next`（引擎对 gate 的 next 兜底 = 所有选项走同一节点）；绑定过选项就写 `branches`，否则校验器会对每个选项报 `W_GATE_OPTION_UNWIRED`。
+- **连线即后继**：`buildFlow` 从边重建 DSL——单出边默认写 `next`；但如果这条边本来就是分支（节点有 `branches`，或边上带 `branchId/condition/when`），仍写 `branches` 并保留 `when/outlet/condition`（否则单分支图保存会丢 `when`）。多出边写 `branches`；第一路只有在"从未设置过条件"时补 `*`，用户显式清空（`''`）保持空，交给校验器报 `E_EMPTY_CONDITION`。
+- **卡点出口**：多出边时每条边绑定一个选项（`edge.data.outlet`），优先于按顺序兜底；`condition` 引擎不用但校验器要求非空，所以用选项文案补齐。只有一条出边且**没绑定选项、节点也没有 branches**时才写 `next`；绑定过选项（或本来就有 branches）就写 `branches`。
 - **卡点出口 = 选项，画在卡片上**：`canvasOf` / `insertNode` / `patchNode` 把 `outletsOf(node)` 写进节点数据 `data.outlets`（`{key: option.id, label}`）；`canvas.tsx` 的 `WfNode` 按 `outlets.length` 渲染 `out-<选项 id>` 的 source handle（从上到下均分），没连线的出口在卡片右侧外面挂一个 `.wf-outlet-tag` 标签，点标签 → 页面 `pendingLink`，再点目标节点即建边（`completeOutletLink`，Esc/点空白取消）；也可以直接从 handle 拖线。`onConnect` 从 `connection.sourceHandle` 反查 outlet 并写 `edge.data.outlet` + 边标签，一个出口只允许一条边。`spreadSourceHandles(edges, outletKeys)` 按 outlet 匹配 handle，未绑定的老边按顺序落到第 N 个出口。非卡点节点仍是按出边数量动态画 `out-0 / out-1`。
-- 节点本体（instruction/options/params/fanOut/iterationLimit/onLimitExceeded/subflow 等）不在画布节点里，存在 `bodies` map（`page.tsx`），保存时按边重建，其余字段原样保留。**subflow 目前只保留不可编辑**：模式选项被禁用，已有 subflow 节点会显示警告。
-- 属性面板分区：基本信息 / 类型参数 / 补充说明（非 prompt、非 end 的 instruction）/ 循环与逃生（iterationLimit、onLimitExceeded）/ 出口分支；工具参数是键值对行，fan-out 是 from 与 count 互斥 + max。
+- 节点本体（instruction/options/params/fanOut/iterationLimit/onLimitExceeded/subflow 等）不在画布节点里，存在 `bodies` map（`page.tsx`），保存时按边重建，其余字段原样保留。`subflow` 已支持完整编辑：卡片缩略图 + 「打开」下钻，`SubflowFrame` 栈逐层写回，保存时 `composeRoot()` 把各层折回主图。
+- 属性面板按三层组织：头部（类型 / 标题 / id / 入口 / 概览 chip）→ 核心字段（每类 1–3 项）→ 折叠高级组（角色与线程、产物与汇报、并行派发、循环与逃生）；底部是入口/删除动作。
 - 撤销/重做是快照栈（`page.tsx` 的 `record()` / `undo()` / `redo()`）：任何会改图的新交互都必须**先 `record()` 再改 state**，否则撤销漏步；同一个输入框连续输入用 `record('patch:<nodeId>:<field>')` 在 900ms 内合并；拖拽在 `onNodeDragStart` 压一次，整段只算一步。
 - 快捷键只在页面内生效（window keydown + `pageRef` 包含判断）：Ctrl+S 保存（焦点在输入框里也拦，防浏览器「保存网页」）、Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y、Ctrl+C / Ctrl+V、Delete/Backspace。除 Ctrl+S 外，焦点在 input/textarea/select 时都让给浏览器原生行为。
 - 未保存保护：`← 流程库` / `返回会话` 会先 confirm；dirty 时挂 `beforeunload`。删除流程库里的图也有 confirm。
-- 入口标记：`data.isEntry` 由 `withEntryFlags()` 统一维护——`setEntryId`、删除节点、撤销、保存成功后都要刷一遍；入口不渲染 target handle，`onConnect` / `onReconnect` 里再兜底拒一次「连进入口」。
-- 连线重连：`onReconnect` 只改 source/target，保留 `edge.data`（条件 / 出口绑定）；连进入口、重复边会被拒绝并 `reportInfo`。
+- 入口标记：`data.isEntry` 由 `withEntryFlags()` 统一维护——`setEntryId`、删除节点、撤销、保存成功后都要刷一遍；入口不渲染 target handle，`setEntryId` 会顺手删掉指向新入口的入边（否则线看不见、删不掉却仍会被保存），`onConnect` / `onReconnect` 里再兜底拒一次「连进入口」。
+- 连线重连：`onReconnect` 只改 source/target，保留 `edge.data`（条件 / 出口绑定），并像 `onConnect` 一样校验「该卡点出口是否已被占用」；连进入口、重复边会被拒绝并 `reportInfo`。
+- `dirty` 是派生值：整图签名（`JSON.stringify(composeRoot())`）与 `savedSignatureRef` 比较，保存后重置基线。撤销回保存时的状态会自动变回「已同步」；返回父层无改动也不会误报。
 - 删除节点仍不会自动清其他节点里的 `waitFor` / `onLimitExceeded` 引用；这两个字段现在都有下拉可改（悬空值会显示「节点 X 已不存在」），保存被校验器拦下后可以就地修。
 - 右键菜单：画布用 `onPaneContextMenu`（React Flow 内部 `wrapHandler` 只在 `event.target === pane` 时触发，节点/边右键盘不会误开画布菜单）；节点和边各自有独立菜单。菜单定位是 fixed 视口坐标，`ContextMenu` 自己贴边翻转；画布菜单的「新建节点」是一层子菜单（`MenuItem.children`，悬停/点击展开，靠右翻左、贴底上移）。
-- **分支出口排布**：`spreadSourceHandles()` 在渲染层把同一节点的出边按数组顺序挂到 `out-0` / `out-1` …，节点卡按出边数量渲染多个右侧 handle（从上到下均分）。state 里的边不保存 handle 绑定，`buildFlow` 仍按边顺序生成 branches。
+- **分支出口排布**：`spreadSourceHandles()` 在渲染层把出边挂到正确的 source handle——卡点按 `edge.data.outlet` 匹配 `out-<选项 id>`，其他节点按出边顺序 `out-0 / out-1` …；节点卡按出口/出边数量渲染多个右侧 handle（从上到下均分）。state 里的边不保存 handle 绑定，`buildFlow` 按 outlet/边顺序生成 branches。
 - **属性面板宽度可拖**：画布与面板之间是 `.wf-splitter`（pointer capture 拖动，键盘 ←/→ 调 16px、Shift 48px、Home 复位、双击复位），宽度 240–640 且保证画布至少 280px；宽度写进 localStorage `aiworkflow.editor.inspectorWidth`。`.wf-inspector` 不再写死 `width:312px`，宽度由内联 style 给。
 - **运行图轮询去抖**：`runview/page.tsx` 用业务数据指纹（active/recent/selectedId/detail）判断是否 `setData`；`generatedAt` 每轮都变，不能参与比较。否则每 2 秒一次的空刷新会让边标签闪动。
 - `localIssues()` 仍是死代码；实时校验走 Host 的 `POST /flows/validate`（与保存同一个 `validateFlow`），页头 chip + 浮层定位；保存结果仍以服务端返回为准。
@@ -110,7 +111,7 @@ npm run typecheck:plugin && npm run build:plugin
 - `subagent.fanOut`：from 与 count 互斥 + max。
 - 非 prompt / 非 end 节点的 `instruction`（引擎对所有类型都会下发）。
 - `flowRef` / `waitFor` 改成下拉（flowRef 排除当前图；waitFor 排除自己；当前值不在列表时保留「已不存在」项）。
-- `subflow` 模式选项禁用 + 警告文案（面板不编辑内嵌子图）。
+- `subflow` 模式可切换 + 「打开子图」下钻编辑（`SubflowFrame` 栈，保存时折回主图）。
 
 **本轮没做（下一批）**
 - 预览（Agent 视角）、流程复制/导入导出、多选复制、调色板拖入。

@@ -18,6 +18,7 @@ import {
   type RunListItem,
 } from '@shared/index.js';
 import { phaseKey, type Translate } from './i18n.js';
+import { resolveEndpoint } from './endpoint.js';
 import { runOverlay } from './runview/overlay.js';
 import type { ProgressStore } from './store.js';
 import { Dot, Styles } from './styles.js';
@@ -50,6 +51,25 @@ export function ProgressPanel({ store, t }: PanelProps): React.ReactElement | nu
   const rows = [...executions].reverse();
   const runs = dedupeRuns([...snap.active, ...snap.recent]);
 
+  /** 放弃当前 run：把 root 及未终结 child 一起判失败（引擎不按时间自动清僵尸 run） */
+  const abandon = async (runId: string, label: string): Promise<void> => {
+    if (!window.confirm(`放弃「${label}」（${runId}）？当前 run 与未完成的子任务会立即判失败，不可恢复。`)) return;
+    try {
+      const response = await fetch(resolveEndpoint('aiworkflow/runs/abandon'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'application/json' },
+        body: JSON.stringify({ runId }),
+      });
+      const body = (await response.json()) as { ok?: boolean; result?: { error?: boolean; what?: string } };
+      if (body.ok !== true || body.result?.error === true) {
+        window.alert(body.result?.what ?? '放弃失败，请刷新后重试');
+      }
+    } catch (cause) {
+      window.alert(`无法连接插件 Host 半：${cause instanceof Error ? cause.message : String(cause)}`);
+    }
+    store.refresh();
+  };
+
   return (
     <React.Fragment>
       <Styles />
@@ -63,6 +83,16 @@ export function ProgressPanel({ store, t }: PanelProps): React.ReactElement | nu
             </span>
           )}
           <span className="awp-spacer" />
+          {live && detail !== null && (
+            <button
+              type="button"
+              className="awp-textbtn"
+              onClick={() => void abandon(detail.id, detail.flowName ?? detail.flowId)}
+              title="放弃当前 run（连同未完成的子任务）"
+            >
+              {t('panel.abandon')}
+            </button>
+          )}
           <button type="button" className="awp-textbtn" onClick={() => runOverlay.set(true)} title={t('panel.runs')}>
             {t('panel.runs')}
           </button>

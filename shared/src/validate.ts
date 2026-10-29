@@ -33,14 +33,35 @@ export function validateFlow(flow: Flow): ValidationResult {
   const warn = (code: string, message: string, nodeId?: string) =>
     warnings.push({ severity: 'warning', code, message, nodeId });
 
-  if (!flow.id || typeof flow.id !== 'string') err('E_FLOW_ID', '图缺少 id');
+  if (!flow.id || typeof flow.id !== 'string') {
+    err('E_FLOW_ID', '图缺少 id');
+  } else if (
+    // id 同时是 flows/<id>.json 的文件名：不能带路径分隔符 / Windows 非法字符，也不能是 . 或 ..
+    /[\\/:*?"<>|\u0000-\u001f]/.test(flow.id) ||
+    flow.id === '.' ||
+    flow.id === '..' ||
+    flow.id !== flow.id.trim() ||
+    flow.id.endsWith('.')
+  ) {
+    err('E_FLOW_ID', `图 id 不能包含路径分隔符或文件名非法字符，也不能是 . / ..：${JSON.stringify(flow.id)}`);
+  }
   if (!flow.name || typeof flow.name !== 'string') err('E_FLOW_NAME', '图缺少 name');
   if (flow.kind !== undefined && flow.kind !== 'flow' && flow.kind !== 'agent') {
     err('E_FLOW_KIND', `flow.kind 必须是 flow 或 agent：${String(flow.kind)}`);
   }
+  if (flow.maxSteps !== undefined && (!Number.isInteger(flow.maxSteps) || flow.maxSteps < 1)) {
+    err('E_MAX_STEPS', `flow.maxSteps 必须为正整数：${String(flow.maxSteps)}`);
+  }
   if (!Array.isArray(flow.nodes) || flow.nodes.length === 0) {
     err('E_NO_NODES', '图没有任何节点');
     return finish(errors, warnings);
+  }
+  // 形状校验：下面的分析假设每个节点都是带字符串 id 的对象；畸形输入应硬拒而不是抛 TypeError
+  for (const node of flow.nodes as unknown[]) {
+    if (node === null || typeof node !== 'object' || typeof (node as { id?: unknown }).id !== 'string') {
+      err('E_NODE_SHAPE', '节点必须是带字符串 id 的对象');
+      return finish(errors, warnings);
+    }
   }
 
   // flowRef 引用自身没有意义，快照阶段还会成环；在保存时就拦下
@@ -223,25 +244,53 @@ function validateNode(
   }
 
   // 分支结构
-  if (node.branches !== undefined) {
+  if (node.branches !== undefined && !Array.isArray(node.branches)) {
+    err('E_BRANCHES_TYPE', `节点 "${id}" 的 branches 必须是数组`, id);
+  }
+  if (Array.isArray(node.branches)) {
     const branchIds = new Set<string>();
     let defaults = 0;
     let whenCount = 0;
+    // 卡点出口（outlet）必须指向真实选项，且一个选项只能连一条边（否则人工选中时不知道该走哪条）
+    const gateOptionIds =
+      node.type === 'gate' && Array.isArray(node.options)
+        ? new Set(node.options.map((opt) => opt?.id).filter((value): value is string => typeof value === 'string'))
+        : null;
+    const usedOutlets = new Set<string>();
     for (const branch of node.branches) {
+      if (branch === null || typeof branch !== 'object') {
+        err('E_BRANCH_SHAPE', `节点 "${id}" 存在非对象分支`, id);
+        continue;
+      }
       if (!branch.id) err('E_BRANCH_ID', `节点 "${id}" 存在缺少 id 的分支`, id);
       else if (branchIds.has(branch.id)) {
         err('E_DUP_BRANCH', `分支 id 重复：${branch.id}（节点 ${id}）`, id);
       } else branchIds.add(branch.id);
-      if (!branch.condition || !branch.condition.trim()) {
+      if (typeof branch.condition !== 'string' || branch.condition.trim() === '') {
         err('E_EMPTY_CONDITION', `分支 "${branch.id}" 的 condition 为空（节点 ${id}）`, id);
       }
       if (branch.condition === '*') defaults++;
       if (branch.to === undefined || !byId.has(branch.to)) {
         err('E_BAD_REF', `分支 "${branch.id}" 指向不存在的节点：${branch.to}（节点 ${id}）`, id);
       }
+      if (branch.outlet !== undefined && gateOptionIds !== null) {
+        if (typeof branch.outlet !== 'string' || !gateOptionIds.has(branch.outlet)) {
+          err(
+            'E_BAD_OUTLET',
+            `分支 "${branch.id}" 的 outlet 指向不存在的选项：${String(branch.outlet)}（节点 ${id}）`,
+            id,
+          );
+        } else if (usedOutlets.has(branch.outlet)) {
+          err('E_DUP_OUTLET', `卡点 "${id}" 的选项 ${branch.outlet} 连了多条出口分支`, id);
+        } else {
+          usedOutlets.add(branch.outlet);
+        }
+      }
       if (branch.when !== undefined) {
         whenCount++;
-        if (branch.condition === '*') {
+        if (typeof branch.when !== 'string') {
+          err('E_BAD_WHEN', `分支 "${branch.id}" 的 when 必须是字符串（节点 ${id}）`, id);
+        } else if (branch.condition === '*') {
           err('E_WHEN_DEFAULT', `默认分支 "${branch.id}" 不应再配 when（默认分支由“其他都不命中”兜底）`, id);
         } else {
           const parsed = parseWhen(branch.when);
@@ -344,6 +393,9 @@ function validateNode(
         if (max !== undefined && (!Number.isInteger(max) || max < 1)) {
           err('E_FANOUT_SOURCE', `fanOut.max 必须为正整数：${max}（节点 ${id}）`, id);
         }
+        if (count !== undefined && (!Number.isInteger(count) || count < 1)) {
+          err('E_FANOUT_SOURCE', `fanOut.count 必须为正整数：${String(count)}（节点 ${id}）`, id);
+        }
       }
       if (node.role !== undefined) {
         if (!node.role.trim()) {
@@ -432,6 +484,14 @@ function validateSubflow(subflow: SubflowDef, parentId: string, err: ErrFn, warn
   }
   const reachable = reachableFrom(subflow.entry, edges);
   const terminals = subflow.nodes.filter(isTerminal).map((n) => n.id);
+  if (subflow.maxSteps !== undefined && (!Number.isInteger(subflow.maxSteps) || subflow.maxSteps < 1)) {
+    err('E_MAX_STEPS', `subflow（节点 ${parentId}）的 maxSteps 必须为正整数：${String(subflow.maxSteps)}`, parentId);
+  }
+  for (const node of subflow.nodes) {
+    if (!reachable.has(node.id)) {
+      err('E_UNREACHABLE', `subflow（节点 ${parentId}）内的孤立节点：从 entry 不可达（${node.id}）`, node.id);
+    }
+  }
   if (terminals.length === 0) {
     err('E_NO_TERMINAL', `subflow（节点 ${parentId}）不存在任何终点`, parentId);
   } else {

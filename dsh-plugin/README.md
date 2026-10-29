@@ -36,20 +36,24 @@ git+https://github.com/zh880517/AIWorkFlow.git#main&path:/dsh-plugin
    汇聚与 waitFor / 迭代上限与逃生出口 / 结束结果 / 补充说明）、设置入口。
    改动后防抖干跑同一套 `validateFlow`（页头 chip + 问题定位），插值提示从历史 run 学 payload 字段；
    多路出边自动转成 `branches`，第一路填 `*` 表示默认分支，卡点出边可显式绑定选项。`subagent` 的 `subflow` 模式支持内嵌子图：卡片内有只读缩略图，点「打开」下钻到子图画布编辑，返回后随主图一起保存/校验；palette 的「评审回路 / 测试回路」模板会插入带 `loopId + maxRounds` 的内嵌子图。
-2. **运行图浮层（会话内，只读）**：默认不打开；在浮动进度面板（浮窗）里点「运行图」打开，右上角 × 或 Esc 关闭。
+2. **运行图（会话内，只读）**：两个入口——浮动进度面板里点「运行图」打开浮层；本会话有 run 时
+   对话区还会出现「运行图」页签（没有 run 时自动销毁，不自动切换）。右上角 × 或 Esc 关闭。
    顶部切 run，中间是这次 run 的快照图：
    节点按执行状态着色（已完成 / 进行中 / 等子 Agent / 阻塞 / 未走到），走过的边高亮、没走的虚线；
    点节点只看它的执行记录，右侧栏是轨迹（序号、`#迭代`、分支条件、时间、summary）与 payload；子 Agent 的 child run 收在「子运行」卡片里，点进去看它自己的内嵌子图执行，再点「← 父 run」返回。
    与编辑器共用 `canvasOf` 的布局语义，但拖拽/连线/删除全部关闭——这里只预览，不改图。
-3. **进度视图（会话内）**：标题栏胶囊 + 右侧浮动面板，见下。
+3. **进度视图（会话内）**：标题栏胶囊 + 右侧浮动面板，见下。进行中的 run 可在面板头部点「放弃」
+   （`POST /aiworkflow/runs/abandon`），把 root 与未终结的 child 一起置为 failed。
 
 ## 发起一次运行
 
 不用记流程图名字，也不用发聊天消息：输入框左侧有一个「工作流」按钮，点开列出全部图，选一张即可。
 
-- 选中即调 Host 的 `POST /aiworkflow/runs` **直接建 run**（不产生聊天消息，避免误触发）；
+- 选中即调 Host 的 `POST /aiworkflow/runs` **直接建 run**（不经过输入框发送用户消息，避免误触发）；
 - run 绑到当前会话（`dsh:<sessionId>`），Agent 的 `complete_step` 才能定位到它；
-- Host 用与定时提醒相同的 `followup` 机制唤醒 Agent，让它在对话里开始执行第一步；
+- Host 用与定时提醒相同的 `followup` 机制注入一条唤醒消息，让 Agent 在对话里开始执行第一步；
+- 同一会话同时只允许一个活跃 run：已有 `running/waiting_*` 的 run 时，再启动会被自愈拒绝，
+  先在进度面板「放弃」旧 run 或把它跑完；
 - 建 run 之前，标题栏不出现状态胶囊、会话里也没有「运行图」页签；建好之后两者才出现。
 
 ## 进度视图的交互设计
@@ -130,26 +134,30 @@ npm run build:plugin        # 生成 index.js 与 client.js（本机构建，提
 npm run release:plugin      # 一键：构建 → 提交产物 → 刷新市场索引 → 提交索引 → 打印安装链接
 npm run release:plugin -- --dry-run    # 只看会做什么，不动 git 历史
 npm run release:plugin -- --no-commit  # 只构建，不提交也不动索引
-npm run check:plugin        # 重新构建，与暂存区里的产物比哈希（提交前 / CI 用）
-npm run market:plugin       # 只刷新 market/index.json（索引钉在 HEAD 上）
+npm run check:plugin        # 重建（会改写工作区产物）并与暂存区比对；源码必须已 stage（提交前 / CI 用）
+npm run market:plugin       # 只刷新 market/index.json（索引钉在 HEAD；要求 HEAD 里的插件文件与工作区一致）
 ```
 
 `release:plugin` 会提交**两笔**：先提交产物，再用新的 HEAD 生成索引并提交索引——索引必须钉在包含产物的提交上。
 两笔提交都只带 `dsh-plugin` 自己的文件，不动你工作区里其它改动。索引已指向当前产物时会自动跳过，不产生空提交。
+`--dry-run` 仍会构建并改写工作区产物（只是不提交、不生成索引）；中途失败不会自动回滚已经产生的提交。
 
 **`index.js` / `client.js` 是本地构建后提交的**：别人按 GitHub spec 安装时不会在本机构建，装到的就是 git 树里的这两个文件。
 不改成「安装时构建」的原因：pnpm 11 默认拦下依赖包的 `prepare` 脚本，装的时候会弹「允许脚本并重试」，
 多一步人工确认；仓库里带产物则是零构建、零脚本。
 
 代价是产物可能忘提交/过期，所以有 `check:plugin`：它重建一遍再跟**暂存区**比对，不一致就失败。
-本地每次提交前跑一下；要接 CI 的话，在 workflow 里跑 `npm run check:plugin` 即可（构建是确定性的、不含机器路径/时间戳）。
+它要求源码/清单本身没有未暂存改动（否则"工作区源码构建 + 暂存区产物"会假通过）；本地提交前
+`git add` 源码与产物后再跑。要接 CI 的话，在 workflow 里跑 `npm run check:plugin` 即可
+（`build.mjs` 会抹掉 `//#region` 里的依赖物理路径，保证不同 node_modules 布局产物一致）。
 
-装到本机 profile 后，改 Host 半需要让条目重新加载（`plugin_manager` 先关再开）；只改 Client 半时宿主 HMR 会自己换新模块。
+装到本机 profile 后，改 Host 半需要让条目重新加载（`plugin_manager` 先关再开）；改 Client 半需要
+重新 `npm run build:plugin` 并重载条目——只有 `pnpm run dev:web` 在跑时才有无刷新热更。
 
 ## 边界
 
 - 写 SQLite 的只有三处：图的 create/update（走公用层校验）、`start_run`/`complete_step` 等执行类工具（走公用层 `ExecutionEngine`）、以及建库时的迁移。进度视图本身只读。
 - 人工卡点只能由用户放行：`answer_gate` 仅用于**转达用户已经说出口的答复**（`source: chat`）；面板只展示待决卡点，不提供点选，插件不会自己替用户做选择。
 - 依赖 DSH 的 `webServer` 与 `tools` 服务（`inject: ['webServer', 'tools']`），缺少任一服务的组合里 Host 半不激活。
-- 页面必须与宿主同源（`dsh web` 或桌面版内置的 Web 视图）；`file://` 载入的渲染器拿不到这个路由。
+- 页面优先与宿主同源（`dsh web` 或桌面版内置的 Web 视图）；桌面壳用 `file://` 载入渲染器时，Client 用 `__DSH_TRANSPORT__.streamBaseUrl` 找到 Host 的 HTTP 源，Host 通过 CORS 放行 null origin（见 `src/endpoint.ts` / `src/host.ts`）。
 - `better-sqlite3` 不需要：DSH 内核本身就用 `node:sqlite`，插件沿用同一个驱动，避开原生 ABI 问题。

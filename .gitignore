@@ -7,3 +7,6 @@ tmp/
 dsh-plugin/.build/
 # 本地 agent 工具的临时计划文件
 .zcode/
+
+# CodeGraph 本地索引（每台机器重建，不提交）
+.codegraph/

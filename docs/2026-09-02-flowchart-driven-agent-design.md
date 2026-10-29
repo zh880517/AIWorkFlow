@@ -1,7 +1,7 @@
 # 流程图驱动的 AI Agent 执行引擎 — 设计文档
 
 日期：2026-09-02
-最后修订：2026-10-28（收缩为 DeepSeek Harness 单宿主）
+最后修订：2026-10-29（P1 多 Agent 语义、子 Agent 配置、审计修复）
 状态：已评审，当前实现依据
 
 ---
@@ -113,7 +113,7 @@ run 定位顺序：**childToken → runId → hostSession（`dsh:<sessionId>`）
 - 条件是**自然语言**，由 Agent 自己判断。代价是非确定性，收益是无需为每个节点定 schema、无需服务端另起一次 LLM 判定。
 - **下发给 Agent 时剥离 `to` 字段**，只给 `{ id, condition }`。Agent 回一个 `branchId`。理由是降噪：图的拓扑结构对 Agent 完成当前节点毫无用处，给了只是污染注意力。
 - `condition: "*"` 表示 default 分支。
-- **`when`（可选，P1）**：服务端可判定的单比较表达式，例如 `"{{review.payload.verdict}} == 'pass'"`。左值必须是 `{{...}}`；右值是字符串/数字/布尔/null 或另一个插值；支持 `== != > >= < <= contains in truthy empty`。所有 `when` 按声明顺序求值，第一个命中者胜出；都不命中才回落到 Agent 的 `branchId`，再不行走 `condition: "*"`。有 `when` 的分支不下发给 Agent 选择。`when` 求值发生在父节点轨迹落库之前，因此 `{{review.payload.verdict}}` 用的是本轮 child 的合并 payload，而不是数据库里的旧行。解析失败硬拒 `E_BAD_WHEN`；多个 `when` 可能同时命中只给 `W_WHEN_OVERLAP` 警告。
+- **`when`（可选，P1）**：服务端可判定的单比较表达式，例如 `"{{review.payload.verdict}} == 'pass'"`。左值必须是 `{{...}}`；右值是字符串/数字/布尔/null 或另一个插值；支持 `== != > >= < <= contains in truthy empty`。所有 `when` 按声明顺序求值，第一个命中者胜出；都不命中才回落到 Agent 的 `branchId`。subagent 的自动路由步在只剩 default 时会自动走它；普通节点仍需显式选一条分支（含 default），避免 Agent 忘选时静默走默认。**有 `when` 的分支默认不交给 Agent 选**：只要节点还有自然语言/默认分支，下发时只保留这些；如果节点只有 `when` 分支，则带上 `auto: true` 一并下发，让"全部不命中"时 Agent 能看到可用分支并触发自愈。`when` 求值发生在父节点轨迹落库之前，因此 `{{review.payload.verdict}}` 用的是本轮 child 的合并 payload，而不是数据库里的旧行。解析失败硬拒 `E_BAD_WHEN`；多个 `when` 可能同时命中只给 `W_WHEN_OVERLAP` 警告。
 
 ### 4.4 节点间数据传递
 
@@ -126,10 +126,10 @@ run 定位顺序：**childToken → runId → hostSession（`dsh:<sessionId>`）
 
 P1 增补两条交接通道：
 
-- **产物总线**：`complete_step` 可带 `artifacts: [{ key, summary?, path?, content? }]`。服务端按 `root_run_id + key` 自增 `version` 写入 `run_artifacts`；`{{artifacts.<key>.path|version|summary|content}}` 永远取最新版。正文或文件都行，preamble 只给路径/摘要，避免上下文膨胀。
+- **产物总线**：`complete_step` 可带 `artifacts: [{ key, summary?, path?, content? }]`。服务端按 `root_run_id + key` 自增 `version` 写入 `run_artifacts`；`{{artifacts.<key>.path|version|summary|content}}` 永远取最新版。正文或文件都行，preamble 只给路径/摘要，避免上下文膨胀。不带 key 的 `{{artifacts}}` 未定义，渲染时保留原 token（不会变成 `null`）。
 - **run 输入**：`start_run` 的 `inputs` 落 `runs.inputs`，child 继承；`{{inputs.feature}}` 在派发时渲染。
 
-子结果回传：child 的 `complete_step.summary/payload` 在汇聚时写入父节点执行行。单 child 时 payload 直接平铺（`{{review.payload.verdict}}`），多 child 时保留 `children[]` 结构，避免键冲突。
+子结果回传：child 的 `complete_step.summary/payload` 在汇聚时写入父节点执行行。单 child 时 payload 直接平铺（`{{review.payload.verdict}}`），并附带 `children[]`；多 child 时同样按声明顺序平铺（同名 key 后写覆盖），并始终保留 `children[]` 结构——需要逐 child 区分时用 `children`，不要依赖平铺后的同名 key。
 
 ### 4.5 环与迭代
 
@@ -162,7 +162,7 @@ P1 增补两条交接通道：
     flow_mlbb_cl.json          # 图定义，用户级、跨项目共用
   aiworkflow.db                # SQLite，唯一事实源
   cache/
-    run-<id>.snapshot.json     # 面板快速加载用的派生快照
+    snapshot-<hash>.json       # 按内容 hash 命名的派生快照（面板快速加载用）
 ```
 
 图放用户目录的取舍：跨项目复用方便，但**无法随项目提交进 git、无法与同事共享**。v1 接受此限制，但架构上不堵路——后续可增加"额外从项目 `.aiworkflow/flows` 加载"。
@@ -179,7 +179,7 @@ P1 增补两条交接通道：
 
 两条实现要求：
 
-- 快照存进 SQLite（`runs.flow_snapshot`，按内容 hash 去重），`cache/` 里那份是派生镜像。否则清缓存会把历史 run 看废。
+- 快照内容存进 `flow_snapshots.content`（按内容 hash 去重），`runs.flow_snapshot_hash` 指向它；`cache/` 里那份是派生镜像。否则清缓存会把历史 run 看废。
 - **`flowRef` 引用的子图必须递归一起快照**。只钉主图的话，别人改了被引用的图，问题原样复现。
 
 ### 5.3 表结构（概要）
@@ -190,7 +190,7 @@ P1 增补两条交接通道：
 | `runs` | `id`, `parent_run_id`, `root_run_id`, `flow_id`, `flow_snapshot_hash`, `entry_node`, `current_node`, `status`, `cwd`, `project_name`, `host_session`, `child_token`, `role`, `thread_id`, `inputs`, `parent_iteration`, `steps_used`, `last_activity`, `created_at`, `finished_at` |
 | `flow_snapshots` | `hash`, `content`（内容寻址去重） |
 | `node_executions` | `run_id`, `node_id`, `iteration`, `status`, `summary`, `payload`, `branch_id`, `started_at`, `finished_at` |
-| `gate_decisions` | `id`, `run_id`, `node_id`, `question`, `option_id`, `note`, `source`（`panel` \| `chat`）, `decided_at` |
+| `gate_decisions` | `id`, `run_id`, `node_id`, `question`, `option_id`, `note`, `source`（`pending` \| `panel` \| `chat` \| `abandoned`）, `decided_at` |
 | `run_artifacts` | `root_run_id`, `key`, `version`, `run_id`, `node_id`, `role`, `summary`, `path`, `content`, `created_at`（v8，`UNIQUE(root_run_id, key, version)`） |
 
 `runs.parent_iteration`（v9）是派发该 child 的父节点执行轮次。同一 `subagent` 节点在回路里会执行多轮，取 child 时必须只取最大 `parent_iteration` 的那一批，否则第二轮的汇聚会混入第一轮旧结果。
@@ -254,8 +254,10 @@ P1 增补两条交接通道：
 | `tool` | `tool: { name, params }` |
 | `subagent` | `children: [{ childToken, preamble, extraPrompt }]`（非 fan-out 时长度为 1） |
 | `gate` | `gateId`, `question`, `options: [{ id, label }]` —— `gateId` 由此处取得，用于后续 `await_gate` / `answer_gate` |
-| `join` | `childResults: [{ childToken, status, summary }]`, `aggregateInstruction` |
+| `join` | `childResults: [{ childToken, status, summary, payload? }]`, `aggregateInstruction` |
 | `end` | `outcome` |
+
+所有步骤在角色/线程配置下还会带 `role?`、`thread?`、`turn?`（child 自己的步骤取 `runs.role/thread_id`）。
 
 ### 6.3 自愈式报错
 
@@ -284,17 +286,18 @@ P1 增补两条交接通道：
 
 `complete_step` 在单个事务内完成：校验 run 与节点匹配 → 落 `node_executions` → 按 `branchId` 查快照定位后继 → 检查后继迭代上限 → 渲染 `instruction` 插值 → 返回。中途任何失败都不推进，走自愈返回。
 
-### 7.3 分支求值的五种边界情况
+### 7.3 分支求值的边界情况
 
 | 情况 | 处理 |
 |---|---|
 | 节点无分支 | 走唯一后继；无后继 = 隐式 end |
 | 有 `when` 且命中 | 服务端直接走第一个命中的分支，Agent 不需要回 `branchId` |
 | 有 `when` 都不命中、还有自然语言分支 | 返回路由步（带 childResults/payload），由 Agent 选 `branchId` |
-| 有 `when` 都不命中、只剩 default | 自动走 default |
-| `branchId` 非法或缺失 | 不推进，自愈返回（附合法 id 列表）；`when` 分支不允许手工选不匹配的 |
+| 有 `when` 都不命中、只剩 default（subagent 自动路由步） | 自动走 default |
+| 有 `when` 都不命中、只剩 default（普通节点） | 不自动走；Agent 必须显式回 `branchId`（含 default），避免忘选时静默走默认 |
+| `branchId` 非法或缺失 | 普通节点不推进，自愈返回（附合法 id 列表）；`when` 分支不允许手工选不匹配的 |
 | 多个自然语言条件都满足 | Agent 只回一个 id，服务端不裁决 |
-| 都不满足 | 走 `condition: "*"` 的 default 分支 |
+| 都不满足 | Agent 选 `condition: "*"` 的 default 分支 |
 | 无 default 且都不满足 | run 判失败，面板标红 |
 
 ### 7.4 并行 fan-out
@@ -314,7 +317,7 @@ P1 增补两条交接通道：
 | child 状态 | 处理 |
 |---|---|
 | 全部 `completed` | 返回 join 步，`instruction` 含 `aggregateInstruction` + 所有子结果 `summary` |
-| 有 child 仍 `running` | 说明该子 Agent 挂了或未回报。服务端将其置为 `failed`（原因记"未回报"），转入下一行的失败处理 |
+| 有 child 仍 `running` | 说明该子 Agent 挂了或未回报。服务端将其置为 `failed`，并落一条 `blocked` 轨迹（`summary` 记"未回报：Task 调用已返回但子任务没有 complete_step"），转入下一行的失败处理 |
 | 有 child `failed` | 对每个失败的 child **新建一个 child run 并签发新 `childToken`**（旧 run 保留为失败记录，便于回看），返回一个新的 `subagent` 步让主 Agent 重派。**重试只做一轮**；仍失败则带着已有结果推进到 join，面板标黄并记明缺了谁 |
 
 重派使用新 child run 而非复用旧 run，是为了让面板能同时看到"第一次失败了"和"重试的结果"，而不是被覆盖掉。
@@ -331,7 +334,7 @@ P1 增补两条交接通道：
 
 - 同一个 `subagent` 节点会被回路反复执行，child 用 `runs.parent_iteration` 标记"第几轮派发"。`childSlots` / `currentWave` 只取最大轮次，重派沿用原轮次，避免把历史轮次卷进本轮汇聚。
 - `subagent` 节点全部 child 到终态后：`when` 能判定的直接推进；仍有自然语言分支时返回**路由步**（`step.childResults[]` + `branches[]`），Agent 调 `complete_step({ branchId })`；写父节点轨迹时把本轮合并 payload 带上。
-- 子结果进入父 payload：单 child 直接平铺，多 child 保留 `children[]`。保留键 `children/child` 不与子 payload 冲突。
+- 子结果进入父 payload：单 child 直接平铺；多 child 按声明顺序平铺（同名 key 后写覆盖），并始终附带 `children[]`；需要逐 child 区分时用 `children`。
 
 ### 7.6 人工卡点
 
@@ -345,16 +348,21 @@ P1 增补两条交接通道：
 实现落点（阶段 5 实测后补记）：
 
 - 下发给 Agent 的 gate 步只带 `gateId / question / options`，**不带 `branches`**——选项即出口，出口由人工选择，分支条件对 Agent 是噪音。
-- `gateId` 即 pending `gate_decisions` 行 id（数字串）；pending 期 `source` 置占位值 `pending`，放行时更新为 `chat`（引擎也接受 `panel`，供后续 UI 接入）。
+- `gateId` 即 pending `gate_decisions` 行 id（数字串）；pending 期 `source` 置占位值 `pending`，放行时更新为 `chat`（引擎也接受 `panel`，供后续 UI 接入）。run 被「放弃」时，未决卡点会被关闭（`source = 'abandoned'`、`decided_at` 落时间），旧 `gateId` 不能再把 run 复活。
 - 放行时除更新决策行外，还落一条 `node_executions`（`completed`，payload 含 optionId / optionLabel / note / source）：后续节点可用 `{{gateId节点.payload.optionId}}` 插值，面板轨迹也天然能看到"谁在什么场景放的行"。
 - 选项按分支的 `outlet`（其次分支 id 同名）对应出口；**选项未连线时决策保留、run 判失败**（校验器存图时以警告档 `W_GATE_OPTION_UNWIRED` 提醒）；无任何分支与 `next` 的裸卡点记录决策即隐式收尾。
 - `await_gate` 是 400ms 粒度的 DB 轮询（上限 60 秒），不依赖进程内事件——与"事件只是刷新信号"的定位一致。
 
 ### 7.7 崩溃与孤儿 run
 
-服务端重启后，库中 `status=running` 的 run 均为孤儿。**不自动清理**：标 `stale`，面板列出，用户可恢复（状态全在 SQLite，直接 `get_current_step` 即可续）或手动废弃。
+**系统不基于时间做任何状态改写**（2026-09-08 决定移除停滞检测）：服务端重启后，库中
+`status=running` 的 run 保持原状，不自动标记。同一会话/childToken 下可以继续调
+`get_current_step` 续跑；如果不打算继续，用户在进度面板点「放弃」会调用
+`abandon_run`，把该 run 及其未终结的 child 一起置为 `failed`，并落一条 `blocked` 轨迹记明原因
+（面板走 `POST /aiworkflow/runs/abandon`）。`stale` 只作为历史库的兼容展示值，引擎不会新写入。
 
-"会话结束"没有可靠信号，因此追加一条：**24 小时无活动自动标 `stale`**。
+同一会话同时只允许一个活跃 run：`start_run` 发现 `hostSession` 已有 `running/waiting_*` 的 run
+时会返回自愈错误，提示先完成或在面板放弃——否则执行类工具只能按会话命中最新 run，旧 run 会静默失联。
 
 ### 7.8 `report_blocked` 的处理规则
 
@@ -409,7 +417,8 @@ child run 调 `report_blocked` 时，该 child 置为 `failed`，随后由 7.5 �
 
 ### 9.1 编辑器
 
-- 画布拖拽建节点、连线即分支；选中连线编辑 `condition`，高级区可填 `when`。六种节点以颜色 / 图标区分，右侧按 `type` 显示对应字段表单
+- 节点用调色板点选或画布右键菜单在指针处新建，从节点右侧圆点拖线连边（连线即分支）；分支 `condition` 在选中**源节点**后的属性面板里按出边编辑，`when` 在每路条件下方的高级输入框里填。六种节点以颜色 / 图标区分，右侧按 `type` 显示对应字段表单
+- `subagent` 的 `subflow` 支持卡片内只读缩略图 + 「打开」下钻编辑；返回主图时整张子图随主图一起保存/校验；调色板的「评审回路 / 测试回路」模板会插入带 `loopId + maxRounds` 的内嵌子图
 - **属性面板按使用频率分三层**：头部（类型、标题就地编辑、id 复制、入口标记 + 概览 chip）→ 核心字段（每类 1–3 个必填/最常改项）→ 折叠的高级设置（角色与线程、产物与汇报、并行派发、循环与逃生、本步指令）。概览 chip 由 `summarizeNode()` 生成（角色/线程、产物、子图、并行、回路、出口数），点击展开对应分组；高级字段的说明收进 label 右侧的 i 提示，不占常驻行高
 - 面板顶部页签「节点 / 图」；`subagent` 的 `role` 下拉引用全图角色表，角色表（id/name/charter/produces/consumes）在「图」页签维护，不再占节点面板
 - 流程库分「流程 / 子 Agent 配置」两个页签：后者是 `kind = 'agent'` 的保存图，自带 `agents` 角色表，用同一画布创建和编辑；主流程通过 `subagent` 节点的「引用」模式按 id 调用（见 §4.6），`flowRef` 下拉按类型分组
@@ -420,24 +429,25 @@ child run 调 `report_blocked` 时，该 child 置为 `failed`，随后由 7.5 �
 
 | 硬拒（不许保存） | 警告（允许保存） |
 |---|---|
-| 环无逃生出口 | 缺 default 分支 |
+| 环无逃生出口 | 缺 default 分支（`gate` 除外：出口由人工选择） |
 | 孤立节点（从 `entry` 不可达） / 无 `entry` | `join` 找不到对应 `fanOut` |
 | 存在无法终止的路径 | 环上节点缺 `iterationLimit` / 回路缺 `maxRounds` |
 | `maxRounds` 缺 `loopId`，或同一 `loopId` 多个控制器 | `loopId` 没配 `maxRounds` 控制器 |
+| 卡点 `outlet` 指向不存在的选项 / 同一 `outlet` 多条分支 | — |
 
 第三条"无法终止的路径"指从 `entry` 出发存在一条走不到任何终点的路径。**注意终点有两种**：显式 `end` 节点，或按 4.3 的隐式 end（节点无分支且无后继）。两者都算合法终止，校验不得只认显式 `end`。
 
 ### 9.2 监控
 
-**run 列表**：按项目（`cwd`）分组，进行中 / 已完成 / 失败 / 停滞分栏，显示流程名、开始时间、当前节点。
+**run 切换器**：按会话（`host_session`）过滤，单行列出流程名与相对时间；进行中的排前面、最近结束的排后面。不做 `cwd` 分组/四栏分栏（`cwd`/`projectName` 只落库供诊断，UI 目前不读取）。进行中的 run 在浮动面板里可点「放弃」结束。
 
 **run 详情**用快照那张图渲染：
 
-- 节点着色：已过 / 正在跑（脉动）/ 失败 / 未走到 / 未选中的分支（虚线）
-- 走过的路径高亮，**环要能看出绕了几圈**——同一节点多次执行时，侧栏按迭代次序列出每一次结果
-- 点节点 → 侧栏显示该次的 `summary`、`payload`、耗时、迭代序号
-- 子 Agent 按 run 树折叠展示；fan-out 的 N 个并排；**被 `max` 截断丢掉的显性列出**
-- 子 run 详情显示 `role`、`threadId`、派发轮次 `parentIteration`；`RunDetail.children` 带直接子 run，顶部只列根 run，父 run 右侧「子运行」卡片按 `parentNode` 过滤并点进 child 快照；右侧「产物」卡按 key/version 列出 `run_artifacts`，路径与摘要直接可见
+- 节点着色：已过 / 正在跑 / 失败 / 未走到 / 未选中的分支（虚线）；「正在跑」目前只换边框色，没有脉动动画
+- 走过的路径高亮，**环要能看出绕了几圈**——同一节点多次执行时，侧栏按迭代次序列出每一次结果；面板的路径条把同一节点的连续执行合并成 `×n`（`dispatched` 记账行不算独立一圈）
+- 点节点 → 侧栏显示该次的 `summary`、`payload`、迭代序号与时刻（未计算耗时）
+- 子 run 用「根 run + 直接子运行卡片」两层展示：顶部只列根 run，父 run 右侧「子运行」卡片按 `parentNode` 过滤并可点进 child 快照（child 详情有「← 父 run」）；fan-out 的子任务按行列出，不做 N 个并排，也不做无限深的树形缩进；**被 `max` 截断丢掉的条目在派发轨迹与步骤 note 里显性列出**
+- 子 run 详情显示 `role`、`threadId`、派发轮次 `parentIteration`；右侧「产物」卡按 key/version 列出 `run_artifacts`，路径与摘要直接可见
 - 引用「子 Agent 配置」的 child run 同样按普通 run 展示：`RunListItem.flowKind = 'agent'`，子运行卡片显示配置名 + 「配置」徽标，父节点显示引用节点的标题；点画布上的引用节点即可筛出它的子运行
 - 人工卡点在此只读展示问题与选项；用户在对话里回复选项，Agent 代填后这里自动继续
 - **停滞检测（已移除，2026-09-08 用户决定）**：原设计为 15 分钟标黄、24 小时自动标 `stale`。移除原因：AI 在执行中长时间暂停是常态（长任务、等待用户），按超时判异常会产生误导。系统不基于时间做任何状态改写；`stale` 状态仅作为历史遗留兼容展示。
@@ -445,8 +455,20 @@ child run 调 `report_blocked` 时，该 child 置为 `failed`，随后由 7.5 �
 ### 9.3 刷新方式
 
 **Client 半轮询 Host 路由**（打开时 2 秒、收起时 6 秒，页面隐藏暂停），不使用 WebSocket 或 SSE。
-读走 `GET /aiworkflow/state`，写（建 run、图读写）走普通 POST/PUT/DELETE；卡点答复走 Agent 工具而不是 HTTP 路由。没有长连接，也不需要重连逻辑。
+读走 `GET /aiworkflow/state`，写（建 run、图读写、放弃 run）走普通 POST/PUT/DELETE；卡点答复走 Agent 工具而不是 HTTP 路由。没有长连接，也不需要重连逻辑。
 `EngineEvent` 仍保留在引擎层，供进程内消费者使用；插件不把它接到网络通道。
+
+Host 路由一览（全部同源，无 token）：
+
+| 方法 | 路径 | 参数 | 用途 |
+|---|---|---|---|
+| GET | `/aiworkflow`、`/aiworkflow/state` | `?run=&session=` | 面板状态：活跃/最近 run + 选中 run 详情 |
+| POST | `/aiworkflow/runs` | `{ flowId \| flowName, sessionId?, note? }` | 建 run 并用 followup 唤醒 Agent |
+| POST | `/aiworkflow/runs/abandon` | `{ runId }` | 放弃 run（root + 未终结 child 置 failed） |
+| GET | `/aiworkflow/flows` | `?kind=flow\|agent` | 流程/配置列表 |
+| POST | `/aiworkflow/flows/validate` | 完整 Flow | 干跑校验，不落库 |
+| GET/PUT/DELETE | `/aiworkflow/flows/:id` | — | 读取 / 保存（校验不过不落库）/ 删除 |
+| GET | `/aiworkflow/flows/:id/payload-fields` | — | 历史 payload 字段提示 |
 
 ## 10. 验证方式
 
