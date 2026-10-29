@@ -68,7 +68,8 @@ export function buildSubSnapshot(parent: FlowSnapshot, childFlow: Flow): FlowSna
   const flows: Record<string, Flow> = {};
   const resolver: FlowResolver = { get: (id) => parent.flows[id] };
   collectFlows(childFlow, resolver, flows, new Set([childFlow.id]));
-  return { rootFlowId: childFlow.id, agents: parent.agents, flows };
+  // 引用「子 Agent 配置」时用它自己的角色表；普通内嵌子图没有角色表，继承父图
+  return { rootFlowId: childFlow.id, agents: childFlow.agents ?? parent.agents, flows };
 }
 
 /** 快照内容寻址 hash（对完整快照结构做稳定序列化） */

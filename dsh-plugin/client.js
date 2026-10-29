@@ -11023,8 +11023,8 @@ async function request(path, init) {
 	if (body === null || typeof body !== "object") throw new Error(`HTTP ${response.status}`);
 	return body;
 }
-async function listFlows() {
-	return (await request("flows")).flows;
+async function listFlows(kind) {
+	return (await request(kind === void 0 ? "flows" : `flows?kind=${kind}`)).flows;
 }
 async function getFlow(id) {
 	return (await request(`flows/${encodeURIComponent(id)}`)).flow;
@@ -11640,6 +11640,14 @@ var editorCss = `
 .wf-title{font-weight:600;font-size:13px}
 .wf-sub{color:var(--dsw-alias-label-secondary);font-size:11.5px}
 .wf-spacer{flex:1}
+/* 流程库类型切换：流程 / 子 Agent 配置 */
+.wf-lib-tabs{display:flex;gap:2px;padding:2px;border-radius:8px;border:1px solid var(--dsw-alias-border-l1);
+  background:var(--dsw-alias-bg-layer-2)}
+.wf-lib-tab{height:24px;padding:0 9px;border:0;border-radius:6px;background:transparent;
+  color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;cursor:pointer;white-space:nowrap}
+.wf-lib-tab:hover:not([data-active="true"]){color:var(--dsw-alias-label-primary)}
+.wf-lib-tab[data-active="true"]{background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);
+  font-weight:600;box-shadow:0 1px 2px rgba(15,23,42,.12)}
 .wf-btn{height:26px;padding:0 10px;border-radius:8px;border:1px solid var(--dsw-alias-border-l1);
   background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;cursor:pointer}
 .wf-btn:hover{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}
@@ -12098,8 +12106,8 @@ var MODE_OPTIONS = [
 	},
 	{
 		value: "flowRef",
-		label: "引用图",
-		title: "引用另一张已存在的图，启动 run 时递归解析进快照"
+		label: "引用",
+		title: "引用一张流程或一个子 Agent 配置；启动 run 时递归解析进快照"
 	}
 ];
 /** 空串 / 非正整数都按「不设」处理，避免把 NaN 写进 DSL */
@@ -12195,6 +12203,8 @@ function NodePanel(props) {
 	const danglingRef = (id) => id !== void 0 && id !== "" && !props.nodes.some((node) => node.id === id) ? id : void 0;
 	const chips = summarizeNode(body, { edgeCount: props.edges.length });
 	const chipLabel = (key) => chips.find((chip) => chip.key === key)?.label;
+	const profileFlows = props.flows.filter((flow) => flow.kind === "agent");
+	const plainFlows = props.flows.filter((flow) => flow.kind !== "agent");
 	const groupOpen = (id) => props.openGroups[id] === true;
 	const toggleGroup = (id) => props.onToggleGroup(id);
 	const openGroup = (group) => {
@@ -12290,7 +12300,7 @@ function NodePanel(props) {
 	}, /* @__PURE__ */ react.createElement(ParamsEditor, {
 		value: body.params,
 		onChange: (params) => patch({ params })
-	}))), body.type === "subagent" && /* @__PURE__ */ react.createElement("div", { className: "wf-core" }, /* @__PURE__ */ react.createElement(Field, {
+	}))), body.type === "subagent" && /* @__PURE__ */ react.createElement("div", { className: "wf-core" }, body.mode === "inline" && /* @__PURE__ */ react.createElement(Field, {
 		label: "附加指令",
 		hint: "追加给子 Agent 的上下文；主指令来自上游节点"
 	}, /* @__PURE__ */ react.createElement("textarea", {
@@ -12305,7 +12315,7 @@ function NodePanel(props) {
 		areaRef: extraRef
 	})), /* @__PURE__ */ react.createElement(Field, {
 		label: "执行方式",
-		tip: "inline 同一会话执行；子图 内嵌可编辑子流程；引用图 复用另一张已保存的图"
+		tip: "inline 同一会话执行；子图 内嵌可编辑子流程；引用 复用一张流程或子 Agent 配置"
 	}, /* @__PURE__ */ react.createElement(Segmented, {
 		ariaLabel: "子 Agent 执行方式",
 		value: body.mode,
@@ -12328,15 +12338,18 @@ function NodePanel(props) {
 		type: "button",
 		className: "wf-btn",
 		onClick: () => props.onOpenSubflow(body.id)
-	}, body.subflow === void 0 ? "创建子图并打开" : "打开子图")), body.mode === "flowRef" && /* @__PURE__ */ react.createElement("div", { className: "wf-field" }, /* @__PURE__ */ react.createElement("select", {
+	}, body.subflow === void 0 ? "创建子图并打开" : "打开子图")), body.mode === "flowRef" && /* @__PURE__ */ react.createElement("div", { className: "wf-field" }, /* @__PURE__ */ react.createElement("span", { className: "wf-label" }, "引用目标"), /* @__PURE__ */ react.createElement("select", {
 		className: "wf-input",
-		"aria-label": "引用的图",
+		"aria-label": "引用目标",
 		value: body.flowRef ?? "",
 		onChange: (event) => patch({ flowRef: event.target.value === "" ? void 0 : event.target.value })
-	}, /* @__PURE__ */ react.createElement("option", { value: "" }, "（选择一张图）"), props.flows.map((flow) => /* @__PURE__ */ react.createElement("option", {
+	}, /* @__PURE__ */ react.createElement("option", { value: "" }, "（选择流程或子 Agent 配置）"), profileFlows.length > 0 && /* @__PURE__ */ react.createElement("optgroup", { label: "子 Agent 配置" }, profileFlows.map((flow) => /* @__PURE__ */ react.createElement("option", {
 		key: flow.id,
 		value: flow.id
-	}, flow.name, " · ", flow.id)), body.flowRef !== void 0 && body.flowRef !== "" && !props.flows.some((flow) => flow.id === body.flowRef) && /* @__PURE__ */ react.createElement("option", { value: body.flowRef }, "（当前值 ", body.flowRef, "，不在列表）")), /* @__PURE__ */ react.createElement("span", { className: "wf-hint" }, "目标图必须已保存；run 启动时按 id 递归解析。")))), body.type === "gate" && /* @__PURE__ */ react.createElement("div", { className: "wf-core" }, /* @__PURE__ */ react.createElement(Field, {
+	}, flow.name, " · ", flow.id))), plainFlows.length > 0 && /* @__PURE__ */ react.createElement("optgroup", { label: "流程" }, plainFlows.map((flow) => /* @__PURE__ */ react.createElement("option", {
+		key: flow.id,
+		value: flow.id
+	}, flow.name, " · ", flow.id))), body.flowRef !== void 0 && body.flowRef !== "" && !props.flows.some((flow) => flow.id === body.flowRef) && /* @__PURE__ */ react.createElement("option", { value: body.flowRef }, "（当前值 ", body.flowRef, "，不在列表）")), /* @__PURE__ */ react.createElement("span", { className: "wf-hint" }, "子 Agent 配置会连同它自己的角色表进入快照；目标必须已保存。")))), body.type === "gate" && /* @__PURE__ */ react.createElement("div", { className: "wf-core" }, /* @__PURE__ */ react.createElement(Field, {
 		label: "问题",
 		hint: "卡点会挂起 run，等人工答复后才继续"
 	}, /* @__PURE__ */ react.createElement("textarea", {
@@ -12944,6 +12957,7 @@ function WorkflowPage({ onExit } = {}) {
 	const [error, setError] = react.useState(null);
 	const [doc, setDoc] = react.useState(null);
 	const [busy, setBusy] = react.useState(false);
+	const [libraryTab, setLibraryTab] = react.useState("flow");
 	const refresh = react.useCallback(async () => {
 		setError(null);
 		try {
@@ -12970,12 +12984,14 @@ function WorkflowPage({ onExit } = {}) {
 			setBusy(false);
 		}
 	};
-	const create = () => {
+	const create = (kind) => {
 		const start = makeNode("prompt", "n1");
 		start.title = "开始";
-		setDoc({
-			id: `flow-${Date.now().toString(36)}`,
-			name: "未命名流程",
+		start.next = "n2";
+		const flow = {
+			id: `${kind === "agent" ? "agent" : "flow"}-${Date.now().toString(36)}`,
+			name: kind === "agent" ? "未命名子 Agent" : "未命名流程",
+			kind,
 			entry: "n1",
 			nodes: [start, makeNode("end", "n2")],
 			_ui: { positions: {
@@ -12988,10 +13004,17 @@ function WorkflowPage({ onExit } = {}) {
 					y: 120
 				}
 			} }
-		});
+		};
+		if (kind === "agent") flow.agents = [{
+			id: "agent_1",
+			name: "子 Agent",
+			charter: "按当前步骤完成任务并回报。"
+		}];
+		setDoc(flow);
 	};
-	const remove = async (id, label) => {
-		if (!window.confirm(`删除流程「${label}」（${id}）？删除后不可恢复。`)) return;
+	const remove = async (id, label, kind) => {
+		const what = kind === "agent" ? "子 Agent 配置" : "流程";
+		if (!window.confirm(`删除${what}「${label}」（${id}）？删除后不可恢复。`)) return;
 		try {
 			await deleteFlow(id);
 			await refresh();
@@ -13009,10 +13032,32 @@ function WorkflowPage({ onExit } = {}) {
 			refresh();
 		}
 	});
+	const all = flows ?? [];
+	const flowCount = all.filter((item) => (item.kind ?? "flow") === "flow").length;
+	const agentCount = all.length - flowCount;
+	const shown = all.filter((item) => (item.kind ?? "flow") === libraryTab);
 	return /* @__PURE__ */ react.createElement("div", {
 		className: "wf-page",
 		style: PAGE_STYLE$1
-	}, /* @__PURE__ */ react.createElement("style", null, editorCss), /* @__PURE__ */ react.createElement("header", { className: "wf-head" }, /* @__PURE__ */ react.createElement("span", { className: "wf-title" }, "可视化工作流"), /* @__PURE__ */ react.createElement("span", { className: "wf-sub" }, flows === null ? "加载中…" : `${flows.length} 张图`), /* @__PURE__ */ react.createElement("span", { className: "wf-spacer" }), /* @__PURE__ */ react.createElement("button", {
+	}, /* @__PURE__ */ react.createElement("style", null, editorCss), /* @__PURE__ */ react.createElement("header", { className: "wf-head" }, /* @__PURE__ */ react.createElement("span", { className: "wf-title" }, "可视化工作流"), /* @__PURE__ */ react.createElement("div", {
+		className: "wf-lib-tabs",
+		role: "tablist",
+		"aria-label": "流程库类型"
+	}, /* @__PURE__ */ react.createElement("button", {
+		type: "button",
+		role: "tab",
+		className: "wf-lib-tab",
+		"data-active": libraryTab === "flow",
+		"aria-selected": libraryTab === "flow",
+		onClick: () => setLibraryTab("flow")
+	}, "流程 ", flowCount), /* @__PURE__ */ react.createElement("button", {
+		type: "button",
+		role: "tab",
+		className: "wf-lib-tab",
+		"data-active": libraryTab === "agent",
+		"aria-selected": libraryTab === "agent",
+		onClick: () => setLibraryTab("agent")
+	}, "子 Agent 配置 ", agentCount)), /* @__PURE__ */ react.createElement("span", { className: "wf-spacer" }), /* @__PURE__ */ react.createElement("button", {
 		type: "button",
 		className: "wf-btn",
 		onClick: () => void refresh(),
@@ -13021,15 +13066,15 @@ function WorkflowPage({ onExit } = {}) {
 		type: "button",
 		className: "wf-btn",
 		"data-primary": "true",
-		onClick: create
-	}, "新建流程"), onExit !== void 0 && /* @__PURE__ */ react.createElement("button", {
+		onClick: () => create(libraryTab)
+	}, libraryTab === "agent" ? "新建子 Agent" : "新建流程"), onExit !== void 0 && /* @__PURE__ */ react.createElement("button", {
 		type: "button",
 		className: "wf-btn",
 		onClick: onExit
 	}, "返回会话")), error !== null && /* @__PURE__ */ react.createElement("div", {
 		className: "wf-banner",
 		"data-kind": "error"
-	}, error), /* @__PURE__ */ react.createElement("div", { className: "wf-list" }, flows !== null && flows.length === 0 && /* @__PURE__ */ react.createElement("div", { className: "wf-empty" }, /* @__PURE__ */ react.createElement("b", null, "还没有工作流"), /* @__PURE__ */ react.createElement("span", null, "新建一张，从「指令 → 结束」开始。")), (flows ?? []).map((flow) => /* @__PURE__ */ react.createElement("div", {
+	}, error), /* @__PURE__ */ react.createElement("div", { className: "wf-list" }, flows === null && /* @__PURE__ */ react.createElement("div", { className: "wf-empty" }, /* @__PURE__ */ react.createElement("b", null, "加载中…")), flows !== null && shown.length === 0 && /* @__PURE__ */ react.createElement("div", { className: "wf-empty" }, /* @__PURE__ */ react.createElement("b", null, libraryTab === "agent" ? "还没有子 Agent 配置" : "还没有工作流"), /* @__PURE__ */ react.createElement("span", null, libraryTab === "agent" ? "把可复用的子 Agent 角色和子图存到这里，主流程用「引用」节点调用。" : "新建一张，从「指令 → 结束」开始。")), shown.map((flow) => /* @__PURE__ */ react.createElement("div", {
 		className: "wf-item",
 		key: flow.id,
 		onClick: () => void open(flow.id),
@@ -13043,7 +13088,7 @@ function WorkflowPage({ onExit } = {}) {
 		className: "wf-btn",
 		onClick: (event) => {
 			event.stopPropagation();
-			remove(flow.id, flow.name);
+			remove(flow.id, flow.name, flow.kind ?? "flow");
 		}
 	}, "删除")))));
 }
@@ -14010,7 +14055,7 @@ function Editor({ initial, flows, onBack, onExit }) {
 		style: { width: 200 },
 		value: name,
 		onChange: (event) => rename(event.target.value)
-	}), frames.length > 0 && /* @__PURE__ */ react.createElement("span", {
+	}), initial.kind === "agent" && /* @__PURE__ */ react.createElement("span", { className: "wf-chip" }, "子 Agent 配置"), frames.length > 0 && /* @__PURE__ */ react.createElement("span", {
 		className: "wf-crumb",
 		title: [
 			"主图",

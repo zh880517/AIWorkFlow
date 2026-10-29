@@ -5,6 +5,14 @@ export const editorCss = `
 .wf-title{font-weight:600;font-size:13px}
 .wf-sub{color:var(--dsw-alias-label-secondary);font-size:11.5px}
 .wf-spacer{flex:1}
+/* 流程库类型切换：流程 / 子 Agent 配置 */
+.wf-lib-tabs{display:flex;gap:2px;padding:2px;border-radius:8px;border:1px solid var(--dsw-alias-border-l1);
+  background:var(--dsw-alias-bg-layer-2)}
+.wf-lib-tab{height:24px;padding:0 9px;border:0;border-radius:6px;background:transparent;
+  color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;cursor:pointer;white-space:nowrap}
+.wf-lib-tab:hover:not([data-active="true"]){color:var(--dsw-alias-label-primary)}
+.wf-lib-tab[data-active="true"]{background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);
+  font-weight:600;box-shadow:0 1px 2px rgba(15,23,42,.12)}
 .wf-btn{height:26px;padding:0 10px;border-radius:8px;border:1px solid var(--dsw-alias-border-l1);
   background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;cursor:pointer}
 .wf-btn:hover{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}

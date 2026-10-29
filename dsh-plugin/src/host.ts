@@ -100,7 +100,9 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
 
     if (url.pathname === FLOWS_PATH || url.pathname === `${FLOWS_PATH}/`) {
       if (method === 'GET') {
-        send(res, 200, { ok: true, flows: listFlows(database()) });
+        const kindParam = url.searchParams.get('kind');
+        const kind = kindParam === 'agent' ? 'agent' : kindParam === 'flow' ? 'flow' : undefined;
+        send(res, 200, { ok: true, flows: listFlows(database(), kind) });
         return;
       }
       return methodNotAllowed(res);

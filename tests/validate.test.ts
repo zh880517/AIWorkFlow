@@ -48,6 +48,16 @@ describe('校验器：合法图', () => {
     expect(result.warnings).toHaveLength(0);
   });
 
+  it('flowRef 引用配置时不强制 extraPrompt（任务来自被引用图的第一步）', () => {
+    const result = validateFlow(
+      flow([
+        { id: 'n1', type: 'subagent', mode: 'flowRef', flowRef: 'f_agent_profile', next: 'n2' },
+        end('n2'),
+      ]),
+    );
+    expect(result.ok).toBe(true);
+  });
+
   it('loopId + maxRounds 的回路合法且无警告', () => {
     const result = validateFlow(
       flow([
@@ -69,8 +79,7 @@ describe('校验器：合法图', () => {
   });
 });
 
-describe('校验器：硬拒', () => {
-  it('缺少 entry', () => {
+describe('校验器：硬拒', () => {  it('缺少 entry', () => {
     const result = validateFlow({ ...flow([prompt('n1')]), entry: '' });
     expect(result.ok).toBe(false);
     expect(result.errors.map((e) => e.code)).toContain('E_NO_ENTRY');
@@ -344,6 +353,31 @@ describe('校验器：硬拒', () => {
     );
     expect(result.errors.map((e) => e.code)).toContain('E_DUP_LOOP_CONTROLLER');
   });
+
+  it('kind 非法', () => {
+    const result = validateFlow({
+      ...flow([prompt('n1')]),
+      kind: 'team' as never,
+    });
+    expect(result.errors.map((e) => e.code)).toContain('E_FLOW_KIND');
+  });
+
+  it('flowRef 引用当前图自身', () => {
+    const result = validateFlow(
+      flow([
+        {
+          id: 'n1',
+          type: 'subagent',
+          extraPrompt: 'x',
+          mode: 'flowRef',
+          flowRef: 'f_test',
+          next: 'n2',
+        },
+        end('n2'),
+      ]),
+    );
+    expect(result.errors.map((e) => e.code)).toContain('E_FLOW_REF_SELF');
+  });
 });
 
 describe('校验器：警告档（允许保存）', () => {
@@ -392,5 +426,14 @@ describe('校验器：警告档（允许保存）', () => {
     );
     expect(result.ok).toBe(true);
     expect(result.warnings.map((w) => w.code)).toContain('W_JOIN_NO_FANOUT');
+  });
+
+  it('子 Agent 配置没有角色表时给警告，但允许保存', () => {
+    const result = validateFlow({
+      ...flow([prompt('n1')]),
+      kind: 'agent',
+    });
+    expect(result.ok).toBe(true);
+    expect(result.warnings.map((w) => w.code)).toContain('W_AGENT_CONFIG_NO_ROLE');
   });
 });

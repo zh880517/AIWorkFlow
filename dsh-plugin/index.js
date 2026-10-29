@@ -344,10 +344,12 @@ function validateFlow(flow) {
 	});
 	if (!flow.id || typeof flow.id !== "string") err("E_FLOW_ID", "图缺少 id");
 	if (!flow.name || typeof flow.name !== "string") err("E_FLOW_NAME", "图缺少 name");
+	if (flow.kind !== void 0 && flow.kind !== "flow" && flow.kind !== "agent") err("E_FLOW_KIND", `flow.kind 必须是 flow 或 agent：${String(flow.kind)}`);
 	if (!Array.isArray(flow.nodes) || flow.nodes.length === 0) {
 		err("E_NO_NODES", "图没有任何节点");
 		return finish(errors, warnings);
 	}
+	for (const node of flow.nodes) if (node.type === "subagent" && node.mode === "flowRef" && node.flowRef === flow.id) err("E_FLOW_REF_SELF", `节点 "${node.id}" 引用了当前图自身`, node.id);
 	const byId = /* @__PURE__ */ new Map();
 	for (const node of flow.nodes) {
 		if (byId.has(node.id)) err("E_DUP_NODE", `节点 id 重复：${node.id}`, node.id);
@@ -368,6 +370,7 @@ function validateFlow(flow) {
 			validateKeyList(agent.consumes, `角色 "${agent.id}" 的 consumes`, err, agent.id);
 		}
 	}
+	if (flow.kind === "agent" && (flow.agents === void 0 || flow.agents.length === 0)) warn("W_AGENT_CONFIG_NO_ROLE", "子 Agent 配置没有角色：内部节点无法引用角色");
 	for (const node of flow.nodes) validateNode(node, byId, err, warn, agentIds);
 	const loopControllers = validateLoops(flow.nodes, err, warn);
 	const produced = /* @__PURE__ */ new Set();
@@ -484,7 +487,7 @@ function validateNode(node, byId, err, warn, agentIds = /* @__PURE__ */ new Set(
 			}
 			break;
 		case "subagent":
-			if (!node.extraPrompt?.trim()) err("E_TYPE_FIELD", `subagent 节点 "${id}" 缺少 extraPrompt`, id);
+			if (node.mode === "inline" && !node.extraPrompt?.trim()) err("E_TYPE_FIELD", `subagent 节点 "${id}" 缺少 extraPrompt`, id);
 			if (!SUBAGENT_MODES.has(node.mode)) err("E_TYPE_FIELD", `subagent 节点 "${id}" 的 mode 非法：${node.mode}`, id);
 			if (node.mode === "subflow" && !node.subflow) err("E_TYPE_FIELD", `subagent 节点 "${id}" mode 为 subflow 但缺少内嵌子图`, id);
 			if (node.mode === "subflow" && node.subflow) validateSubflow(node.subflow, id, err, warn, agentIds);
@@ -625,39 +628,59 @@ function reachableExcludingStart(start, edges) {
 }
 //#endregion
 //#region shared/src/flows.ts
+function kindOf(value) {
+	return value === "agent" ? "agent" : "flow";
+}
 /** 干跑校验：与落库路径用的是同一个校验器，仅不写库 */
 function validateFlowOnly(flow) {
 	return validateFlow(flow);
 }
-function listFlows(db) {
-	return db.prepare("SELECT id, name, updated_at FROM flows ORDER BY updated_at DESC").all().map((row) => ({
+function listFlows(db, kind) {
+	const sql = "SELECT id, name, kind, updated_at FROM flows";
+	return (kind === void 0 ? db.prepare(`${sql} ORDER BY updated_at DESC`).all() : db.prepare(`${sql} WHERE kind = ? ORDER BY updated_at DESC`).all(kind)).map((row) => ({
 		id: row.id,
 		name: row.name,
+		kind: kindOf(row.kind),
 		updatedAt: row.updated_at
 	}));
 }
 function getFlow(db, flowId) {
-	const row = db.prepare("SELECT content FROM flows WHERE id = ?").get(flowId);
+	const row = db.prepare("SELECT kind, content FROM flows WHERE id = ?").get(flowId);
 	if (row === void 0) return void 0;
 	try {
-		return JSON.parse(row.content);
+		return {
+			...JSON.parse(row.content),
+			kind: kindOf(row.kind)
+		};
 	} catch {
 		return;
 	}
 }
 function saveFlow(db, flow, jsonDir) {
-	const result = validateFlow(flow);
+	const existing = db.prepare("SELECT kind FROM flows WHERE id = ?").get(flow.id);
+	const inherited = flow.kind ?? existing?.kind;
+	const candidate = inherited === void 0 ? flow : {
+		...flow,
+		kind: inherited
+	};
+	const result = validateFlow(candidate);
 	if (!result.ok) return result;
+	const kind = kindOf(candidate.kind);
+	const stored = {
+		...candidate,
+		kind
+	};
 	const now = (/* @__PURE__ */ new Date()).toISOString();
-	const content = JSON.stringify(flow, null, 2);
-	db.prepare(`INSERT INTO flows (id, name, content, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET name = excluded.name, content = excluded.content, updated_at = excluded.updated_at`).run(flow.id, flow.name, content, now, now);
+	const content = JSON.stringify(stored, null, 2);
+	db.prepare(`INSERT INTO flows (id, name, kind, content, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET name = excluded.name, kind = excluded.kind,
+       content = excluded.content, updated_at = excluded.updated_at`).run(stored.id, stored.name, kind, content, now, now);
 	fs.mkdirSync(jsonDir, { recursive: true });
-	fs.writeFileSync(path.join(jsonDir, `${flow.id}.json`), content, "utf-8");
+	fs.writeFileSync(path.join(jsonDir, `${stored.id}.json`), content, "utf-8");
 	return {
 		...result,
-		flow
+		flow: stored
 	};
 }
 function deleteFlow(db, flowId, jsonDir) {
@@ -789,6 +812,10 @@ var MIGRATIONS = [
 	`
   ALTER TABLE runs ADD COLUMN parent_iteration INTEGER;
   CREATE INDEX IF NOT EXISTS idx_runs_parent_iteration ON runs(parent_run_id, parent_node, parent_iteration);
+  `,
+	`
+  ALTER TABLE flows ADD COLUMN kind TEXT NOT NULL DEFAULT 'flow';
+  CREATE INDEX IF NOT EXISTS idx_flows_kind ON flows(kind);
   `
 ];
 /** 逐级迁移；库版本高于程序支持版本时拒绝启动，避免旧代码写坏新库 */
@@ -944,7 +971,7 @@ function buildSubSnapshot(parent, childFlow) {
 	collectFlows(childFlow, { get: (id) => parent.flows[id] }, flows, /* @__PURE__ */ new Set([childFlow.id]));
 	return {
 		rootFlowId: childFlow.id,
-		agents: parent.agents,
+		agents: childFlow.agents ?? parent.agents,
 		flows
 	};
 }
@@ -1055,6 +1082,8 @@ var ExecutionEngine = class {
 		const run = this.resolveRun(ref);
 		if (run === null) return selfHeal(ref.childToken !== void 0 ? "这个 childToken 没有对应的 run（可能已过期或写错）。" : "没有找到你正在进行的 run。", "主 Agent 调 start_run 开始一个流程；如果上下文被压缩过、不确定自己在哪，这个结果就是答案的来源——先 start_run 或问用户该跑哪张图。");
 		if (run.status === "waiting_children") return this.gatherChildren(run);
+		const bootstrapped = this.bootstrapEntry(run);
+		if (bootstrapped !== void 0) return bootstrapped;
 		return this.resultForRun(run, "get_current_step");
 	}
 	/** 推进一格：校验 → 落库 → 定位后继（含迭代上限逃生）→ 渲染插值 → 返回下一步 */
@@ -1291,6 +1320,29 @@ var ExecutionEngine = class {
 				} : step;
 			}
 			await sleep(Math.min(400, Math.max(1, deadline - Date.now())));
+		}
+	}
+	/** child run 从入口直接开始时（entry 是 gate/subagent），第一次领步补做 startRun 的入口特判 */
+	bootstrapEntry(run) {
+		if (run.status !== "running" || run.current_node === null || run.steps_used !== 0) return void 0;
+		const node = findNode(this.snapshotOf(run), run.current_node);
+		if (node === void 0) return void 0;
+		const now = (/* @__PURE__ */ new Date()).toISOString();
+		if (node.type === "gate") {
+			const gateId = this.enterGate(run.id, node, now);
+			this.emit({
+				type: "gate_pending",
+				runId: run.id,
+				nodeId: node.id,
+				gateId: String(gateId),
+				question: node.question,
+				at: now
+			});
+			return this.stepResult(run.id);
+		}
+		if (node.type === "subagent") {
+			const spawned = this.enterSubagent(run.id, node, now);
+			return spawned !== void 0 ? spawned : this.stepResult(run.id);
 		}
 	}
 	/** 入口即派发：start 后直接建 child 并挂 waiting_children（与入口即 gate 对称） */
@@ -2330,7 +2382,7 @@ var FLOW_ACTIONS = [
 	"update"
 ];
 /** 模型可见的 DSL 速查（完整语义以校验器报错为准） */
-var DSL_HINT = "完整流程图 DSL：{ id, name, entry, maxSteps?, agents?, nodes: [...] }。节点 { id, type: prompt|tool|gate|subagent|join|end, title?, instruction?, toolName?, params?, next?, branches?, iterationLimit?, loopId?, maxRounds?, onLimitExceeded?, outcome? }。subagent 额外支持 { role?, thread?: \"new\"|\"role\"|自定义, produces?, consumes?, reportHint? }；agents: [{ id, name, charter, produces?, consumes? }]。后继二选一：next（唯一后继）或 branches: [{ id, condition, to, when? }]（condition \"*\" 是默认分支，同节点至多一个；when 是服务端可判定的单比较，如 \"{{review.payload.verdict}} == 'pass'\"）。complete_step 可带 artifacts: [{ key, summary?, path?, content? }]，插值用 {{artifacts.key.path}}；run 输入用 {{inputs.字段}}。环必须给环上节点配 iterationLimit，或给同一 loopId 的控制器配 maxRounds。end 节点带 outcome: success|fail。";
+var DSL_HINT = "完整流程图 DSL：{ id, name, kind?: \"flow\"|\"agent\", entry, maxSteps?, agents?, nodes: [...] }。kind 缺省为 flow（可独立 start_run 的主流程）；kind=\"agent\" 是可复用的子 Agent 配置（自带 agents 角色表 + 子图），主流程用 subagent 节点的 mode=\"flowRef\" + flowRef=<配置 id> 引用它。节点 { id, type: prompt|tool|gate|subagent|join|end, title?, instruction?, toolName?, params?, next?, branches?, iterationLimit?, loopId?, maxRounds?, onLimitExceeded?, outcome? }。subagent 额外支持 { role?, thread?: \"new\"|\"role\"|自定义, produces?, consumes?, reportHint? }；agents: [{ id, name, charter, produces?, consumes? }]。后继二选一：next（唯一后继）或 branches: [{ id, condition, to, when? }]（condition \"*\" 是默认分支，同节点至多一个；when 是服务端可判定的单比较，如 \"{{review.payload.verdict}} == 'pass'\"）。complete_step 可带 artifacts: [{ key, summary?, path?, content? }]，插值用 {{artifacts.key.path}}；run 输入用 {{inputs.字段}}。环必须给环上节点配 iterationLimit，或给同一 loopId 的控制器配 maxRounds。end 节点带 outcome: success|fail。";
 function textResult(value) {
 	return [{
 		type: "text",
@@ -2374,13 +2426,16 @@ function contextTool(ctx) {
 				dbPath: databasePath(),
 				flowsDir: flowsDir(),
 				flows: null,
+				agentConfigs: null,
 				activeRuns: null,
 				recentRuns: null
 			};
 			try {
 				const db = database();
 				const state = readMonitorState(db, null);
-				snapshot.flows = listFlows(db).length;
+				const allFlows = listFlows(db);
+				snapshot.flows = allFlows.length;
+				snapshot.agentConfigs = allFlows.filter((flow) => flow.kind === "agent").length;
 				snapshot.activeRuns = state.active.length;
 				snapshot.recentRuns = state.recent.length;
 			} catch (error) {
@@ -2394,7 +2449,7 @@ function contextTool(ctx) {
 function flowTool() {
 	return {
 		name: "aiworkflow_flow",
-		description: "aiworkflow 流程图的读写入口（与 DSH 里的「可视化工作流」面板共用同一份 SQLite）。action=list 列出全部流程；get 按 id 或名字读完整 DSL；validate 干跑校验、不落库；create 新建（id 必须尚不存在）；update 整体覆盖已存在的流程。校验不通过时不落库，原图保持不变。" + DSL_HINT,
+		description: "aiworkflow 流程图的读写入口（与 DSH 里的「可视化工作流」面板共用同一份 SQLite）。action=list 列出全部流程与子 Agent 配置；get 按 id 或名字读完整 DSL；validate 干跑校验、不落库；create 新建（id 必须尚不存在）；update 整体覆盖已存在的流程。校验不通过时不落库，原图保持不变。" + DSL_HINT,
 		parameters: {
 			type: "object",
 			properties: {
@@ -2879,9 +2934,11 @@ async function handleRequest(req, res) {
 		}
 		if (url.pathname === FLOWS_PATH || url.pathname === `${FLOWS_PATH}/`) {
 			if (method === "GET") {
+				const kindParam = url.searchParams.get("kind");
+				const kind = kindParam === "agent" ? "agent" : kindParam === "flow" ? "flow" : void 0;
 				send(res, 200, {
 					ok: true,
-					flows: listFlows(database())
+					flows: listFlows(database(), kind)
 				});
 				return;
 			}

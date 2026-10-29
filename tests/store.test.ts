@@ -6,6 +6,7 @@ import { openMemoryDb } from './support/db.js';
 import { FlowStore } from './support/flowStore.js';
 import {
   buildSnapshot,
+  buildSubSnapshot,
   loadSnapshot,
   persistSnapshot,
   snapshotHash,
@@ -46,9 +47,12 @@ describe('FlowStore：SQLite 事实源 + JSON 派生镜像', () => {
     const saveResult = store.save(flow);
     expect(saveResult.ok).toBe(true);
 
-    expect(store.get('f_linear')).toEqual(flow);
+    expect(store.get('f_linear')).toEqual({ ...flow, kind: 'flow' });
     expect(fs.existsSync(path.join(jsonDir, 'f_linear.json'))).toBe(true);
-    expect(JSON.parse(fs.readFileSync(path.join(jsonDir, 'f_linear.json'), 'utf-8'))).toEqual(flow);
+    expect(JSON.parse(fs.readFileSync(path.join(jsonDir, 'f_linear.json'), 'utf-8'))).toEqual({
+      ...flow,
+      kind: 'flow',
+    });
   });
 
   it('硬拒时不落库也不写镜像', () => {
@@ -88,6 +92,43 @@ describe('FlowStore：SQLite 事实源 + JSON 派生镜像', () => {
     expect(result.ok).toBe(true);
     expect(result.warnings.map((w) => w.code)).toContain('W_NO_DEFAULT');
     expect(store.get('f_warn')).toBeDefined();
+  });
+
+  it('kind 落库：主流程默认 flow，子 Agent 配置可单独列出；老 JSON 缺 kind 也能读', () => {
+    const db = openMemoryDb();
+    const jsonDir = path.join(tmpHome, 'flows-kind');
+    const store = new FlowStore(db, jsonDir);
+    const flow = linearFlow('f_flow');
+    const profile: Flow = {
+      ...linearFlow('f_agent'),
+      kind: 'agent',
+      agents: [{ id: 'reviewer', name: '评审员', charter: '挑剔' }],
+    };
+    expect(store.save(flow).ok).toBe(true);
+    expect(store.save(profile).ok).toBe(true);
+
+    expect(store.get('f_flow')?.kind).toBe('flow');
+    expect(store.get('f_agent')?.kind).toBe('agent');
+    expect(store.list('agent').map((item) => item.id)).toEqual(['f_agent']);
+    expect(store.list('flow').map((item) => item.id)).toEqual(['f_flow']);
+    expect(JSON.parse(fs.readFileSync(path.join(jsonDir, 'f_agent.json'), 'utf-8')).kind).toBe('agent');
+
+    // 更新时没带 kind：沿用原类型，不把配置降级成主流程
+    expect(store.save({ ...linearFlow('f_agent'), name: '改名后' } as Flow).ok).toBe(true);
+    expect(store.get('f_agent')?.kind).toBe('agent');
+
+    // 非法 kind 仍然硬拒，不会被规范化成 flow
+    const badKind = { ...linearFlow('f_bad_kind'), kind: 'team' as never } as Flow;
+    expect(store.save(badKind).ok).toBe(false);
+    expect(store.get('f_bad_kind')).toBeUndefined();
+
+    // 模拟 v10 之前落库的老内容：JSON 里没有 kind，读取时以列为准补上
+    const now = new Date().toISOString();
+    db.prepare(
+      `INSERT INTO flows (id, name, kind, content, created_at, updated_at)
+       VALUES ('f_old', '老图', 'flow', ?, ?, ?)`,
+    ).run(JSON.stringify(linearFlow('f_old')), now, now);
+    expect(store.get('f_old')?.kind).toBe('flow');
   });
 
   it('按展示名 resolve；list 按更新时间排序；delete 同步删镜像', () => {
@@ -174,6 +215,46 @@ describe('快照：copy-on-run 与内容寻址去重', () => {
     const hash = persistSnapshot(db, snapshot);
     const loaded = loadSnapshot(db, hash);
     expect(loaded).toEqual(snapshot);
+  });
+
+  it('引用子 Agent 配置时，子快照用它自己的角色表；普通子图继承父图', () => {
+    const db = openMemoryDb();
+    const store = new FlowStore(db, path.join(tmpHome, 'flows-kind-snapshot'));
+    const profile: Flow = {
+      id: 'f_agent_profile',
+      name: '评审配置',
+      kind: 'agent',
+      agents: [{ id: 'reviewer', name: '评审员', charter: '挑剔' }],
+      entry: 'a1',
+      nodes: [{ id: 'a1', type: 'prompt', instruction: '评审' }],
+    };
+    const parent: Flow = {
+      id: 'f_main',
+      name: '主图',
+      agents: [{ id: 'owner', name: '主 Agent', charter: '统筹' }],
+      entry: 'm1',
+      nodes: [
+        {
+          id: 'm1',
+          type: 'subagent',
+          extraPrompt: '交给评审',
+          mode: 'flowRef',
+          flowRef: 'f_agent_profile',
+          next: 'm2',
+        },
+        { id: 'm2', type: 'end', outcome: 'success' },
+      ],
+    };
+    expect(store.save(profile).ok).toBe(true);
+    expect(store.save(parent).ok).toBe(true);
+    const snapshot = buildSnapshot(parent, store);
+    const child = buildSubSnapshot(snapshot, snapshot.flows['f_agent_profile']!);
+    expect(child.rootFlowId).toBe('f_agent_profile');
+    expect(child.agents?.map((agent) => agent.id)).toEqual(['reviewer']);
+
+    // 普通内嵌子图 / 老图没有自己的 agents：继续继承父图
+    const plain: Flow = { id: 'f_plain', name: '普通子图', entry: 'p1', nodes: [{ id: 'p1', type: 'prompt', instruction: 'x' }] };
+    expect(buildSubSnapshot(snapshot, plain).agents?.map((agent) => agent.id)).toEqual(['owner']);
   });
 
   it('同一快照重复持久化去重（同 hash 单行）', () => {

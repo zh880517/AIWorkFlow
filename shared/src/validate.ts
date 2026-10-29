@@ -35,9 +35,19 @@ export function validateFlow(flow: Flow): ValidationResult {
 
   if (!flow.id || typeof flow.id !== 'string') err('E_FLOW_ID', '图缺少 id');
   if (!flow.name || typeof flow.name !== 'string') err('E_FLOW_NAME', '图缺少 name');
+  if (flow.kind !== undefined && flow.kind !== 'flow' && flow.kind !== 'agent') {
+    err('E_FLOW_KIND', `flow.kind 必须是 flow 或 agent：${String(flow.kind)}`);
+  }
   if (!Array.isArray(flow.nodes) || flow.nodes.length === 0) {
     err('E_NO_NODES', '图没有任何节点');
     return finish(errors, warnings);
+  }
+
+  // flowRef 引用自身没有意义，快照阶段还会成环；在保存时就拦下
+  for (const node of flow.nodes) {
+    if (node.type === 'subagent' && node.mode === 'flowRef' && node.flowRef === flow.id) {
+      err('E_FLOW_REF_SELF', `节点 "${node.id}" 引用了当前图自身`, node.id);
+    }
   }
 
   // --- 节点 id 唯一性 ---
@@ -74,6 +84,10 @@ export function validateFlow(flow: Flow): ValidationResult {
         validateKeyList(agent.consumes, `角色 "${agent.id}" 的 consumes`, err, agent.id);
       }
     }
+  }
+
+  if (flow.kind === 'agent' && (flow.agents === undefined || flow.agents.length === 0)) {
+    warn('W_AGENT_CONFIG_NO_ROLE', '子 Agent 配置没有角色：内部节点无法引用角色');
   }
 
   // --- 逐节点结构校验 ---
@@ -306,7 +320,8 @@ function validateNode(
       break;
     }
     case 'subagent': {
-      if (!node.extraPrompt?.trim()) {
+      // inline 才需要附加指令；subflow / flowRef 的任务来自被引用图的第一步，extraPrompt 引擎不读
+      if (node.mode === 'inline' && !node.extraPrompt?.trim()) {
         err('E_TYPE_FIELD', `subagent 节点 "${id}" 缺少 extraPrompt`, id);
       }
       if (!SUBAGENT_MODES.has(node.mode)) {

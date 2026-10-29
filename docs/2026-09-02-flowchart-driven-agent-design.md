@@ -139,6 +139,19 @@ P1 增补两条交接通道：
 2. **回路级** — 同一回路的节点共用一个 `loopId`，其中**控制器节点**（同 `loopId` 中配 `maxRounds` 的节点）每执行一次算一轮。推进到该回路的任何节点时，若控制器执行数已达 `maxRounds`，不执行目标节点，落 `limit_exceeded` 轨迹并走逃生出口（目标节点 `onLimitExceeded` → 控制器 `onLimitExceeded` → 目标 default 分支）。这样"A→B→C→A"不会因为每个节点各自没超限而无限绕圈。
 3. **run 级** — `maxSteps` 全局兜底（默认 200）。理由：前两层只防单点/单回路打转，防不住跨回路组合出来的病态图，也防不住引擎自身 bug。撞上判 run 失败，面板明确写"超出全局步数上限"。
 
+### 4.6 子 Agent 配置（可复用子图）
+
+`Flow.kind` 区分两类保存图：
+
+- `flow`（缺省）— 可独立 `start_run` 的主流程。
+- `agent` — 可复用「子 Agent 配置」：自带 `agents` 角色表和一张子图，在流程库的「子 Agent 配置」页签里用同一画布创建/编辑，通常不单独启动。
+
+主流程通过 `subagent.mode = 'flowRef'` 引用它（和引用普通流程是同一个字段），运行时：
+
+- child run 的 `flow_id` 就是配置 id，执行配置的 `entry`；入口是 `subagent` / `gate` 时，child 第一次 `get_current_step` 会补做入口派发/挂起；
+- 子快照的角色表取**配置自己的 `agents`**（`buildSubSnapshot`），配置内部节点可以直接 `role` 引用这些角色；普通内嵌子图没有自己的角色表时仍继承父图；
+- 配置被修改不影响已启动的 run（copy-on-run）；引用成环、引用自身都会被校验/快照拦下。
+
 ## 5. 存储
 
 ### 5.1 布局
@@ -173,6 +186,7 @@ P1 增补两条交接通道：
 
 | 表 | 关键列 |
 |---|---|
+| `flows` | `id`, `name`, `kind`（`flow` \| `agent`，v10）, `content`, `created_at`, `updated_at` |
 | `runs` | `id`, `parent_run_id`, `root_run_id`, `flow_id`, `flow_snapshot_hash`, `entry_node`, `current_node`, `status`, `cwd`, `project_name`, `host_session`, `child_token`, `role`, `thread_id`, `inputs`, `parent_iteration`, `steps_used`, `last_activity`, `created_at`, `finished_at` |
 | `flow_snapshots` | `hash`, `content`（内容寻址去重） |
 | `node_executions` | `run_id`, `node_id`, `iteration`, `status`, `summary`, `payload`, `branch_id`, `started_at`, `finished_at` |
@@ -398,6 +412,7 @@ child run 调 `report_blocked` 时，该 child 置为 `failed`，随后由 7.5 �
 - 画布拖拽建节点、连线即分支；选中连线编辑 `condition`，高级区可填 `when`。六种节点以颜色 / 图标区分，右侧按 `type` 显示对应字段表单
 - **属性面板按使用频率分三层**：头部（类型、标题就地编辑、id 复制、入口标记 + 概览 chip）→ 核心字段（每类 1–3 个必填/最常改项）→ 折叠的高级设置（角色与线程、产物与汇报、并行派发、循环与逃生、本步指令）。概览 chip 由 `summarizeNode()` 生成（角色/线程、产物、子图、并行、回路、出口数），点击展开对应分组；高级字段的说明收进 label 右侧的 i 提示，不占常驻行高
 - 面板顶部页签「节点 / 图」；`subagent` 的 `role` 下拉引用全图角色表，角色表（id/name/charter/produces/consumes）在「图」页签维护，不再占节点面板
+- 流程库分「流程 / 子 Agent 配置」两个页签：后者是 `kind = 'agent'` 的保存图，自带 `agents` 角色表，用同一画布创建和编辑；主流程通过 `subagent` 节点的「引用」模式按 id 调用（见 §4.6），`flowRef` 下拉按类型分组
 - **技术选型：React Flow**。自定义节点、连线交互、缩放定位均现成
 - **插值提示的固有限制**：输入 `{{` 时能提示的只有前序**节点 id**，`payload` 字段名运行时才知道。补法是从历史 run 中学习该节点曾出现过的字段名作候选。首次画图无提示，用过几次后有
 
@@ -434,7 +449,7 @@ child run 调 `report_blocked` 时，该 child 置为 `failed`，随后由 7.5 �
 
 ## 10. 验证方式
 
-- **引擎 / 校验 / 存储 / 迁移**：`vitest`，数据库用内存 `node:sqlite`，覆盖六种节点、分支/环/迭代上限、gate、子 Agent、fan-out、快照、P1 多 Agent 语义以及 v5→v9 迁移。
+- **引擎 / 校验 / 存储 / 迁移**：`vitest`，数据库用内存 `node:sqlite`，覆盖六种节点、分支/环/迭代上限、gate、子 Agent、fan-out、快照、P1 多 Agent 语义、子 Agent 配置以及 v5→v10 迁移。
 - **类型与打包**：`npm run typecheck`（shared + 插件）与 `npm run build:plugin`；Host 产物必须只外置 `node:` 内建。
 - **DSH 实机**：在 `dsh web` 或桌面版里装载插件，跑一张含 gate 与 subagent 的图，验证工具注册、会话隔离、面板与运行图。
 

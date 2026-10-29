@@ -76,7 +76,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 const MODE_OPTIONS: Array<{ value: SubagentMode; label: string; title: string }> = [
   { value: 'inline', label: 'inline', title: '在同一个会话里派子 Agent 执行一个子任务' },
   { value: 'subflow', label: '子图', title: '子图直接嵌在主图里，运行时 child 跑这段子图' },
-  { value: 'flowRef', label: '引用图', title: '引用另一张已存在的图，启动 run 时递归解析进快照' },
+  { value: 'flowRef', label: '引用', title: '引用一张流程或一个子 Agent 配置；启动 run 时递归解析进快照' },
 ];
 
 /** 空串 / 非正整数都按「不设」处理，避免把 NaN 写进 DSL */
@@ -218,6 +218,8 @@ function NodePanel(
   const chips = summarizeNode(body, { edgeCount: props.edges.length });
   const chipLabel = (key: NodeSummaryChip['key']): string | undefined =>
     chips.find((chip) => chip.key === key)?.label;
+  const profileFlows = props.flows.filter((flow) => flow.kind === 'agent');
+  const plainFlows = props.flows.filter((flow) => flow.kind !== 'agent');
 
   const groupOpen = (id: string): boolean => props.openGroups[id] === true;
   const toggleGroup = (id: string): void => props.onToggleGroup(id);
@@ -363,19 +365,21 @@ function NodePanel(
 
         {body.type === 'subagent' && (
           <div className="wf-core">
-            <Field label="附加指令" hint="追加给子 Agent 的上下文；主指令来自上游节点">
-              <textarea
-                ref={extraRef}
-                className="wf-area"
-                value={body.extraPrompt ?? ''}
-                onChange={(event) => patch({ extraPrompt: event.target.value })}
-                placeholder="例如：只读不写，产出不超过 20 行的结论"
-              />
-              <InterpHints nodes={others} payloadFields={props.payloadFields} areaRef={extraRef} />
-            </Field>
+            {body.mode === 'inline' && (
+              <Field label="附加指令" hint="追加给子 Agent 的上下文；主指令来自上游节点">
+                <textarea
+                  ref={extraRef}
+                  className="wf-area"
+                  value={body.extraPrompt ?? ''}
+                  onChange={(event) => patch({ extraPrompt: event.target.value })}
+                  placeholder="例如：只读不写，产出不超过 20 行的结论"
+                />
+                <InterpHints nodes={others} payloadFields={props.payloadFields} areaRef={extraRef} />
+              </Field>
+            )}
             <Field
               label="执行方式"
-              tip="inline 同一会话执行；子图 内嵌可编辑子流程；引用图 复用另一张已保存的图"
+              tip="inline 同一会话执行；子图 内嵌可编辑子流程；引用 复用一张流程或子 Agent 配置"
             >
               <Segmented
                 ariaLabel="子 Agent 执行方式"
@@ -405,25 +409,41 @@ function NodePanel(
               )}
               {body.mode === 'flowRef' && (
                 <div className="wf-field">
+                  <span className="wf-label">引用目标</span>
                   <select
                     className="wf-input"
-                    aria-label="引用的图"
+                    aria-label="引用目标"
                     value={body.flowRef ?? ''}
                     onChange={(event) => patch({ flowRef: event.target.value === '' ? undefined : event.target.value })}
                   >
-                    <option value="">（选择一张图）</option>
-                    {props.flows.map((flow) => (
-                      <option key={flow.id} value={flow.id}>
-                        {flow.name} · {flow.id}
-                      </option>
-                    ))}
+                    <option value="">（选择流程或子 Agent 配置）</option>
+                    {profileFlows.length > 0 && (
+                      <optgroup label="子 Agent 配置">
+                        {profileFlows.map((flow) => (
+                          <option key={flow.id} value={flow.id}>
+                            {flow.name} · {flow.id}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+                    {plainFlows.length > 0 && (
+                      <optgroup label="流程">
+                        {plainFlows.map((flow) => (
+                          <option key={flow.id} value={flow.id}>
+                            {flow.name} · {flow.id}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
                     {body.flowRef !== undefined &&
                       body.flowRef !== '' &&
                       !props.flows.some((flow) => flow.id === body.flowRef) && (
                         <option value={body.flowRef}>（当前值 {body.flowRef}，不在列表）</option>
                       )}
                   </select>
-                  <span className="wf-hint">目标图必须已保存；run 启动时按 id 递归解析。</span>
+                  <span className="wf-hint">
+                    子 Agent 配置会连同它自己的角色表进入快照；目标必须已保存。
+                  </span>
                 </div>
               )}
             </Field>

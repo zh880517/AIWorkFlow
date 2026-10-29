@@ -125,6 +125,11 @@ export const MIGRATIONS: string[] = [
   ALTER TABLE runs ADD COLUMN parent_iteration INTEGER;
   CREATE INDEX IF NOT EXISTS idx_runs_parent_iteration ON runs(parent_run_id, parent_node, parent_iteration);
   `,
+  // v10：区分主流程与「子 Agent 配置」；老图默认 flow，不改变任何现有行
+  `
+  ALTER TABLE flows ADD COLUMN kind TEXT NOT NULL DEFAULT 'flow';
+  CREATE INDEX IF NOT EXISTS idx_flows_kind ON flows(kind);
+  `,
 ];
 
 /** 逐级迁移；库版本高于程序支持版本时拒绝启动，避免旧代码写坏新库 */

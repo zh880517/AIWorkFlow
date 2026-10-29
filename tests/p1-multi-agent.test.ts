@@ -281,16 +281,65 @@ describe('P1 引擎', () => {
     expect(validateFlow(badKey).errors.map((e) => e.code)).toContain('E_ARTIFACT_KEY');
   });
 
-  it('迁移到 v9：runs 新列、parent_iteration 与 run_artifacts 表都在', () => {
+  it('引用子 Agent 配置：child 用它自己的角色表', () => {
+    const profile: Flow = {
+      id: 'f_agent_profile',
+      name: '评审配置',
+      kind: 'agent',
+      agents: [{ id: 'reviewer', name: '评审员', charter: '挑剔，只认证据' }],
+      entry: 'a1',
+      nodes: [
+        {
+          id: 'a1',
+          type: 'subagent',
+          mode: 'inline',
+          role: 'reviewer',
+          extraPrompt: '按标准评审',
+          next: 'a3',
+        },
+        { id: 'a3', type: 'end', outcome: 'success' },
+      ],
+    };
+    const main: Flow = {
+      id: 'f_agent_main',
+      name: '主流程',
+      entry: 'm1',
+      nodes: [
+        { id: 'm1', type: 'subagent', mode: 'flowRef', flowRef: profile.id, extraPrompt: '交给评审', next: 'm2' },
+        { id: 'm2', type: 'end', outcome: 'success' },
+      ],
+    };
+    expect(store.save(profile).ok).toBe(true);
+    expect(store.save(main).ok).toBe(true);
+
+    const e = engine();
+    const start = asStep(e.startRun({ flowName: main.id }));
+    const childToken = start.step.children![0]!.childToken;
+    const childRun = db
+      .prepare('SELECT id, flow_id, role FROM runs WHERE child_token = ?')
+      .get(childToken) as { id: string; flow_id: string; role: string | null };
+    expect(childRun.flow_id).toBe(profile.id);
+
+    const dispatch = asStep(e.getCurrentStep({ childToken }));
+    expect(dispatch.step.nodeId).toBe('a1');
+    const grandchild = dispatch.step.children![0]!;
+    expect(grandchild.preamble).toContain('评审员');
+    expect(grandchild.preamble).toContain('role=reviewer');
+    expect(grandchild.preamble).toContain('挑剔，只认证据');
+  });
+
+  it('迁移到 v10：runs 新列、parent_iteration、run_artifacts 表与 flows.kind 都在', () => {
     const columns = db.prepare('PRAGMA table_info(runs)').all() as Array<{ name: string }>;
     expect(columns.map((c) => c.name)).toEqual(
       expect.arrayContaining(['role', 'thread_id', 'inputs', 'parent_iteration']),
     );
+    const flowColumns = db.prepare('PRAGMA table_info(flows)').all() as Array<{ name: string }>;
+    expect(flowColumns.map((c) => c.name)).toContain('kind');
     const table = db
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'run_artifacts'")
       .get() as { name: string } | undefined;
     expect(table?.name).toBe('run_artifacts');
     const version = db.prepare('PRAGMA user_version').get() as { user_version: number };
-    expect(version.user_version).toBeGreaterThanOrEqual(9);
+    expect(version.user_version).toBeGreaterThanOrEqual(10);
   });
 });

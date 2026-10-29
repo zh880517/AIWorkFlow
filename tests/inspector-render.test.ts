@@ -126,6 +126,29 @@ describe('Inspector 信息分层', () => {
     expect(html).toContain('E_NO_ENTRY');
   });
 
+  it('引用目标按流程 / 子 Agent 配置分组，且不再显示无效的附加指令', () => {
+    const html = render(
+      {
+        id: 'n2',
+        type: 'subagent',
+        title: '评审',
+        extraPrompt: '',
+        mode: 'flowRef',
+        flowRef: 'f_agent_profile',
+      },
+      {
+        flows: [
+          { id: 'f_main', name: '主流程', kind: 'flow', updatedAt: '' },
+          { id: 'f_agent_profile', name: '评审配置', kind: 'agent', updatedAt: '' },
+        ],
+      },
+    );
+    expect(html).toContain('引用目标');
+    expect(html).toContain('<optgroup label="子 Agent 配置">');
+    expect(html).toContain('<optgroup label="流程">');
+    expect(html).not.toContain('附加指令');
+  });
+
   it('prompt 不再套一层同名区块标题', () => {
     const html = render({ id: 'n1', type: 'prompt', title: '开始', instruction: '读文档' });
     expect(html).toContain('指令');

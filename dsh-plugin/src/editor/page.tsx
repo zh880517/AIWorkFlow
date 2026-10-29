@@ -1,7 +1,7 @@
 // DSH 内的流程图页面：流程库 ⇄ 画布编辑器。整页跑在宿主 React 里，不嵌 iframe。
 import * as React from 'react';
 import { addEdge, useEdgesState, useNodesState, type Connection, type EdgeChange } from '@xyflow/react';
-import type { AgentDef, Flow, FlowNode, NodeType, SubagentNode } from '@shared/index.js';
+import type { AgentDef, Flow, FlowKind, FlowNode, NodeType, SubagentNode } from '@shared/index.js';
 import { relTime } from '@shared/index.js';
 import { Boundary, reportInfo } from '../diagnostics.js';
 import * as api from './api.js';
@@ -69,6 +69,7 @@ export function WorkflowPage({ onExit }: WorkflowPageProps = {}): React.ReactEle
   const [error, setError] = React.useState<string | null>(null);
   const [doc, setDoc] = React.useState<Flow | null>(null);
   const [busy, setBusy] = React.useState(false);
+  const [libraryTab, setLibraryTab] = React.useState<FlowKind>('flow');
 
   const refresh = React.useCallback(async (): Promise<void> => {
     setError(null);
@@ -101,20 +102,28 @@ export function WorkflowPage({ onExit }: WorkflowPageProps = {}): React.ReactEle
     }
   };
 
-  const create = (): void => {
+  const create = (kind: FlowKind): void => {
     const start = makeNode('prompt', 'n1');
     start.title = '开始';
-    setDoc({
-      id: `flow-${Date.now().toString(36)}`,
-      name: '未命名流程',
+    start.next = 'n2';
+    const flow: Flow = {
+      id: `${kind === 'agent' ? 'agent' : 'flow'}-${Date.now().toString(36)}`,
+      name: kind === 'agent' ? '未命名子 Agent' : '未命名流程',
+      kind,
       entry: 'n1',
       nodes: [start, makeNode('end', 'n2')],
       _ui: { positions: { n1: { x: 80, y: 120 }, n2: { x: 420, y: 120 } } },
-    });
+    };
+    if (kind === 'agent') {
+      // 给一个能通过校验的默认角色，省得新建后第一件事是补 charter
+      flow.agents = [{ id: 'agent_1', name: '子 Agent', charter: '按当前步骤完成任务并回报。' }];
+    }
+    setDoc(flow);
   };
 
-  const remove = async (id: string, label: string): Promise<void> => {
-    if (!window.confirm(`删除流程「${label}」（${id}）？删除后不可恢复。`)) return;
+  const remove = async (id: string, label: string, kind: FlowKind): Promise<void> => {
+    const what = kind === 'agent' ? '子 Agent 配置' : '流程';
+    if (!window.confirm(`删除${what}「${label}」（${id}）？删除后不可恢复。`)) return;
     try {
       await api.deleteFlow(id);
       await refresh();
@@ -138,18 +147,44 @@ export function WorkflowPage({ onExit }: WorkflowPageProps = {}): React.ReactEle
     );
   }
 
+  const all = flows ?? [];
+  const flowCount = all.filter((item) => (item.kind ?? 'flow') === 'flow').length;
+  const agentCount = all.length - flowCount;
+  const shown = all.filter((item) => (item.kind ?? 'flow') === libraryTab);
+
   return (
     <div className="wf-page" style={PAGE_STYLE}>
       <style>{editorCss}</style>
       <header className="wf-head">
         <span className="wf-title">可视化工作流</span>
-        <span className="wf-sub">{flows === null ? '加载中…' : `${flows.length} 张图`}</span>
+        <div className="wf-lib-tabs" role="tablist" aria-label="流程库类型">
+          <button
+            type="button"
+            role="tab"
+            className="wf-lib-tab"
+            data-active={libraryTab === 'flow'}
+            aria-selected={libraryTab === 'flow'}
+            onClick={() => setLibraryTab('flow')}
+          >
+            流程 {flowCount}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            className="wf-lib-tab"
+            data-active={libraryTab === 'agent'}
+            aria-selected={libraryTab === 'agent'}
+            onClick={() => setLibraryTab('agent')}
+          >
+            子 Agent 配置 {agentCount}
+          </button>
+        </div>
         <span className="wf-spacer" />
         <button type="button" className="wf-btn" onClick={() => void refresh()} disabled={busy}>
           刷新
         </button>
-        <button type="button" className="wf-btn" data-primary="true" onClick={create}>
-          新建流程
+        <button type="button" className="wf-btn" data-primary="true" onClick={() => create(libraryTab)}>
+          {libraryTab === 'agent' ? '新建子 Agent' : '新建流程'}
         </button>
         {onExit !== undefined && (
           <button type="button" className="wf-btn" onClick={onExit}>
@@ -163,13 +198,22 @@ export function WorkflowPage({ onExit }: WorkflowPageProps = {}): React.ReactEle
         </div>
       )}
       <div className="wf-list">
-        {flows !== null && flows.length === 0 && (
+        {flows === null && (
           <div className="wf-empty">
-            <b>还没有工作流</b>
-            <span>新建一张，从「指令 → 结束」开始。</span>
+            <b>加载中…</b>
           </div>
         )}
-        {(flows ?? []).map((flow) => (
+        {flows !== null && shown.length === 0 && (
+          <div className="wf-empty">
+            <b>{libraryTab === 'agent' ? '还没有子 Agent 配置' : '还没有工作流'}</b>
+            <span>
+              {libraryTab === 'agent'
+                ? '把可复用的子 Agent 角色和子图存到这里，主流程用「引用」节点调用。'
+                : '新建一张，从「指令 → 结束」开始。'}
+            </span>
+          </div>
+        )}
+        {shown.map((flow) => (
           <div className="wf-item" key={flow.id} onClick={() => void open(flow.id)} role="button" tabIndex={0}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div className="wf-item-name">{flow.name}</div>
@@ -182,7 +226,7 @@ export function WorkflowPage({ onExit }: WorkflowPageProps = {}): React.ReactEle
               className="wf-btn"
               onClick={(event) => {
                 event.stopPropagation();
-                void remove(flow.id, flow.name);
+                void remove(flow.id, flow.name, flow.kind ?? 'flow');
               }}
             >
               删除
@@ -1242,6 +1286,7 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
           value={name}
           onChange={(event) => rename(event.target.value)}
         />
+        {initial.kind === 'agent' && <span className="wf-chip">子 Agent 配置</span>}
         {frames.length > 0 && (
           <span className="wf-crumb" title={['主图', ...frames.map((frame) => frame.title), name].join(' / ')}>
             主图

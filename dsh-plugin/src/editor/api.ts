@@ -1,10 +1,12 @@
 // 图编辑的数据访问：走插件 Host 半的 /aiworkflow/flows 路由（同源或 CORS 放行）。
-import type { Flow } from '@shared/index.js';
+import type { Flow, FlowKind } from '@shared/index.js';
 import { resolveEndpoint } from '../endpoint.js';
 
 export interface FlowMeta {
   id: string;
   name: string;
+  /** flow（缺省）= 主流程；agent = 子 Agent 配置 */
+  kind: FlowKind;
   updatedAt: string;
 }
 
@@ -45,8 +47,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
-export async function listFlows(): Promise<FlowMeta[]> {
-  const body = await request<{ ok: true; flows: FlowMeta[] }>('flows');
+export async function listFlows(kind?: FlowKind): Promise<FlowMeta[]> {
+  const path = kind === undefined ? 'flows' : `flows?kind=${kind}`;
+  const body = await request<{ ok: true; flows: FlowMeta[] }>(path);
   return body.flows;
 }
 

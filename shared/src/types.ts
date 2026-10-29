@@ -2,6 +2,9 @@
 
 export type NodeType = 'prompt' | 'tool' | 'subagent' | 'gate' | 'join' | 'end';
 
+/** flow = 可独立启动的主流程；agent = 可被 subagent 节点引用、自带角色表的子 Agent 配置 */
+export type FlowKind = 'flow' | 'agent';
+
 export type SubagentMode = 'inline' | 'subflow' | 'flowRef';
 
 export type EndOutcome = 'success' | 'fail';
@@ -169,6 +172,8 @@ export interface Flow {
   id: string;
   /** 展示名 */
   name: string;
+  /** flow（默认）= 可独立启动的主流程；agent = 可被 flowRef 引用的子 Agent 配置 */
+  kind?: FlowKind;
   description?: string;
   entry: string;
   /** run 级全局步数上限，默认 200 */

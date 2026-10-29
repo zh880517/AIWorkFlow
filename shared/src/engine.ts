@@ -345,6 +345,8 @@ export class ExecutionEngine {
     if (run.status === 'waiting_children') {
       return this.gatherChildren(run);
     }
+    const bootstrapped = this.bootstrapEntry(run);
+    if (bootstrapped !== undefined) return bootstrapped;
     return this.resultForRun(run, 'get_current_step');
   }
 
@@ -722,9 +724,34 @@ export class ExecutionEngine {
 
   // ---- subagent 派发与 join 汇聚（§7.1 / §7.5，阶段 6）----
 
+  /** child run 从入口直接开始时（entry 是 gate/subagent），第一次领步补做 startRun 的入口特判 */
+  private bootstrapEntry(run: RunRow): StepOpResult | undefined {
+    if (run.status !== 'running' || run.current_node === null || run.steps_used !== 0) return undefined;
+    const snapshot = this.snapshotOf(run);
+    const node = findNode(snapshot, run.current_node);
+    if (node === undefined) return undefined;
+    const now = new Date().toISOString();
+    if (node.type === 'gate') {
+      const gateId = this.enterGate(run.id, node, now);
+      this.emit({
+        type: 'gate_pending',
+        runId: run.id,
+        nodeId: node.id,
+        gateId: String(gateId),
+        question: node.question,
+        at: now,
+      });
+      return this.stepResult(run.id);
+    }
+    if (node.type === 'subagent') {
+      const spawned = this.enterSubagent(run.id, node, now);
+      return spawned !== undefined ? spawned : this.stepResult(run.id);
+    }
+    return undefined;
+  }
+
   /** 入口即派发：start 后直接建 child 并挂 waiting_children（与入口即 gate 对称） */
-  private enterSubagent(runId: string, node: SubagentNode, now: string): SelfHealError | undefined {
-    const run = this.runById(runId);
+  private enterSubagent(runId: string, node: SubagentNode, now: string): SelfHealError | undefined {    const run = this.runById(runId);
     if (run === null) {
       return selfHeal(`run ${runId} 不存在（数据异常）。`, '这是服务端数据问题，请把这条错误原样反馈给用户。', null);
     }

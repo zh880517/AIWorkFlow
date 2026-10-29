@@ -10,7 +10,8 @@ const FLOW_ACTIONS = ['list', 'get', 'validate', 'create', 'update'] as const;
 
 /** 模型可见的 DSL 速查（完整语义以校验器报错为准） */
 const DSL_HINT =
-  '完整流程图 DSL：{ id, name, entry, maxSteps?, agents?, nodes: [...] }。' +
+  '完整流程图 DSL：{ id, name, kind?: "flow"|"agent", entry, maxSteps?, agents?, nodes: [...] }。' +
+  'kind 缺省为 flow（可独立 start_run 的主流程）；kind="agent" 是可复用的子 Agent 配置（自带 agents 角色表 + 子图），主流程用 subagent 节点的 mode="flowRef" + flowRef=<配置 id> 引用它。' +
   '节点 { id, type: prompt|tool|gate|subagent|join|end, title?, instruction?, toolName?, params?, next?, branches?, iterationLimit?, loopId?, maxRounds?, onLimitExceeded?, outcome? }。' +
   'subagent 额外支持 { role?, thread?: "new"|"role"|自定义, produces?, consumes?, reportHint? }；agents: [{ id, name, charter, produces?, consumes? }]。' +
   '后继二选一：next（唯一后继）或 branches: [{ id, condition, to, when? }]（condition "*" 是默认分支，同节点至多一个；when 是服务端可判定的单比较，如 "{{review.payload.verdict}} == \'pass\'"）。' +
@@ -68,13 +69,16 @@ function contextTool(ctx: any): AgentTool {
         dbPath: databasePath(),
         flowsDir: flowsDir(),
         flows: null,
+        agentConfigs: null,
         activeRuns: null,
         recentRuns: null,
       };
       try {
         const db = database();
         const state = readMonitorState(db, null);
-        snapshot.flows = listFlows(db).length;
+        const allFlows = listFlows(db);
+        snapshot.flows = allFlows.length;
+        snapshot.agentConfigs = allFlows.filter((flow) => flow.kind === 'agent').length;
         snapshot.activeRuns = state.active.length;
         snapshot.recentRuns = state.recent.length;
       } catch (error) {
@@ -91,7 +95,7 @@ function flowTool(): AgentTool {
     name: 'aiworkflow_flow',
     description:
       'aiworkflow 流程图的读写入口（与 DSH 里的「可视化工作流」面板共用同一份 SQLite）。' +
-      'action=list 列出全部流程；get 按 id 或名字读完整 DSL；validate 干跑校验、不落库；' +
+      'action=list 列出全部流程与子 Agent 配置；get 按 id 或名字读完整 DSL；validate 干跑校验、不落库；' +
       'create 新建（id 必须尚不存在）；update 整体覆盖已存在的流程。校验不通过时不落库，原图保持不变。' +
       DSL_HINT,
     parameters: {

@@ -85,6 +85,7 @@ async function call(mounted: Mounted, method: string, url: string, body?: unknow
 const flow = {
   id: 'f_host_routes',
   name: '宿主路由图',
+  kind: 'flow',
   entry: 'n1',
   nodes: [{ id: 'n1', type: 'end', outcome: 'success' }],
 };
@@ -121,6 +122,28 @@ describe('Host 路由：流程图 CRUD', () => {
 
     const gone = await call(mounted, 'GET', `/aiworkflow/flows/${flow.id}`);
     expect(gone.status).toBe(404);
+  });
+
+  it('流程列表按 kind 过滤子 Agent 配置', async () => {
+    const profile = {
+      ...flow,
+      id: 'f_host_agent',
+      name: '子 Agent 配置',
+      kind: 'agent',
+      agents: [{ id: 'reviewer', name: '评审员', charter: '挑剔' }],
+      nodes: [
+        { id: 'n1', type: 'prompt', instruction: '评审' },
+      ],
+      entry: 'n1',
+    };
+    expect((await call(mounted, 'PUT', `/aiworkflow/flows/${profile.id}`, profile)).json.ok).toBe(true);
+
+    const agents = await call(mounted, 'GET', '/aiworkflow/flows?kind=agent');
+    expect(agents.json.flows.map((item: { id: string }) => item.id)).toEqual(['f_host_agent']);
+    expect(agents.json.flows[0].kind).toBe('agent');
+
+    const flows = await call(mounted, 'GET', '/aiworkflow/flows?kind=flow');
+    expect(flows.json.flows.every((item: { kind: string }) => item.kind === 'flow')).toBe(true);
   });
 
   it('校验失败不落库，原图保持不变', async () => {

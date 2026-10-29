@@ -21,8 +21,8 @@ export class FlowStore {
     return saveFlow(this.db, flow, this.jsonDir);
   }
 
-  list(): Array<{ id: string; name: string; updatedAt: string }> {
-    return listFlows(this.db);
+  list(kind?: 'flow' | 'agent'): Array<{ id: string; name: string; kind: 'flow' | 'agent'; updatedAt: string }> {
+    return listFlows(this.db, kind);
   }
 
   get(flowId: string): Flow | undefined {
