@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import {
   buildFlow,
   canvasOf,
+  makeSubflow,
   spreadSourceHandles,
+  subflowPreview,
   type CanvasEdge,
   type CanvasNode,
 } from '../dsh-plugin/src/editor/model.js';
@@ -114,6 +116,47 @@ describe('canvasOf / buildFlow', () => {
     );
     const first = flow.nodes.find((item) => item.id === 'n1') as { branches?: Array<{ condition: string }> };
     expect(first.branches?.map((branch) => branch.condition)).toEqual(['*', '']);
+  });
+});
+
+describe('内嵌子图：缩略图与保存往返', () => {
+  it('makeSubflow 生成最小合法子图，入口/缩略图计数正确', () => {
+    const sub = makeSubflow('设计子图');
+    expect(sub.name).toBe('设计子图');
+    expect(sub.entry).toBe('s1');
+    expect(sub.nodes).toHaveLength(2);
+    const preview = subflowPreview(sub);
+    expect(preview.count).toBe(2);
+    expect(preview.boxes).toHaveLength(2);
+    expect(preview.boxes.find((box) => box.entry)?.id).toBe('s1');
+    expect(preview.lines).toHaveLength(1);
+  });
+
+  it('canvasOf 给 subflow 节点挂缩略图，buildFlow 保留 subflow 与内部布局', () => {
+    const sub = makeSubflow('内嵌');
+    const flow = {
+      id: 'f',
+      name: 'f',
+      entry: 'n1',
+      nodes: [
+        { id: 'n1', type: 'subagent', extraPrompt: 'x', mode: 'subflow', subflow: sub, next: 'n2' },
+        { id: 'n2', type: 'end', outcome: 'success' },
+      ],
+    } as never;
+    const canvas = canvasOf(flow);
+    const card = canvas.nodes.find((item) => item.id === 'n1');
+    expect(card?.data.subflow?.count).toBe(2);
+    expect(card?.data.subflow?.entry).toBe('s1');
+
+    const bodies = Object.fromEntries((flow as never as { nodes: Array<{ id: string }> }).nodes.map((item) => [item.id, item]));
+    const built = buildFlow(flow, bodies as never, canvas.nodes, canvas.edges);
+    const node = built.nodes.find((item) => item.id === 'n1') as {
+      subflow?: { name?: string; entry: string; nodes: unknown[]; _ui?: { positions?: Record<string, unknown> } };
+    };
+    expect(node.subflow?.name).toBe('内嵌');
+    expect(node.subflow?.entry).toBe('s1');
+    expect(node.subflow?.nodes).toHaveLength(2);
+    expect(node.subflow?._ui?.positions).toBeDefined();
   });
 });
 

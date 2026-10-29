@@ -1,7 +1,7 @@
-# 子 Agent 协作工作流 — 扩展设计方案（P1 实施中）
+# 子 Agent 协作工作流 — 扩展设计方案（P1 已完成，P2 内嵌子图）
 
 日期：2026-10-29
-状态：**已评审，P1 实施中**。评审结论：采用方案 A（父级中转）。评审通过的部分回写 `docs/2026-09-02-flowchart-driven-agent-design.md`，本文按 `docs/dev/` 约定在阶段结束后删除。
+状态：**已评审；P1 已完成（角色/线程/产物/when/inputs），P2 内嵌子图可视化编辑已落地**。评审结论：采用方案 A（父级中转）。评审通过的部分回写 `docs/2026-09-02-flowchart-driven-agent-design.md`，本文按 `docs/dev/` 约定在阶段结束后删除。
 基线：当前 v9 引擎 + 六种节点 + 已构建产物。
 
 > 决策记录（2026-10-29）：Review 与 Design 是同级子 Agent，当前全局 `send_message` 只允许父→直接 child / 驻留 child→直接 parent，同级不能直投；确认**不引入 experimental Agent Teams**，P1 采用父级中转（Review → 主 Agent → Design/开发）。Agent Teams 直连保留为 P3 可选，不进 P1。
@@ -725,10 +725,49 @@ P1 完成的判定标准：把 v0 里的三个 `route_*` prompt 节点删掉，�
 
 ### P2（按需）
 
+- **内嵌子图可视化编辑**（已落地，见 P2.1）：`subagent.mode=subflow` 的子图直接嵌在主图节点里，画布内可展开编辑，不引入独立保存的“子流程”实体。
 - `review` 宏节点（仅当模板重复到不可维护时）。
 - `join` 的 `any/quorum`。
 - 回路级轮次计数（`loopId` + `maxRounds`），替代现在“节点级 iterationLimit 跨回路累计”的粗糙做法。
 - 产物 diff / 版本对比视图。
+
+#### P2.1 内嵌子图可视化编辑（2026-10-29）
+
+用户明确选择**内嵌式**：子图不是“另存一张图再 flowRef 引用”，而是直接存在 `SubagentNode.subflow` 里，跟着主图一起保存/快照/运行。理由：
+
+- 子图通常只服务一个 review/test 回路，独立成图会让流程库膨胀，还要处理“改子图影响哪些主图”的引用关系。
+- 运行时 `subflow` 已支持内嵌执行（`childFlowOf` 直接取 `node.subflow`），本次只补编辑器与保存往返，不动引擎。
+
+数据模型：
+
+```ts
+interface SubflowDef {
+  name?: string;                    // 面板展示名，引擎不读
+  entry: string;
+  maxSteps?: number;
+  nodes: FlowNode[];
+  _ui?: { positions?: Record<string, { x: number; y: number }> };
+}
+```
+
+- `_ui` 只属于面板布局元数据，校验器/引擎/快照忽略；没有它，子图重新打开时节点会跳到自动布局。
+- 子图节点 id 在子图内独立作用域；`validateSubflow` 已递归校验 entry、重复 id、终点与可达性。
+- 不新增数据库迁移：整个 `subflow` 就在 `flows.dsl` 的 JSON 里。
+
+编辑器交互：
+
+1. `subagent` 卡点预览：画布卡片内画只读 SVG 缩略图（节点框 + 边 + 入口高亮），卡片上有「打开」。
+2. 检查器模式选择：切到 `subflow` 时若没有子图，自动建一张最小合法子图（prompt 开始 → end 结束）。
+3. 展开编辑：点击「打开子图」把当前父图压入 `SubflowFrame` 栈，主画布切换到子图，工具栏显示 `主图 / 子图` 面包屑。
+4. 返回：把子图画布序列化回父节点的 `subflow`（含 `name/entry/nodes/maxSteps/_ui`），恢复父图画布；父层撤销栈也一起恢复。
+5. 保存/校验：始终先 `composeRoot()` 把当前层逐级折回主图，再用主图走现有 `validateFlow` / `saveFlow`；因此保存的一定是完整根图，不会只存子图。
+6. 嵌套：子图里可以再放 `subagent.mode=subflow`，栈深任意；运行时由现有递归 `childFlowOf` 处理。
+
+已知边界（MVP）：
+
+- 画布是“下钻替换”，不是 React Flow 父子节点同时展示；子图与主图不能在同一屏拖拽互连。这样避免坐标变换和跨图连线语义，后续若需要再评估。
+- 子图编辑的撤销栈按层独立；返回父层恢复父层历史，子图层历史不跨层保留。
+- 子图没有独立 `flowRef` 身份，不能被其他主图引用；需要复用时仍用 `flowRef` 指向已保存的图。
 
 ### P3（可选，直连增强）
 

@@ -117,9 +117,15 @@ export interface SubagentNode extends FlowNodeBase {
 
 /** 内嵌子图（subflow 模式） */
 export interface SubflowDef {
+  /** 展示名；只是面板元数据，引擎不读 */
+  name?: string;
   entry: string;
   maxSteps?: number;
   nodes: FlowNode[];
+  /** 面板编辑器专用布局元数据；不属于 DSL 语义，校验与引擎忽略 */
+  _ui?: {
+    positions?: Record<string, { x: number; y: number }>;
+  };
 }
 
 /** 自定义出口（面板编辑器用，引擎忽略）：id + 出口上编辑的条件文本 */

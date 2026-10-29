@@ -3,7 +3,7 @@
 import * as React from 'react';
 import type { AgentDef, FlowNode, GateOption, SubagentMode, SubagentNode } from '@shared/index.js';
 import type { FlowMeta } from './api.js';
-import { typeLabel, type CanvasEdge, type CanvasNode } from './model.js';
+import { typeLabel, makeSubflow, type CanvasEdge, type CanvasNode } from './model.js';
 
 export interface InspectorProps {
   body: FlowNode | undefined;
@@ -23,6 +23,8 @@ export interface InspectorProps {
   onCondition: (edgeId: string, value: string) => void;
   onWhen: (edgeId: string, value: string) => void;
   onAgentsChange: (agents: AgentDef[]) => void;
+  /** 打开当前 subagent 节点的内嵌子图画布 */
+  onOpenSubflow: (nodeId: string) => void;
   onSetEntry: () => void;
 }
 
@@ -53,7 +55,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 const MODE_HINTS: Record<SubagentMode, string> = {
   inline: '在同一个会话里派子 Agent 执行一个子任务',
-  subflow: '把内嵌子图当成一次独立的小型流程执行',
+  subflow: '子图直接嵌在主图里，点「打开子图」编辑；运行时 child 跑这段子图',
   flowRef: '引用另一张已存在的图，启动 run 时递归解析进快照',
 };
 
@@ -172,19 +174,41 @@ export function Inspector(props: InspectorProps): React.ReactElement {
             <select
               className="wf-input"
               value={body.mode}
-              onChange={(event) => patch({ mode: event.target.value as SubagentMode })}
+              onChange={(event) => {
+                const mode = event.target.value as SubagentMode;
+                if (mode === 'subflow' && body.subflow === undefined) {
+                  // 切到内嵌子图时先给一张最小合法的「开始 → 结束」，否则保存必被拒
+                  patch({ mode, subflow: makeSubflow(`${body.title?.trim() || body.id} 子图`) });
+                  return;
+                }
+                patch({ mode });
+              }}
             >
               <option value="inline">inline — 同一会话内执行</option>
               <option value="flowRef">flowRef — 引用另一张图</option>
-              <option value="subflow" disabled>
-                subflow — 内嵌子图（面板暂不支持）
-              </option>
+              <option value="subflow">subflow — 内嵌子图</option>
             </select>
           </Field>
           {body.mode === 'subflow' && (
-            <div className="wf-hint wf-hint-warn">
-              当前节点是 subflow 模式，但面板暂不支持编辑内嵌子图；保存会被校验器拒绝（缺少子图）。请用 aiworkflow_flow 工具改它。
-            </div>
+            <Field
+              label="内嵌子图"
+              hint="子图随主图一起保存；点「打开子图」在主画布里编辑它，返回后保存主图即可"
+            >
+              <div className="wf-row">
+                <span className="wf-hint">
+                  {body.subflow === undefined
+                    ? '尚未创建'
+                    : `${body.subflow.nodes.length} 个节点 · 入口 ${body.subflow.entry}`}
+                </span>
+                <button
+                  type="button"
+                  className="wf-btn"
+                  onClick={() => props.onOpenSubflow(body.id)}
+                >
+                  打开子图
+                </button>
+              </div>
+            </Field>
           )}
           <Field label="角色" hint="引用全图角色表；角色章程与线程摘要会拼进 child preamble">
             <select

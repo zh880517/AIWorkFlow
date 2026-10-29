@@ -11088,7 +11088,10 @@ function detailOf(node) {
 		case "prompt": return node.instruction ?? "";
 		case "gate": return node.question ?? "";
 		case "tool": return node.toolName ?? "";
-		case "subagent": return node.mode === "flowRef" ? `引用 ${node.flowRef ?? ""}` : node.mode;
+		case "subagent":
+			if (node.mode === "flowRef") return `引用 ${node.flowRef ?? ""}`;
+			if (node.mode === "subflow") return node.subflow === void 0 ? "内嵌子图（未创建）" : `内嵌子图 · ${node.subflow.nodes.length} 节点`;
+			return node.mode;
 		case "join": return node.aggregateInstruction ?? "";
 		case "end": return node.outcome;
 	}
@@ -11148,6 +11151,100 @@ function makeNode(type, id) {
 		};
 	}
 }
+/** 新建 subagent.subflow 时的最小合法子图：开始 → 结束 */
+function makeSubflow(name = "子图") {
+	const start = makeNode("prompt", "s1");
+	start.title = "子图开始";
+	start.next = "s2";
+	const end = makeNode("end", "s2");
+	end.title = "子图结束";
+	return {
+		name,
+		entry: "s1",
+		nodes: [start, end],
+		_ui: { positions: {
+			s1: {
+				x: 80,
+				y: 90
+			},
+			s2: {
+				x: 380,
+				y: 90
+			}
+		} }
+	};
+}
+/** 子图缩略图：取前 24 个节点，按包围盒归一化到 0..100 */
+function subflowPreview(subflow) {
+	const nodes = subflow.nodes.slice(0, 24);
+	if (nodes.length === 0) return {
+		count: 0,
+		entry: subflow.entry,
+		boxes: [],
+		lines: []
+	};
+	const positions = subflow._ui?.positions ?? {};
+	const points = nodes.map((node, index) => ({
+		node,
+		x: positions[node.id]?.x ?? autoPosition(index).x,
+		y: positions[node.id]?.y ?? autoPosition(index).y
+	}));
+	const minX = Math.min(...points.map((point) => point.x));
+	const minY = Math.min(...points.map((point) => point.y));
+	const maxX = Math.max(...points.map((point) => point.x));
+	const maxY = Math.max(...points.map((point) => point.y));
+	const spanX = Math.max(1, maxX - minX + 160);
+	const spanY = Math.max(1, maxY - minY + 90);
+	const scale = 88 / Math.max(spanX, spanY);
+	const boxW = Math.max(14, 148 * scale);
+	const boxH = Math.max(8, 58 * scale);
+	const originX = 6 + (100 - spanX * scale) / 2;
+	const originY = 6 + (100 - spanY * scale) / 2;
+	const center = /* @__PURE__ */ new Map();
+	const boxes = points.map((point) => {
+		const x = originX + (point.x - minX) * scale;
+		const y = originY + (point.y - minY) * scale;
+		center.set(point.node.id, {
+			x: x + boxW / 2,
+			y: y + boxH / 2
+		});
+		return {
+			id: point.node.id,
+			x,
+			y,
+			w: boxW,
+			h: boxH,
+			label: point.node.title?.trim() || point.node.id,
+			entry: point.node.id === subflow.entry
+		};
+	});
+	const known = new Set(boxes.map((box) => box.id));
+	const lines = [];
+	for (const point of points) {
+		const targets = [];
+		if (point.node.branches !== void 0 && point.node.branches.length > 0) for (const branch of point.node.branches) targets.push(branch.to);
+		else if (point.node.next !== void 0) targets.push(point.node.next);
+		const from = center.get(point.node.id);
+		if (from === void 0) continue;
+		for (const target of targets) {
+			if (!known.has(target)) continue;
+			const to = center.get(target);
+			if (to === void 0) continue;
+			lines.push({
+				x1: from.x,
+				y1: from.y,
+				x2: to.x,
+				y2: to.y
+			});
+		}
+	}
+	return {
+		count: subflow.nodes.length,
+		entry: subflow.entry,
+		boxes,
+		lines
+	};
+}
 /** 卡片右侧要画的出口：卡点一个选项一个，其余类型交给出边数量决定 */
 function outletsOf(node) {
 	if (node.type !== "gate") return [];
@@ -11167,7 +11264,8 @@ function canvasOf(flow) {
 			kind: node.type,
 			detail: detailOf(node),
 			isEntry: node.id === flow.entry,
-			outlets: outletsOf(node)
+			outlets: outletsOf(node),
+			...node.type === "subagent" && node.mode === "subflow" && node.subflow !== void 0 ? { subflow: subflowPreview(node.subflow) } : {}
 		}
 	}));
 	const known = new Set(nodes.map((node) => node.id));
@@ -11479,6 +11577,16 @@ var editorCss = `
 .wf-node-title{font-size:12.5px;font-weight:600;margin-top:1px;word-break:break-word}
 .wf-node-detail{font-size:11px;color:var(--dsw-alias-label-secondary);margin-top:2px;overflow:hidden;text-overflow:ellipsis;
   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;word-break:break-word}
+.wf-node[data-subflow="true"]{min-width:208px;max-width:252px}
+.wf-subflow{margin-top:6px;padding-top:5px;border-top:1px dashed var(--dsw-alias-border-l2)}
+.wf-subflow-head{display:flex;align-items:center;gap:6px;font-size:9.5px;color:var(--dsw-alias-label-secondary)}
+.wf-subflow-open{margin-left:auto;padding:1px 6px;border-radius:999px;border:1px solid var(--dsw-alias-border-l2);
+  background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font-size:9.5px;line-height:15px;cursor:pointer}
+.wf-subflow-open:hover{border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-brand-primary)}
+.wf-subflow-map{display:block;width:100%;height:76px;margin-top:3px;color:var(--dsw-alias-label-secondary)}
+.wf-crumb{display:flex;align-items:center;gap:5px;max-width:46vw;overflow:hidden;white-space:nowrap;
+  font-size:11px;color:var(--dsw-alias-label-secondary)}
+.wf-crumb b{font-weight:600;color:var(--dsw-alias-label-primary);overflow:hidden;text-overflow:ellipsis}
 .react-flow__attribution{background:transparent;color:var(--dsw-alias-label-secondary);font-size:9px;opacity:.6}
 /* 卡点：没连线的出口名字挂在卡片右侧外面，点它开始连线 */
 .wf-outlet-tag{position:absolute;left:calc(100% + 12px);transform:translateY(-50%);max-width:160px;
@@ -11499,10 +11607,14 @@ var editorCss = `
 //#region dsh-plugin/src/editor/canvas.tsx
 /** 点卡片右侧的出口名字 = 开始连一条线（再点目标节点完成），回调由页面给 */
 var OutletClickContext = react.createContext(() => {});
+/** 点子图卡片里的「打开」= 进入内嵌子图编辑，回调由页面给 */
+var OpenSubflowContext = react.createContext(() => {});
 function WfNode({ id, data, selected }) {
 	const outCount = useStore((state) => state.edges.reduce((total, edge) => edge.source === id ? total + 1 : total, 0));
 	const wired = useStore((state) => state.edges.filter((edge) => edge.source === id && typeof edge.data?.outlet === "string").map((edge) => edge.data?.outlet).join("|"));
 	const onOutletClick = react.useContext(OutletClickContext);
+	const onOpenSubflow = react.useContext(OpenSubflowContext);
+	const preview = data.subflow;
 	const declared = data.outlets ?? [];
 	const slots = declared.length > 0 ? declared.map((outlet) => ({
 		key: outlet.key,
@@ -11515,11 +11627,50 @@ function WfNode({ id, data, selected }) {
 	return /* @__PURE__ */ react.createElement("div", {
 		className: "wf-node",
 		"data-kind": data.kind,
-		"data-selected": selected ? "true" : "false"
+		"data-selected": selected ? "true" : "false",
+		"data-subflow": preview === void 0 ? void 0 : "true"
 	}, !data.isEntry && /* @__PURE__ */ react.createElement(Handle, {
 		type: "target",
 		position: Position.Left
-	}), /* @__PURE__ */ react.createElement("div", { className: "wf-node-kind" }, typeLabel(data.kind), data.isEntry && /* @__PURE__ */ react.createElement("span", { className: "wf-entry-badge" }, "入口")), /* @__PURE__ */ react.createElement("div", { className: "wf-node-title" }, data.title), data.detail !== "" && /* @__PURE__ */ react.createElement("div", { className: "wf-node-detail" }, data.detail), slots.map((slot, index) => /* @__PURE__ */ react.createElement(react.Fragment, { key: slot.key }, /* @__PURE__ */ react.createElement(Handle, {
+	}), /* @__PURE__ */ react.createElement("div", { className: "wf-node-kind" }, typeLabel(data.kind), data.isEntry && /* @__PURE__ */ react.createElement("span", { className: "wf-entry-badge" }, "入口")), /* @__PURE__ */ react.createElement("div", { className: "wf-node-title" }, data.title), data.detail !== "" && /* @__PURE__ */ react.createElement("div", { className: "wf-node-detail" }, data.detail), preview !== void 0 && /* @__PURE__ */ react.createElement("div", { className: "wf-subflow" }, /* @__PURE__ */ react.createElement("div", { className: "wf-subflow-head" }, /* @__PURE__ */ react.createElement("span", null, "内嵌子图 · ", preview.count, " 节点"), /* @__PURE__ */ react.createElement("button", {
+		type: "button",
+		className: "wf-subflow-open nodrag",
+		onPointerDown: (event) => event.stopPropagation(),
+		onClick: (event) => {
+			event.stopPropagation();
+			onOpenSubflow(id);
+		}
+	}, "打开")), /* @__PURE__ */ react.createElement("svg", {
+		className: "wf-subflow-map",
+		viewBox: "0 0 100 100",
+		role: "img",
+		"aria-label": "子图缩略图"
+	}, preview.lines.map((line, index) => /* @__PURE__ */ react.createElement("line", {
+		key: `l-${index}`,
+		x1: line.x1,
+		y1: line.y1,
+		x2: line.x2,
+		y2: line.y2,
+		stroke: "currentColor",
+		strokeOpacity: .35,
+		strokeWidth: .8
+	})), preview.boxes.map((box) => /* @__PURE__ */ react.createElement("g", { key: box.id }, /* @__PURE__ */ react.createElement("rect", {
+		x: box.x,
+		y: box.y,
+		width: box.w,
+		height: box.h,
+		rx: 1.4,
+		fill: box.entry ? "var(--dsw-alias-brand-primary)" : "var(--dsw-alias-bg-layer-2)",
+		fillOpacity: box.entry ? .9 : .8,
+		stroke: "var(--dsw-alias-border-l2)",
+		strokeWidth: .5
+	}, /* @__PURE__ */ react.createElement("title", null, box.label)), /* @__PURE__ */ react.createElement("text", {
+		x: box.x + box.w / 2,
+		y: box.y + box.h / 2 + 1.1,
+		textAnchor: "middle",
+		fontSize: 3.1,
+		fill: box.entry ? "var(--dsw-alias-bg-base)" : "var(--dsw-alias-label-secondary)"
+	}, box.label.length > 8 ? `${box.label.slice(0, 8)}…` : box.label))))), slots.map((slot, index) => /* @__PURE__ */ react.createElement(react.Fragment, { key: slot.key }, /* @__PURE__ */ react.createElement(Handle, {
 		id: `out-${slot.key}`,
 		type: "source",
 		position: Position.Right,
@@ -11575,6 +11726,12 @@ function CanvasFlow(props) {
 					padding: .6,
 					duration: 300
 				});
+			},
+			fitAll: () => {
+				flow.fitView({
+					padding: .25,
+					duration: 220
+				});
 			}
 		});
 	}, [flow]);
@@ -11591,7 +11748,7 @@ function CanvasFlow(props) {
 	return /* @__PURE__ */ react.createElement("div", {
 		className: "wf-flow",
 		ref: wrapRef
-	}, /* @__PURE__ */ react.createElement(OutletClickContext.Provider, { value: props.onOutletClick }, /* @__PURE__ */ react.createElement(index, {
+	}, /* @__PURE__ */ react.createElement(OutletClickContext.Provider, { value: props.onOutletClick }, /* @__PURE__ */ react.createElement(OpenSubflowContext.Provider, { value: props.onOpenSubflow }, /* @__PURE__ */ react.createElement(index, {
 		nodes: props.nodes,
 		edges: renderedEdges,
 		nodeTypes: nodeTypes$1,
@@ -11628,7 +11785,7 @@ function CanvasFlow(props) {
 	}, /* @__PURE__ */ react.createElement(Background, {
 		gap: 18,
 		size: 1
-	}), /* @__PURE__ */ react.createElement(Controls, { showInteractive: false }))));
+	}), /* @__PURE__ */ react.createElement(Controls, { showInteractive: false })))));
 }
 function FlowCanvas(props) {
 	return /* @__PURE__ */ react.createElement("div", { className: "wf-canvas" }, /* @__PURE__ */ react.createElement("style", null, style_default), /* @__PURE__ */ react.createElement("style", null, editorCss), /* @__PURE__ */ react.createElement(ReactFlowProvider, null, /* @__PURE__ */ react.createElement(CanvasFlow, props)));
@@ -11643,7 +11800,7 @@ function Section({ title, children }) {
 }
 var MODE_HINTS = {
 	inline: "在同一个会话里派子 Agent 执行一个子任务",
-	subflow: "把内嵌子图当成一次独立的小型流程执行",
+	subflow: "子图直接嵌在主图里，点「打开子图」编辑；运行时 child 跑这段子图",
 	flowRef: "引用另一张已存在的图，启动 run 时递归解析进快照"
 };
 /** 空串 / 非正整数都按「不设」处理，避免把 NaN 写进 DSL */
@@ -11731,11 +11888,25 @@ function Inspector(props) {
 	}, /* @__PURE__ */ react.createElement("select", {
 		className: "wf-input",
 		value: body.mode,
-		onChange: (event) => patch({ mode: event.target.value })
-	}, /* @__PURE__ */ react.createElement("option", { value: "inline" }, "inline — 同一会话内执行"), /* @__PURE__ */ react.createElement("option", { value: "flowRef" }, "flowRef — 引用另一张图"), /* @__PURE__ */ react.createElement("option", {
-		value: "subflow",
-		disabled: true
-	}, "subflow — 内嵌子图（面板暂不支持）"))), body.mode === "subflow" && /* @__PURE__ */ react.createElement("div", { className: "wf-hint wf-hint-warn" }, "当前节点是 subflow 模式，但面板暂不支持编辑内嵌子图；保存会被校验器拒绝（缺少子图）。请用 aiworkflow_flow 工具改它。"), /* @__PURE__ */ react.createElement(Field, {
+		onChange: (event) => {
+			const mode = event.target.value;
+			if (mode === "subflow" && body.subflow === void 0) {
+				patch({
+					mode,
+					subflow: makeSubflow(`${body.title?.trim() || body.id} 子图`)
+				});
+				return;
+			}
+			patch({ mode });
+		}
+	}, /* @__PURE__ */ react.createElement("option", { value: "inline" }, "inline — 同一会话内执行"), /* @__PURE__ */ react.createElement("option", { value: "flowRef" }, "flowRef — 引用另一张图"), /* @__PURE__ */ react.createElement("option", { value: "subflow" }, "subflow — 内嵌子图"))), body.mode === "subflow" && /* @__PURE__ */ react.createElement(Field, {
+		label: "内嵌子图",
+		hint: "子图随主图一起保存；点「打开子图」在主画布里编辑它，返回后保存主图即可"
+	}, /* @__PURE__ */ react.createElement("div", { className: "wf-row" }, /* @__PURE__ */ react.createElement("span", { className: "wf-hint" }, body.subflow === void 0 ? "尚未创建" : `${body.subflow.nodes.length} 个节点 · 入口 ${body.subflow.entry}`), /* @__PURE__ */ react.createElement("button", {
+		type: "button",
+		className: "wf-btn",
+		onClick: () => props.onOpenSubflow(body.id)
+	}, "打开子图"))), /* @__PURE__ */ react.createElement(Field, {
 		label: "角色",
 		hint: "引用全图角色表；角色章程与线程摘要会拼进 child preamble"
 	}, /* @__PURE__ */ react.createElement("select", {
@@ -12380,6 +12551,8 @@ function Editor({ initial, flows, onBack, onExit }) {
 	const [resizing, setResizing] = react.useState(false);
 	/** 点出口名字后待连线的来源：再点一个目标节点就把它连上 */
 	const [pendingLink, setPendingLink] = react.useState(null);
+	/** 内嵌子图编辑栈：空 = 主图，非空 = 正在编辑最内层子图 */
+	const [frames, setFrames] = react.useState([]);
 	const pageRef = react.useRef(null);
 	const bodyRef = react.useRef(null);
 	/** 拖动分隔条时的起点，避免每帧读 state */
@@ -12395,6 +12568,8 @@ function Editor({ initial, flows, onBack, onExit }) {
 	const historyRef = react.useRef(history);
 	const selectedRef = react.useRef(null);
 	const saveRef = react.useRef(null);
+	/** frames 的同步副本：composeRoot 等事件处理里立刻要读，不等下一次 render */
+	const framesRef = react.useRef([]);
 	const liveRef = react.useRef({
 		nodes: seed.nodes,
 		edges: seed.edges,
@@ -12414,6 +12589,7 @@ function Editor({ initial, flows, onBack, onExit }) {
 	historyRef.current = history;
 	selectedRef.current = selectedId;
 	clipboardRef.current = clipboard;
+	framesRef.current = frames;
 	const record = react.useCallback((mergeKey) => {
 		const now = Date.now();
 		const last = mergeRef.current;
@@ -12442,6 +12618,156 @@ function Editor({ initial, flows, onBack, onExit }) {
 		mergeRef.current = null;
 		setDirty(true);
 	}, [setNodes, setEdges]);
+	/** 切换当前编辑的画布（主图 / 子图）：整份状态换掉，不走进度历史 */
+	const loadGraph = react.useCallback((flow) => {
+		const canvas = canvasOf(flow);
+		setNodes(withEntryFlags(canvas.nodes, flow.entry));
+		setEdges(canvas.edges);
+		setBodies(Object.fromEntries(flow.nodes.map((node) => [node.id, node])));
+		setAgents(flow.agents ?? []);
+		setName(flow.name);
+		setEntry(flow.entry);
+		setSelectedId(null);
+		setPendingLink(null);
+		setHistory({
+			past: [],
+			future: []
+		});
+		setValidation(null);
+		mergeRef.current = null;
+		baseRef.current = flow;
+		window.setTimeout(() => canvasApiRef.current?.fitAll?.(), 40);
+	}, [setNodes, setEdges]);
+	/** 把当前正在编辑的层（可能是最内层子图）折回主图，得到可保存/校验的根 Flow */
+	const composeRoot = react.useCallback(() => {
+		const snapshot = liveRef.current;
+		let flow = buildFlow({
+			...baseRef.current,
+			name: snapshot.name,
+			entry: snapshot.entry,
+			agents: snapshot.agents
+		}, snapshot.bodies, snapshot.nodes, snapshot.edges);
+		const stack = framesRef.current;
+		for (let index = stack.length - 1; index >= 0; index -= 1) {
+			const frame = stack[index];
+			if (frame === void 0) throw new Error("子图栈损坏：帧缺失");
+			const owner = frame.snapshot.bodies[frame.parentNodeId];
+			if (owner === void 0 || owner.type !== "subagent") throw new Error(`子图栈损坏：父节点 ${frame.parentNodeId} 不是 subagent`);
+			const subagent = owner;
+			const updated = {
+				...subagent,
+				mode: "subflow",
+				subflow: {
+					name: flow.name,
+					entry: flow.entry,
+					maxSteps: subagent.subflow?.maxSteps,
+					nodes: flow.nodes,
+					_ui: flow._ui
+				}
+			};
+			const parentSnapshot = {
+				...frame.snapshot,
+				bodies: {
+					...frame.snapshot.bodies,
+					[frame.parentNodeId]: updated
+				}
+			};
+			flow = buildFlow({
+				...frame.base,
+				name: parentSnapshot.name,
+				entry: parentSnapshot.entry,
+				agents: parentSnapshot.agents
+			}, parentSnapshot.bodies, parentSnapshot.nodes, parentSnapshot.edges);
+		}
+		return flow;
+	}, []);
+	/** 进入某个 subagent 节点的内嵌子图；没有子图时先建一张最小合法子图 */
+	const openSubflow = react.useCallback((nodeId) => {
+		const snapshot = liveRef.current;
+		const body = snapshot.bodies[nodeId];
+		if (body === void 0 || body.type !== "subagent") return;
+		const created = body.subflow === void 0;
+		const subagent = created ? {
+			...body,
+			mode: "subflow",
+			subflow: makeSubflow(`${body.title?.trim() || body.id} 子图`)
+		} : {
+			...body,
+			mode: "subflow"
+		};
+		const sub = subagent.subflow;
+		if (sub === void 0) return;
+		const nextBodies = {
+			...snapshot.bodies,
+			[nodeId]: subagent
+		};
+		const nextSnapshot = {
+			...snapshot,
+			bodies: nextBodies
+		};
+		const subFlow = {
+			id: `${baseRef.current.id}::${nodeId}`,
+			name: sub.name ?? `${body.title?.trim() || nodeId} 子图`,
+			entry: sub.entry,
+			maxSteps: sub.maxSteps,
+			nodes: sub.nodes,
+			agents: snapshot.agents,
+			_ui: sub._ui
+		};
+		const frame = {
+			parentNodeId: nodeId,
+			title: body.title?.trim() || nodeId,
+			snapshot: nextSnapshot,
+			base: baseRef.current,
+			history: historyRef.current
+		};
+		const nextFrames = [...framesRef.current, frame];
+		framesRef.current = nextFrames;
+		setFrames(nextFrames);
+		loadGraph(subFlow);
+		if (created) setDirty(true);
+	}, [loadGraph]);
+	/** 从当前子图返回上一层：把子图写回父节点的 subflow，再恢复父图状态 */
+	const backToParent = react.useCallback(() => {
+		const frame = framesRef.current[framesRef.current.length - 1];
+		if (frame === void 0) return;
+		const snapshot = liveRef.current;
+		const built = buildFlow({
+			...baseRef.current,
+			name: snapshot.name,
+			entry: snapshot.entry,
+			agents: snapshot.agents
+		}, snapshot.bodies, snapshot.nodes, snapshot.edges);
+		const owner = frame.snapshot.bodies[frame.parentNodeId];
+		if (owner === void 0 || owner.type !== "subagent") return;
+		const subagent = {
+			...owner,
+			mode: "subflow",
+			subflow: {
+				name: built.name,
+				entry: built.entry,
+				maxSteps: owner.subflow?.maxSteps,
+				nodes: built.nodes,
+				_ui: built._ui
+			}
+		};
+		const nextBodies = {
+			...frame.snapshot.bodies,
+			[frame.parentNodeId]: subagent
+		};
+		const parentFlow = buildFlow({
+			...frame.base,
+			name: frame.snapshot.name,
+			entry: frame.snapshot.entry,
+			agents: frame.snapshot.agents
+		}, nextBodies, frame.snapshot.nodes, frame.snapshot.edges);
+		const nextFrames = framesRef.current.slice(0, -1);
+		framesRef.current = nextFrames;
+		setFrames(nextFrames);
+		loadGraph(parentFlow);
+		setHistory(frame.history);
+		setDirty(true);
+	}, [loadGraph]);
 	const undo = react.useCallback(() => {
 		const { past, future } = historyRef.current;
 		const previous = past[past.length - 1];
@@ -12703,7 +13029,8 @@ function Editor({ initial, flows, onBack, onExit }) {
 				...node.data,
 				title: typeof patch.title === "string" ? patch.title : node.data.title,
 				detail: detailOf(next),
-				outlets: outletsOf(next)
+				outlets: outletsOf(next),
+				subflow: next.type === "subagent" && next.mode === "subflow" && next.subflow !== void 0 ? subflowPreview(next.subflow) : void 0
 			}
 		} : node));
 		setDirty(true);
@@ -12863,12 +13190,7 @@ function Editor({ initial, flows, onBack, onExit }) {
 		const timer = window.setTimeout(() => {
 			let flow;
 			try {
-				flow = buildFlow({
-					...baseRef.current,
-					name,
-					entry,
-					agents
-				}, bodies, nodes, edges);
+				flow = composeRoot();
 			} catch {
 				return;
 			}
@@ -12886,30 +13208,20 @@ function Editor({ initial, flows, onBack, onExit }) {
 		bodies,
 		agents,
 		entry,
-		name
+		name,
+		frames.length
 	]);
 	const save = async () => {
 		setBusy(true);
 		setBanner(null);
 		try {
-			const result = await saveFlow(buildFlow({
-				...baseRef.current,
-				name,
-				entry,
-				agents
-			}, bodies, nodes, edges));
+			const result = await saveFlow(composeRoot());
 			if (result.ok) {
-				baseRef.current = result.flow;
-				setEntry(result.flow.entry);
-				setNodes((all) => withEntryFlags(all, result.flow.entry));
-				setName(result.flow.name);
-				setAgents(result.flow.agents ?? []);
+				const nextFrames = [];
+				framesRef.current = nextFrames;
+				setFrames(nextFrames);
+				loadGraph(result.flow);
 				setDirty(false);
-				setHistory({
-					past: [],
-					future: []
-				});
-				mergeRef.current = null;
 				setBanner({
 					kind: "ok",
 					lines: result.warnings.length > 0 ? ["已保存（有警告）", ...result.warnings.map((item) => item.message)] : ["已保存"]
@@ -13093,15 +13405,26 @@ function Editor({ initial, flows, onBack, onExit }) {
 		type: "button",
 		className: "wf-btn",
 		onClick: () => {
+			if (frames.length > 0) {
+				backToParent();
+				return;
+			}
 			if (confirmLeave()) onBack();
 		},
-		title: "返回流程库（有未保存改动会先确认）"
-	}, "← 流程库"), /* @__PURE__ */ react.createElement("input", {
+		title: frames.length > 0 ? "返回上一层子图（当前子图会写回父节点）" : "返回流程库（有未保存改动会先确认）"
+	}, frames.length > 0 ? frames.length > 1 ? "← 返回上层" : "← 返回主图" : "← 流程库"), /* @__PURE__ */ react.createElement("input", {
 		className: "wf-input",
 		style: { width: 200 },
 		value: name,
 		onChange: (event) => rename(event.target.value)
-	}), /* @__PURE__ */ react.createElement("span", { className: "wf-sub" }, dirty ? "未保存" : "已同步"), validationChip !== null && /* @__PURE__ */ react.createElement("button", {
+	}), frames.length > 0 && /* @__PURE__ */ react.createElement("span", {
+		className: "wf-crumb",
+		title: [
+			"主图",
+			...frames.map((frame) => frame.title),
+			name
+		].join(" / ")
+	}, "主图", frames.map((frame) => /* @__PURE__ */ react.createElement(react.Fragment, { key: frame.parentNodeId }, /* @__PURE__ */ react.createElement("span", null, "/"), /* @__PURE__ */ react.createElement("b", null, frame.title))), /* @__PURE__ */ react.createElement("span", null, "/"), /* @__PURE__ */ react.createElement("b", null, name)), /* @__PURE__ */ react.createElement("span", { className: "wf-sub" }, dirty ? "未保存" : "已同步"), validationChip !== null && /* @__PURE__ */ react.createElement("button", {
 		type: "button",
 		className: "wf-btn",
 		"data-tone": validationChip.kind,
@@ -13174,6 +13497,7 @@ function Editor({ initial, flows, onBack, onExit }) {
 			setSelectedId(id);
 		},
 		onOutletClick: startOutletLink,
+		onOpenSubflow: openSubflow,
 		onMoveNode: () => setDirty(true),
 		onDragNode: () => record(),
 		onPaneMenu: (screen, flowPoint) => setMenu({
@@ -13239,6 +13563,7 @@ function Editor({ initial, flows, onBack, onExit }) {
 		onCondition: setCondition,
 		onWhen: setWhen,
 		onAgentsChange: changeAgents,
+		onOpenSubflow: openSubflow,
 		onSetEntry: () => {
 			if (selectedId !== null) setEntryId(selectedId);
 		}

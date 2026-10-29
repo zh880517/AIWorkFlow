@@ -1,7 +1,7 @@
 // DSH 内的流程图页面：流程库 ⇄ 画布编辑器。整页跑在宿主 React 里，不嵌 iframe。
 import * as React from 'react';
 import { addEdge, useEdgesState, useNodesState, type Connection, type EdgeChange } from '@xyflow/react';
-import type { AgentDef, Flow, FlowNode, NodeType } from '@shared/index.js';
+import type { AgentDef, Flow, FlowNode, NodeType, SubagentNode } from '@shared/index.js';
 import { relTime } from '@shared/index.js';
 import { Boundary, reportInfo } from '../diagnostics.js';
 import * as api from './api.js';
@@ -13,7 +13,9 @@ import {
   canvasOf,
   detailOf,
   makeNode,
+  makeSubflow,
   outletsOf,
+  subflowPreview,
   PALETTE,
   typeLabel,
   type CanvasEdge,
@@ -207,6 +209,16 @@ interface Snapshot {
   name: string;
 }
 
+/** 进入内嵌子图时压栈：父图快照 + 父节点 id，返回时把子图写回父节点 */
+interface SubflowFrame {
+  parentNodeId: string;
+  title: string;
+  snapshot: Snapshot;
+  base: Flow;
+  /** 进入子图前的撤销栈；返回时恢复，子图自己的历史不跨层 */
+  history: { past: Snapshot[]; future: Snapshot[] };
+}
+
 interface ClipboardEntry {
   body: FlowNode;
   title: string;
@@ -244,6 +256,8 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
   const [resizing, setResizing] = React.useState(false);
   /** 点出口名字后待连线的来源：再点一个目标节点就把它连上 */
   const [pendingLink, setPendingLink] = React.useState<{ nodeId: string; outletKey: string } | null>(null);
+  /** 内嵌子图编辑栈：空 = 主图，非空 = 正在编辑最内层子图 */
+  const [frames, setFrames] = React.useState<SubflowFrame[]>([]);
 
   const pageRef = React.useRef<HTMLDivElement | null>(null);
   const bodyRef = React.useRef<HTMLDivElement | null>(null);
@@ -260,6 +274,8 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
   const historyRef = React.useRef(history);
   const selectedRef = React.useRef<string | null>(null);
   const saveRef = React.useRef<(() => void) | null>(null);
+  /** frames 的同步副本：composeRoot 等事件处理里立刻要读，不等下一次 render */
+  const framesRef = React.useRef<SubflowFrame[]>([]);
   // 事件处理器一律读这里：避免把 nodes/edges/bodies 全部塞进每个 useCallback 的依赖
   const liveRef = React.useRef<Snapshot>({
     nodes: seed.nodes,
@@ -274,6 +290,7 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
   historyRef.current = history;
   selectedRef.current = selectedId;
   clipboardRef.current = clipboard;
+  framesRef.current = frames;
 
   const record = React.useCallback((mergeKey?: string): void => {
     const now = Date.now();
@@ -303,6 +320,150 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
     },
     [setNodes, setEdges],
   );
+
+  /** 切换当前编辑的画布（主图 / 子图）：整份状态换掉，不走进度历史 */
+  const loadGraph = React.useCallback(
+    (flow: Flow): void => {
+      const canvas = canvasOf(flow);
+      setNodes(withEntryFlags(canvas.nodes, flow.entry));
+      setEdges(canvas.edges);
+      setBodies(Object.fromEntries(flow.nodes.map((node) => [node.id, node])));
+      setAgents(flow.agents ?? []);
+      setName(flow.name);
+      setEntry(flow.entry);
+      setSelectedId(null);
+      setPendingLink(null);
+      setHistory({ past: [], future: [] });
+      setValidation(null);
+      mergeRef.current = null;
+      baseRef.current = flow;
+      // 等 ReactFlow 收到新 nodes/edges 后再 fit，否则量的还是上一张图
+      window.setTimeout(() => canvasApiRef.current?.fitAll?.(), 40);
+    },
+    [setNodes, setEdges],
+  );
+
+  /** 把当前正在编辑的层（可能是最内层子图）折回主图，得到可保存/校验的根 Flow */
+  const composeRoot = React.useCallback((): Flow => {
+    const snapshot = liveRef.current;
+    let flow = buildFlow(
+      { ...baseRef.current, name: snapshot.name, entry: snapshot.entry, agents: snapshot.agents },
+      snapshot.bodies,
+      snapshot.nodes,
+      snapshot.edges,
+    );
+    const stack = framesRef.current;
+    for (let index = stack.length - 1; index >= 0; index -= 1) {
+      const frame = stack[index];
+      if (frame === undefined) throw new Error('子图栈损坏：帧缺失');
+      const owner = frame.snapshot.bodies[frame.parentNodeId];
+      if (owner === undefined || owner.type !== 'subagent') {
+        throw new Error(`子图栈损坏：父节点 ${frame.parentNodeId} 不是 subagent`);
+      }
+      const subagent: SubagentNode = owner;
+      const updated: SubagentNode = {
+        ...subagent,
+        mode: 'subflow',
+        subflow: {
+          name: flow.name,
+          entry: flow.entry,
+          maxSteps: subagent.subflow?.maxSteps,
+          nodes: flow.nodes,
+          _ui: flow._ui,
+        },
+      };
+      const parentSnapshot: Snapshot = {
+        ...frame.snapshot,
+        bodies: { ...frame.snapshot.bodies, [frame.parentNodeId]: updated },
+      };
+      flow = buildFlow(
+        { ...frame.base, name: parentSnapshot.name, entry: parentSnapshot.entry, agents: parentSnapshot.agents },
+        parentSnapshot.bodies,
+        parentSnapshot.nodes,
+        parentSnapshot.edges,
+      );
+    }
+    return flow;
+  }, []);
+
+  /** 进入某个 subagent 节点的内嵌子图；没有子图时先建一张最小合法子图 */
+  const openSubflow = React.useCallback(
+    (nodeId: string): void => {
+      const snapshot = liveRef.current;
+      const body = snapshot.bodies[nodeId];
+      if (body === undefined || body.type !== 'subagent') return;
+      const created = body.subflow === undefined;
+      const subagent: SubagentNode = created
+        ? { ...body, mode: 'subflow', subflow: makeSubflow(`${body.title?.trim() || body.id} 子图`) }
+        : { ...body, mode: 'subflow' };
+      const sub = subagent.subflow;
+      if (sub === undefined) return;
+      const nextBodies = { ...snapshot.bodies, [nodeId]: subagent };
+      const nextSnapshot: Snapshot = { ...snapshot, bodies: nextBodies };
+      const subFlow: Flow = {
+        id: `${baseRef.current.id}::${nodeId}`,
+        name: sub.name ?? `${body.title?.trim() || nodeId} 子图`,
+        entry: sub.entry,
+        maxSteps: sub.maxSteps,
+        nodes: sub.nodes,
+        agents: snapshot.agents,
+        _ui: sub._ui,
+      };
+      const frame: SubflowFrame = {
+        parentNodeId: nodeId,
+        title: body.title?.trim() || nodeId,
+        snapshot: nextSnapshot,
+        base: baseRef.current,
+        history: historyRef.current,
+      };
+      const nextFrames = [...framesRef.current, frame];
+      framesRef.current = nextFrames;
+      setFrames(nextFrames);
+      loadGraph(subFlow);
+      if (created) setDirty(true);
+    },
+    [loadGraph],
+  );
+
+  /** 从当前子图返回上一层：把子图写回父节点的 subflow，再恢复父图状态 */
+  const backToParent = React.useCallback((): void => {
+    const frame = framesRef.current[framesRef.current.length - 1];
+    if (frame === undefined) return;
+    const snapshot = liveRef.current;
+    const built = buildFlow(
+      { ...baseRef.current, name: snapshot.name, entry: snapshot.entry, agents: snapshot.agents },
+      snapshot.bodies,
+      snapshot.nodes,
+      snapshot.edges,
+    );
+    const owner = frame.snapshot.bodies[frame.parentNodeId];
+    if (owner === undefined || owner.type !== 'subagent') return;
+    const subagent: SubagentNode = {
+      ...owner,
+      mode: 'subflow',
+      subflow: {
+        name: built.name,
+        entry: built.entry,
+        maxSteps: owner.subflow?.maxSteps,
+        nodes: built.nodes,
+        _ui: built._ui,
+      },
+    };
+    const nextBodies = { ...frame.snapshot.bodies, [frame.parentNodeId]: subagent };
+    const parentFlow = buildFlow(
+      { ...frame.base, name: frame.snapshot.name, entry: frame.snapshot.entry, agents: frame.snapshot.agents },
+      nextBodies,
+      frame.snapshot.nodes,
+      frame.snapshot.edges,
+    );
+    const nextFrames = framesRef.current.slice(0, -1);
+    framesRef.current = nextFrames;
+    setFrames(nextFrames);
+    loadGraph(parentFlow);
+    // loadGraph 会清空历史；返回父层时把进入前的撤销栈还回去
+    setHistory(frame.history);
+    setDirty(true);
+  }, [loadGraph]);
 
   const undo = React.useCallback((): void => {
     const { past, future } = historyRef.current;
@@ -605,6 +766,10 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
                 detail: detailOf(next),
                 // 卡点的出口 = 选项：选项增删改要立刻反映到卡片右侧
                 outlets: outletsOf(next),
+                subflow:
+                  next.type === 'subagent' && next.mode === 'subflow' && next.subflow !== undefined
+                    ? subflowPreview(next.subflow)
+                    : undefined,
               },
             }
           : node,
@@ -795,7 +960,7 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
     const timer = window.setTimeout(() => {
       let flow: Flow;
       try {
-        flow = buildFlow({ ...baseRef.current, name, entry, agents }, bodies, nodes, edges);
+        flow = composeRoot();
       } catch {
         return;
       }
@@ -812,23 +977,20 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
       alive = false;
       window.clearTimeout(timer);
     };
-  }, [nodes, edges, bodies, agents, entry, name]);
+  }, [nodes, edges, bodies, agents, entry, name, frames.length]);
 
   const save = async (): Promise<void> => {
     setBusy(true);
     setBanner(null);
     try {
-      const flow = buildFlow({ ...baseRef.current, name, entry, agents }, bodies, nodes, edges);
+      const flow = composeRoot();
       const result = await api.saveFlow(flow);
       if (result.ok) {
-        baseRef.current = result.flow;
-        setEntry(result.flow.entry);
-        setNodes((all) => withEntryFlags(all, result.flow.entry));
-        setName(result.flow.name);
-        setAgents(result.flow.agents ?? []);
+        const nextFrames: SubflowFrame[] = [];
+        framesRef.current = nextFrames;
+        setFrames(nextFrames);
+        loadGraph(result.flow);
         setDirty(false);
-        setHistory({ past: [], future: [] });
-        mergeRef.current = null;
         setBanner({
           kind: 'ok',
           lines: result.warnings.length > 0 ? ['已保存（有警告）', ...result.warnings.map((item) => item.message)] : ['已保存'],
@@ -1004,11 +1166,15 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
           type="button"
           className="wf-btn"
           onClick={() => {
+            if (frames.length > 0) {
+              backToParent();
+              return;
+            }
             if (confirmLeave()) onBack();
           }}
-          title="返回流程库（有未保存改动会先确认）"
+          title={frames.length > 0 ? '返回上一层子图（当前子图会写回父节点）' : '返回流程库（有未保存改动会先确认）'}
         >
-          ← 流程库
+          {frames.length > 0 ? (frames.length > 1 ? '← 返回上层' : '← 返回主图') : '← 流程库'}
         </button>
         <input
           className="wf-input"
@@ -1016,6 +1182,19 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
           value={name}
           onChange={(event) => rename(event.target.value)}
         />
+        {frames.length > 0 && (
+          <span className="wf-crumb" title={['主图', ...frames.map((frame) => frame.title), name].join(' / ')}>
+            主图
+            {frames.map((frame) => (
+              <React.Fragment key={frame.parentNodeId}>
+                <span>/</span>
+                <b>{frame.title}</b>
+              </React.Fragment>
+            ))}
+            <span>/</span>
+            <b>{name}</b>
+          </span>
+        )}
         <span className="wf-sub">{dirty ? '未保存' : '已同步'}</span>
         {validationChip !== null && (
           <button
@@ -1129,6 +1308,7 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
               setSelectedId(id);
             }}
             onOutletClick={startOutletLink}
+            onOpenSubflow={openSubflow}
             onMoveNode={() => setDirty(true)}
             onDragNode={() => record()}
             onPaneMenu={(screen, flowPoint) => setMenu({ kind: 'pane', x: screen.x, y: screen.y, at: flowPoint })}
@@ -1191,6 +1371,7 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
             onCondition={setCondition}
             onWhen={setWhen}
             onAgentsChange={changeAgents}
+            onOpenSubflow={openSubflow}
             onSetEntry={() => {
               if (selectedId !== null) setEntryId(selectedId);
             }}

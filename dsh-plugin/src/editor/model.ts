@@ -1,7 +1,32 @@
 // 画布 <-> DSL 的双向映射。画布只持有布局与标题，节点本体（instruction/options/...）保存在 bodies 里，
 // 保存时按边重建 next/branches，其余字段原样保留（不丢掉其它工具写入的 outlets/params 等）。
-import type { Branch, Flow, FlowNode, NodeType } from '@shared/index.js';
+import type { Branch, Flow, FlowNode, NodeType, SubflowDef } from '@shared/index.js';
 import type { Edge, Node } from '@xyflow/react';
+
+/** 子图卡片上的只读缩略图：坐标已归一化到 0..100，直接喂 SVG viewBox */
+export interface SubflowPreviewBox {
+  id: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  label: string;
+  entry: boolean;
+}
+
+export interface SubflowPreviewLine {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
+
+export interface SubflowPreview {
+  count: number;
+  entry: string;
+  boxes: SubflowPreviewBox[];
+  lines: SubflowPreviewLine[];
+}
 
 export interface CanvasNodeData extends Record<string, unknown> {
   title: string;
@@ -11,6 +36,8 @@ export interface CanvasNodeData extends Record<string, unknown> {
   isEntry: boolean;
   /** 卡片右侧显式画出来的出口（卡点=每个选项一个）；空数组=按出边数量动态画 */
   outlets: CanvasOutlet[];
+  /** subagent.mode=subflow 时卡片内的只读缩略图 */
+  subflow?: SubflowPreview;
 }
 
 export interface CanvasOutlet {
@@ -44,7 +71,11 @@ export function detailOf(node: FlowNode): string {
     case 'tool':
       return node.toolName ?? '';
     case 'subagent':
-      return node.mode === 'flowRef' ? `引用 ${node.flowRef ?? ''}` : node.mode;
+      if (node.mode === 'flowRef') return `引用 ${node.flowRef ?? ''}`;
+      if (node.mode === 'subflow') {
+        return node.subflow === undefined ? '内嵌子图（未创建）' : `内嵌子图 · ${node.subflow.nodes.length} 节点`;
+      }
+      return node.mode;
     case 'join':
       return node.aggregateInstruction ?? '';
     case 'end':
@@ -83,6 +114,78 @@ export function makeNode(type: NodeType, id: string): FlowNode {
   }
 }
 
+/** 新建 subagent.subflow 时的最小合法子图：开始 → 结束 */
+export function makeSubflow(name = '子图'): SubflowDef {
+  const start = makeNode('prompt', 's1');
+  start.title = '子图开始';
+  start.next = 's2';
+  const end = makeNode('end', 's2');
+  end.title = '子图结束';
+  return {
+    name,
+    entry: 's1',
+    nodes: [start, end],
+    _ui: { positions: { s1: { x: 80, y: 90 }, s2: { x: 380, y: 90 } } },
+  };
+}
+
+/** 子图缩略图：取前 24 个节点，按包围盒归一化到 0..100 */
+export function subflowPreview(subflow: SubflowDef): SubflowPreview {
+  const nodes = subflow.nodes.slice(0, 24);
+  if (nodes.length === 0) return { count: 0, entry: subflow.entry, boxes: [], lines: [] };
+  const positions = subflow._ui?.positions ?? {};
+  const points = nodes.map((node, index) => ({
+    node,
+    x: positions[node.id]?.x ?? autoPosition(index).x,
+    y: positions[node.id]?.y ?? autoPosition(index).y,
+  }));
+  const minX = Math.min(...points.map((point) => point.x));
+  const minY = Math.min(...points.map((point) => point.y));
+  const maxX = Math.max(...points.map((point) => point.x));
+  const maxY = Math.max(...points.map((point) => point.y));
+  const spanX = Math.max(1, maxX - minX + 160);
+  const spanY = Math.max(1, maxY - minY + 90);
+  const scale = 88 / Math.max(spanX, spanY);
+  const boxW = Math.max(14, 148 * scale);
+  const boxH = Math.max(8, 58 * scale);
+  const originX = 6 + (100 - spanX * scale) / 2;
+  const originY = 6 + (100 - spanY * scale) / 2;
+  const center = new Map<string, { x: number; y: number }>();
+  const boxes = points.map((point) => {
+    const x = originX + (point.x - minX) * scale;
+    const y = originY + (point.y - minY) * scale;
+    center.set(point.node.id, { x: x + boxW / 2, y: y + boxH / 2 });
+    return {
+      id: point.node.id,
+      x,
+      y,
+      w: boxW,
+      h: boxH,
+      label: point.node.title?.trim() || point.node.id,
+      entry: point.node.id === subflow.entry,
+    };
+  });
+  const known = new Set(boxes.map((box) => box.id));
+  const lines: SubflowPreviewLine[] = [];
+  for (const point of points) {
+    const targets: string[] = [];
+    if (point.node.branches !== undefined && point.node.branches.length > 0) {
+      for (const branch of point.node.branches) targets.push(branch.to);
+    } else if (point.node.next !== undefined) {
+      targets.push(point.node.next);
+    }
+    const from = center.get(point.node.id);
+    if (from === undefined) continue;
+    for (const target of targets) {
+      if (!known.has(target)) continue;
+      const to = center.get(target);
+      if (to === undefined) continue;
+      lines.push({ x1: from.x, y1: from.y, x2: to.x, y2: to.y });
+    }
+  }
+  return { count: subflow.nodes.length, entry: subflow.entry, boxes, lines };
+}
+
 /** 卡片右侧要画的出口：卡点一个选项一个，其余类型交给出边数量决定 */
 export function outletsOf(node: FlowNode): CanvasOutlet[] {
   if (node.type !== 'gate') return [];
@@ -101,6 +204,9 @@ export function canvasOf(flow: Flow): { nodes: CanvasNode[]; edges: CanvasEdge[]
       detail: detailOf(node),
       isEntry: node.id === flow.entry,
       outlets: outletsOf(node),
+      ...(node.type === 'subagent' && node.mode === 'subflow' && node.subflow !== undefined
+        ? { subflow: subflowPreview(node.subflow) }
+        : {}),
     },
   }));
   const known = new Set(nodes.map((node) => node.id));

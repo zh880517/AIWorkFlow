@@ -146,6 +146,16 @@ export const editorCss = `
 .wf-node-title{font-size:12.5px;font-weight:600;margin-top:1px;word-break:break-word}
 .wf-node-detail{font-size:11px;color:var(--dsw-alias-label-secondary);margin-top:2px;overflow:hidden;text-overflow:ellipsis;
   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;word-break:break-word}
+.wf-node[data-subflow="true"]{min-width:208px;max-width:252px}
+.wf-subflow{margin-top:6px;padding-top:5px;border-top:1px dashed var(--dsw-alias-border-l2)}
+.wf-subflow-head{display:flex;align-items:center;gap:6px;font-size:9.5px;color:var(--dsw-alias-label-secondary)}
+.wf-subflow-open{margin-left:auto;padding:1px 6px;border-radius:999px;border:1px solid var(--dsw-alias-border-l2);
+  background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font-size:9.5px;line-height:15px;cursor:pointer}
+.wf-subflow-open:hover{border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-brand-primary)}
+.wf-subflow-map{display:block;width:100%;height:76px;margin-top:3px;color:var(--dsw-alias-label-secondary)}
+.wf-crumb{display:flex;align-items:center;gap:5px;max-width:46vw;overflow:hidden;white-space:nowrap;
+  font-size:11px;color:var(--dsw-alias-label-secondary)}
+.wf-crumb b{font-weight:600;color:var(--dsw-alias-label-primary);overflow:hidden;text-overflow:ellipsis}
 .react-flow__attribution{background:transparent;color:var(--dsw-alias-label-secondary);font-size:9px;opacity:.6}
 /* 卡点：没连线的出口名字挂在卡片右侧外面，点它开始连线 */
 .wf-outlet-tag{position:absolute;left:calc(100% + 12px);transform:translateY(-50%);max-width:160px;

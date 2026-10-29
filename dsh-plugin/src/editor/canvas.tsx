@@ -22,6 +22,8 @@ import { editorCss } from './styles.js';
 
 /** 点卡片右侧的出口名字 = 开始连一条线（再点目标节点完成），回调由页面给 */
 const OutletClickContext = React.createContext<(nodeId: string, outletKey: string) => void>(() => {});
+/** 点子图卡片里的「打开」= 进入内嵌子图编辑，回调由页面给 */
+const OpenSubflowContext = React.createContext<(nodeId: string) => void>(() => {});
 
 function WfNode({ id, data, selected }: NodeProps<CanvasNode>): React.ReactElement {
   // 没有声明出口的节点（非卡点）：出边数量决定右侧画几个点，一个分支一个
@@ -36,6 +38,8 @@ function WfNode({ id, data, selected }: NodeProps<CanvasNode>): React.ReactEleme
       .join('|'),
   );
   const onOutletClick = React.useContext(OutletClickContext);
+  const onOpenSubflow = React.useContext(OpenSubflowContext);
+  const preview = data.subflow;
   const declared = data.outlets ?? [];
   const slots: Array<{ key: string; label: string | undefined }> =
     declared.length > 0
@@ -43,7 +47,12 @@ function WfNode({ id, data, selected }: NodeProps<CanvasNode>): React.ReactEleme
       : Array.from({ length: Math.max(outCount, 1) }, (_, index) => ({ key: String(index), label: undefined }));
   const wiredKeys = new Set(wired === '' ? [] : wired.split('|'));
   return (
-    <div className="wf-node" data-kind={data.kind} data-selected={selected ? 'true' : 'false'}>
+    <div
+      className="wf-node"
+      data-kind={data.kind}
+      data-selected={selected ? 'true' : 'false'}
+      data-subflow={preview === undefined ? undefined : 'true'}
+    >
       {/* 入口没有入线：不渲染 target handle，避免把线连进起点 */}
       {!data.isEntry && <Handle type="target" position={Position.Left} />}
       <div className="wf-node-kind">
@@ -52,6 +61,64 @@ function WfNode({ id, data, selected }: NodeProps<CanvasNode>): React.ReactEleme
       </div>
       <div className="wf-node-title">{data.title}</div>
       {data.detail !== '' && <div className="wf-node-detail">{data.detail}</div>}
+      {preview !== undefined && (
+        <div className="wf-subflow">
+          <div className="wf-subflow-head">
+            <span>内嵌子图 · {preview.count} 节点</span>
+            <button
+              type="button"
+              className="wf-subflow-open nodrag"
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.stopPropagation();
+                onOpenSubflow(id);
+              }}
+            >
+              打开
+            </button>
+          </div>
+          <svg className="wf-subflow-map" viewBox="0 0 100 100" role="img" aria-label="子图缩略图">
+            {preview.lines.map((line, index) => (
+              <line
+                key={`l-${index}`}
+                x1={line.x1}
+                y1={line.y1}
+                x2={line.x2}
+                y2={line.y2}
+                stroke="currentColor"
+                strokeOpacity={0.35}
+                strokeWidth={0.8}
+              />
+            ))}
+            {preview.boxes.map((box) => (
+              <g key={box.id}>
+                <rect
+                  x={box.x}
+                  y={box.y}
+                  width={box.w}
+                  height={box.h}
+                  rx={1.4}
+                  fill={box.entry ? 'var(--dsw-alias-brand-primary)' : 'var(--dsw-alias-bg-layer-2)'}
+                  fillOpacity={box.entry ? 0.9 : 0.8}
+                  stroke="var(--dsw-alias-border-l2)"
+                  strokeWidth={0.5}
+                >
+                  <title>{box.label}</title>
+                </rect>
+                <text
+                  x={box.x + box.w / 2}
+                  y={box.y + box.h / 2 + 1.1}
+                  textAnchor="middle"
+                  fontSize={3.1}
+                  fill={box.entry ? 'var(--dsw-alias-bg-base)' : 'var(--dsw-alias-label-secondary)'}
+                >
+                  {box.label.length > 8 ? `${box.label.slice(0, 8)}…` : box.label}
+                </text>
+              </g>
+            ))}
+          </svg>
+        </div>
+      )}
       {slots.map((slot, index) => (
         <React.Fragment key={slot.key}>
           <Handle
@@ -99,6 +166,8 @@ export interface CanvasApi {
   center: () => Point;
   /** 把某个节点滚进视野（校验问题定位用） */
   focusNode: (id: string) => void;
+  /** 换图（主图 ⇄ 子图）后把所有节点缩放到视野内 */
+  fitAll: () => void;
 }
 
 export interface FlowCanvasProps {
@@ -118,6 +187,8 @@ export interface FlowCanvasProps {
   onEdgeMenu: (screen: Point, id: string) => void;
   /** 点了卡片右侧的出口名字：页面记下来，等下一次点目标节点 */
   onOutletClick: (nodeId: string, outletKey: string) => void;
+  /** 点子图卡片的「打开」：进入内嵌子图编辑 */
+  onOpenSubflow: (nodeId: string) => void;
   onApi: (api: CanvasApi) => void;
 }
 
@@ -151,6 +222,9 @@ function CanvasFlow(props: FlowCanvasProps): React.ReactElement {
       focusNode: (id: string): void => {
         void flow.fitView({ nodes: [{ id }], padding: 0.6, duration: 300 });
       },
+      fitAll: (): void => {
+        void flow.fitView({ padding: 0.25, duration: 220 });
+      },
     });
   }, [flow]);
 
@@ -166,7 +240,8 @@ function CanvasFlow(props: FlowCanvasProps): React.ReactElement {
   return (
     <div className="wf-flow" ref={wrapRef}>
       <OutletClickContext.Provider value={props.onOutletClick}>
-        <ReactFlow
+        <OpenSubflowContext.Provider value={props.onOpenSubflow}>
+          <ReactFlow
           nodes={props.nodes}
           edges={renderedEdges}
           nodeTypes={nodeTypes}
@@ -198,6 +273,7 @@ function CanvasFlow(props: FlowCanvasProps): React.ReactElement {
           <Background gap={18} size={1} />
           <Controls showInteractive={false} />
         </ReactFlow>
+        </OpenSubflowContext.Provider>
       </OutletClickContext.Provider>
     </div>
   );

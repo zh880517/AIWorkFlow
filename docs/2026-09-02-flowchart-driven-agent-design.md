@@ -61,7 +61,7 @@ run 定位顺序：**childToken → runId → hostSession（`dsh:<sessionId>`）
 |---|---|---|
 | `prompt` | 描述干什么、怎么判断 | `instruction` |
 | `tool` | 指定工具与参数 | `toolName`, `params` |
-| `subagent` | 派子 Agent | `extraPrompt`, `mode`, `fanOut?`, `role?`, `thread?`, `produces?`, `consumes?`, `reportHint?` |
+| `subagent` | 派子 Agent | `extraPrompt`, `mode`, `subflow?`, `flowRef?`, `fanOut?`, `role?`, `thread?`, `produces?`, `consumes?`, `reportHint?` |
 | `gate` | 人工卡点，挂起等确认 | `question`, `options[]` |
 | `join` | 等并行子 Agent 全部回报后汇总 | `waitFor`, `aggregateInstruction` |
 | `end` | 出口 | `outcome: success \| fail` |
@@ -69,8 +69,10 @@ run 定位顺序：**childToken → runId → hostSession（`dsh:<sessionId>`）
 `subagent.mode` 三态：
 
 - `inline` — 只提供额外提示词，子 Agent 执行单个节点，其余上下文由主 Agent 补充
-- `subflow` — 子 Agent 走一张内嵌子图
+- `subflow` — 子 Agent 走一张内嵌子图；子图直接存在 `SubagentNode.subflow`，与主图一起保存/快照，不是另一张 flow
 - `flowRef` — 子 Agent 走另一张已保存的工作流图
+
+`SubflowDef._ui.positions` 和 `SubflowDef.name` 是面板布局/展示元数据：校验、引擎、快照都忽略；没有它们子图重新打开时会退回自动布局。
 
 子 Agent 协作字段（db v7+）：
 
