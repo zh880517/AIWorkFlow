@@ -1,8 +1,9 @@
 # 流程图驱动的 AI Agent 执行引擎 — 设计文档
 
 日期：2026-09-02
-最后修订：2026-10-29（P1 多 Agent 语义、子 Agent 配置、审计修复）
+最后修订：2026-10-29（P1 多 Agent 语义、子 Agent 配置、审计修复、内嵌架构与关键流程图）
 状态：已评审，当前实现依据
+图示：关键流程用 Mermaid 内嵌在正文里（GitHub / VS Code 直接渲染）；实现改动时同步 §3、§7、§8 的图。
 
 ---
 
@@ -43,6 +44,53 @@
 | Client | React + React Flow 界面：流程库/编辑器、进度胶囊与浮动面板、只读运行图 |
 
 没有独立服务、端口、token 或 MCP 端点。Host 半只在 DSH 提供 `webServer` 与 `tools` 服务时激活；数据目录固定 `~/.aiworkflow/`，测试用 `AIWORKFLOW_HOME` 重定向。
+
+```mermaid
+flowchart LR
+  subgraph DSH["DeepSeek Harness 宿主"]
+    WEB["Web 服务<br/>页面 + 同源 HTTP"]
+    AG["主 Agent / 子 Agent 会话<br/>模型 + 工具调用"]
+    SLOTS["UI 插槽系统<br/>slots / locale / layout"]
+  end
+
+  subgraph PLUGIN["插件 @aiworkflow/dsh-plugin"]
+    HOST["Host 半 index.js<br/>host.ts · tools.ts · engine.ts · db.ts"]
+    CLIENT["Client 半 client.js<br/>picker · pill · panel · runview · editor"]
+  end
+
+  subgraph SHARED["shared/src（两半共用，纯逻辑）"]
+    ENG["ExecutionEngine<br/>startRun / getCurrentStep<br/>completeStep / awaitGate / abandonRun"]
+    VAL["validateFlow"]
+    SNAP["buildSnapshot<br/>copy-on-run 快照"]
+    QRY["readMonitorState"]
+  end
+
+  DB[("SQLite<br/>aiworkflow.db<br/>唯一事实源")]
+  MIRROR["flows/*.json<br/>派生镜像"]
+  CACHE["cache/snapshot-&lt;hash&gt;.json<br/>派生快照"]
+  MARKET["GitHub 市场索引<br/>market/index.json"]
+
+  SLOTS --> CLIENT
+  CLIENT -->|"fetch 同源路由<br/>打开 2s / 收起 6s"| HOST
+  WEB -->|"prefix 路由 /aiworkflow/*"| HOST
+  AG -->|"8 个 aiworkflow_* 工具"| HOST
+  HOST --> ENG
+  HOST --> QRY
+  HOST --> VAL
+  ENG --> SNAP
+  ENG --> DB
+  QRY --> DB
+  VAL -->|"saveFlow 落库后刷新"| DB
+  DB --> MIRROR
+  SNAP -->|"persistSnapshot"| CACHE
+  MARKET -.->|"安装时按 commit 拉产物"| PLUGIN
+```
+
+图里三个边界值得记住：
+
+- 进程内只有两个入口：**HTTP 路由**（Client 半、外部页面）和 **Agent 工具**（模型）。两者调同一批 `shared/` 函数、同一个 SQLite 连接，没有第二套逻辑。
+- Client 半不碰数据库，只 `fetch('/aiworkflow/*')`；刷新页面、换浏览器都不影响状态。
+- `flows/*.json` 与 `cache/` 是派生品，SQLite 写成功后才刷新，删掉不影响 run。
 
 ### 身份模型
 
@@ -282,7 +330,114 @@ P1 增补两条交接通道：
 
 一次执行是一棵树。`parent_run_id` / `root_run_id` 描述层级：主 Agent 为根，每个子 Agent 一个 child run（`inline` 模式只含一个节点，`subflow` / `flowRef` 模式走自己的子图）。
 
-### 7.2 推进语义
+child 是在**推进事务之后**由服务端先行建好的——这样面板立刻可见、`childToken` 校验退化成白名单查表、`max` 截断能记账（§7.4）。
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant M as 主 Agent
+  participant E as 引擎
+  participant DB as SQLite
+  participant S as 子 Agent（DSH 子任务会话）
+
+  M->>E: complete_step（上游节点回报，后继是 subagent 节点）
+  E->>DB: 事务：上游 completed 轨迹 + 指针前移到 subagent
+  E->>E: childItems()：单 child / fanOut.count / fanOut.from 数组（max 截断要记账）
+  E->>DB: 每个 child 建 run：child_token=c_xxx、子快照、role/thread/fanout_item<br/>+ dispatched 轨迹（含被丢弃条目）
+  E-->>M: 派发步：children[{ childToken, preamble, extraPrompt }]
+
+  M->>S: DSH 子任务调用，preamble 原样前置（不许改写）
+  S->>E: get_current_step({ childToken })
+  E->>DB: child_token → child run（等于准入校验）
+  E-->>S: 子图第一步（角色 / 线程 / 汇报契约）
+  Note over S: 子 Agent 用同一套工具，<br/>只是每次都要带 childToken
+```
+
+- `child_token` 既是查询键也是准入凭据：拿不到对应 run 的 token 一律自愈拒绝。
+- 子 Agent 不走特殊接口，跑的是同一套 `get_current_step` / `complete_step`，差别只在每次都要带 token。
+
+### 7.2 启动与推进语义
+
+run 的生命周期只有两个动作：**启动**（建 run + 落快照 + 定入口）和**推进**（`complete_step` 走一格）。
+
+**启动**：面板「工作流」按钮和 Agent 的 `start_run` 两个入口最后都汇到 `engine.startRun`，之后的差别只在"谁来唤醒 Agent"。
+
+```mermaid
+flowchart TD
+  A1["入口 A：用户点输入框左侧「工作流」"] --> A2["GET /aiworkflow/flows?kind=flow<br/>只列主流程，子 Agent 配置不出现"]
+  A2 --> A3["选中一张 → POST /aiworkflow/runs<br/>{ flowId, sessionId, note }"]
+  B1["入口 B：Agent 调<br/>aiworkflow_start_run({ flowName, inputs? })"] --> C
+  A3 --> C["engine.startRun()"]
+
+  C --> C1{"带 hostSession 且该会话<br/>已有活跃 run？"}
+  C1 -->|是| X1["自愈：先跑完或在面板点「放弃」<br/>不建新 run"]
+  C1 -->|否| D["resolveFlow：按 id，再按展示名"]
+  D -->|找不到| X2["自愈：先 list_flows 看有哪些图"]
+  D --> E{"validateFlow 通过？"}
+  E -->|否| X3["自愈：列出错误码与消息，不建 run"]
+  E -->|是| F["buildSnapshot：copy-on-run<br/>递归解析 flowRef / 内嵌子图"]
+  F --> G["persistSnapshot → cache/snapshot-&lt;hash&gt;.json<br/>INSERT runs(status=running, entry=current_node)"]
+  G --> H{"入口节点类型"}
+  H -->|gate| I1["挂起：status=waiting_gate<br/>gate_decisions 插一条 pending"]
+  H -->|subagent| I2["入口即派发：建 child run<br/>status=waiting_children"]
+  H -->|其它| I3["保持 running，等的就是这一步"]
+  I1 --> R["startRun 返回第一步 step + 纪律文本"]
+  I2 --> R
+  I3 --> R
+
+  R --> P{"这次是哪个入口？"}
+  P -->|"入口 A（用户点面板）"| M["Host wakeAgent()：followup 注入一条用户态消息<br/>source.kind='schedule'，点名下一步工具"]
+  M --> N{"该会话的 Agent 在线？"}
+  N -->|是| Q["Agent 得知 run 已建<br/>（唤醒消息 / 工具返回值）→ 调 aiworkflow_get_current_step"]
+  N -->|否| P2["静默跳过：run 留在库里，等下一次对话"]
+  P -->|"入口 B（Agent 自己发起，工具直接返回）"| Q
+  Q --> S["进入单步闭环"]
+```
+
+- 两个入口的差别只在最后一步：A 由 Host 主动唤醒（`followup`），B 的 `startRun` 结果就是工具返回值。
+- 「一会话一活跃 run」守卫只认 `hostSession`：同会话两个活跃 run 会让执行类工具永远命中最新那个，旧 run 静默失联（§7.7）。
+- 入口即 gate / 入口即 subagent 是特判——`startRun` 不会停在入口节点上，直接挂起或派发；唤醒失败不影响正确性，状态全在库里。
+
+**推进**：Agent 侧看到的就是「领一步 → 干活 → 回报一格」，引擎不保存 Agent 的游标，位置只在 `runs.current_node`。
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant A as Agent（DSH 会话）
+  participant T as 工具层 tools.ts
+  participant E as 引擎 ExecutionEngine
+  participant DB as SQLite
+
+  A->>T: aiworkflow_get_current_step()
+  T->>E: getCurrentStep({ hostSession: "dsh:xxx" })
+  E->>DB: 按 host_session 找活跃 run，没有就取最近一个
+  E-->>A: { runId, step, discipline, progress }
+
+  Note over A: 按 step.instruction 干活<br/>prompt / tool / subagent / gate / join / end
+  A->>T: aiworkflow_complete_step({ summary, payload?, branchId?, artifacts?, nodeId? })
+  T->>E: completeStep()
+  E->>E: 校验 summary / nodeId 匹配 / artifacts key
+  E->>E: 选后继：when 命中 → Agent 给的 branchId → 都没有就自愈要你选
+  E->>DB: 一个事务：completed 轨迹 + runs 前移 + steps_used++
+  E-->>A: 下一步 step / finished / 自愈文案
+
+  loop 直到 end、卡点或派发
+    A->>T: get_current_step / complete_step
+  end
+
+  alt 走到 end 或隐式 end
+    E-->>A: finished: true, outcome=success|fail
+  else 超出 maxSteps（默认 200）
+    E->>DB: run 判 failed
+    E-->>A: finished: true, outcome=fail + 提示改图
+  else 调错工具 / 节点对不上 / 参数缺失
+    E-->>A: self-heal：错在哪 + 正确姿势 + 当前这一步
+  end
+```
+
+- 执行类工具**无状态**：Agent 不持有游标，上下文被压缩后一句 `get_current_step` 就能找回位置（§6.1）。
+- 分支不由模型猜：有 `branches` 而 `when` 没命中时必须显式给 `branchId`，否则自愈要你选（边界见 7.3）。
+- `maxSteps` 在**每条**推进路径上都检查（complete / report_blocked / 汇聚 / 卡点放行），防止自动回环绕过。
 
 `complete_step` 在单个事务内完成：校验 run 与节点匹配 → 落 `node_executions` → 按 `branchId` 查快照定位后继 → 检查后继迭代上限 → 渲染 `instruction` 插值 → 返回。中途任何失败都不推进，走自愈返回。
 
@@ -322,6 +477,32 @@ P1 增补两条交接通道：
 
 重派使用新 child run 而非复用旧 run，是为了让面板能同时看到"第一次失败了"和"重试的结果"，而不是被覆盖掉。
 
+```mermaid
+sequenceDiagram
+  autonumber
+  participant M as 主 Agent
+  participant E as 引擎
+  participant DB as SQLite
+  participant P as 进度面板
+
+  M->>E: get_current_step()（派发步上的这次调用 = 汇聚）
+  E->>DB: childSlots：只取最近一轮（parent_iteration 最大）
+  E->>DB: 仍未终结的 child → 判 failed（"未回报"）
+
+  alt 有可重派的失败（原始 child，未重派过）
+    E->>DB: 建新 child（retry_of）+ dispatched
+    E-->>M: 新 preamble：只重派这一轮，全部返回后再调 get_current_step
+  else 全部终结（含"失败但已重派过"）
+    E->>E: mergeChildPayloads + when 自动判定
+    E->>DB: completed 轨迹（payload=合并结果）→ 推进
+    E-->>M: 下一步 / finished / 请选 branchId
+  end
+
+  DB-->>P: 面板轮询看到 child run 与轨迹
+```
+
+汇聚这一步有两个反直觉点：**它由 `get_current_step` 触发**（不是 `complete_step`），以及**重复调用必须幂等**——所以服务端每次都只对"稳定的终态"收敛，绝不重复建 child。
+
 实现落点（阶段 6 实测后补记）：
 
 - 派发步把主 run 置 `waiting_children`；汇聚由主 Agent 在派发步上调 `get_current_step` 触发（对稳定的 child 终态收敛，重复调用幂等）。
@@ -342,6 +523,40 @@ P1 增补两条交接通道：
 
 - 用户在对话里答复；Agent 调 `answer_gate` 代填（`source: 'chat'`）。
 - 引擎仍保留 `source: 'panel'` 的写入能力，供以后面板点选接入；当前插件面板只读展示待决卡点，不提供点选。
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor U as 用户
+  participant A as Agent
+  participant E as 引擎
+  participant DB as SQLite
+
+  A->>E: complete_step（后继是 gate 节点）
+  E->>DB: 进入 gate：status=waiting_gate + gate_decisions(pending)
+  E-->>A: step{ gateId, question, options[] }
+  A->>U: 把问题原样转达
+
+  par 长轮询（默认 60 秒一轮）
+    A->>E: aiworkflow_await_gate({ gateId })
+    E-->>A: 仍在等待（到点返回"再调一次"）/ 已推进后的当前状态
+  and 用户在对话里答复
+    U-->>A: "选 B"
+    A->>E: aiworkflow_answer_gate({ optionId, note }, source=chat)
+    E->>DB: 决策落库（含 source）+ completed 轨迹（payload 带选项）
+    E->>E: 选项 → outlet 匹配出边（兜底同名分支 id）
+    E-->>A: 下一步
+  end
+
+  alt 选项在图上没有连线
+    E->>DB: 决策仍然记录，run 判 failed
+    E-->>A: 说明缺哪条连线，请修图后重新 start_run
+  else 已在别处作答过
+    E-->>A: 自愈：卡点已答复，调 get_current_step 看进展
+  end
+```
+
+卡点不占线程：`await_gate` 是 60 秒一轮的 DB 轮询，到点返回"仍在等待，请再调一次"；放行则是一次普通推进（与 `complete_step` 同一条事务路径）。
 
 放行时必须记录 `source`，否则事后回看轨迹无法分辨该卡点是在什么场景下放过的。
 
@@ -384,6 +599,32 @@ child run 调 `report_blocked` 时，该 child 置为 `failed`，随后由 7.5 �
 2. **注册同源路由**：Host 半在 `ctx.webServer` 上挂 `/aiworkflow` 前缀路由，供 Client 半读取进度、读写流程图；不另起端口、不要 token。
 
 **激活条件**：插件声明 `inject: ['webServer', 'tools']`，缺少任一服务的 DSH 组合里 Host 半不激活，Client 界面也不会出现。
+
+装载顺序：
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant DSH as DSH 宿主
+  participant PKG as 插件包 dsh-plugin
+  participant H as Host 半 index.js
+  participant C as Client 半 client.js
+  participant UI as 宿主 UI
+
+  DSH->>PKG: 读 cordis.patch.yml（insert id=aiworkflow-progress）
+  DSH->>PKG: 读 package.json 的 dsh 段（host 入口 "."，client platform=web）
+  DSH->>H: 激活 Host（inject: webServer, tools）
+  H->>DSH: webServer.register({kind:'prefix', path:'/aiworkflow'})
+  H->>DSH: tools.register × 8（context / flow / 6 个执行类）
+  Note over H: 懒连接：第一个请求到来时才打开库并跑迁移
+  DSH->>C: 装载 client bundle（inject: slots, locale）
+  C->>UI: slots.inject 5 个插槽、注册 8 个条目
+  Note over C,UI: 标题栏胶囊、浮动进度面板、侧栏图标、<br/>「可视化工作流」主面板、输入框左侧「工作流」按钮、<br/>运行图浮层、启动弹层、诊断浮层
+```
+
+- 注册全包在 `ctx.effect` 里，卸载时反注册并关闭数据库句柄。
+- 「运行图」页签是**动态注册**的：只有本会话有 run 时才注入，切到没跑过的会话自动撤掉。
+- 数据库惰性打开；打不开时路由返回 `available:false` + 原因，面板显示诊断而不是白屏。
 
 **上下文压缩的缓解**：压缩后没有外部提醒，Agent 可能悄然脱离流程。三层缓解——每个工具返回值复述状态、`get_current_step` 幂等可随时取回、纪律文本明确写"不记得就调它"。按"引导"定位，脱离流程本身不算灾难，只是失去逐步披露的收益。
 

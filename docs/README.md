@@ -11,8 +11,7 @@
 而不是留在 `docs/dev/` 里。2026-10-29 已按此约定删除三份“已实施”的子 Agent 配置 / 属性面板 /
 多 Agent 设计笔记（内容已吸收进正式设计文档，历史见 git）。
 
-- 正式设计文档：[2026-09-02-flowchart-driven-agent-design.md](./2026-09-02-flowchart-driven-agent-design.md)
-- 架构与关键流程图：[2026-10-29-architecture-flows.md](./2026-10-29-architecture-flows.md)（PNG 导出于 [diagrams/](./diagrams/)）
+- 正式设计文档（含架构与关键流程图，Mermaid 内嵌）：[2026-09-02-flowchart-driven-agent-design.md](./2026-09-02-flowchart-driven-agent-design.md)
 - 待处理项（临时）：[dev/PENDING.md](./dev/PENDING.md)
 - 编辑器交接（临时）：[dev/EDITOR-HANDOFF.md](./dev/EDITOR-HANDOFF.md)
 - 2026-10-29 审计报告（临时）：[dev/2026-10-29-audit.md](./dev/2026-10-29-audit.md)
