@@ -1,6 +1,6 @@
 // 画布 <-> DSL 的双向映射。画布只持有布局与标题，节点本体（instruction/options/...）保存在 bodies 里，
 // 保存时按边重建 next/branches，其余字段原样保留（不丢掉其它工具写入的 outlets/params 等）。
-import type { Branch, Flow, FlowNode, NodeType, SubflowDef } from '@shared/index.js';
+import type { Branch, FanOutConfig, Flow, FlowNode, NodeType, SubflowDef } from '@shared/index.js';
 import type { Edge, Node } from '@xyflow/react';
 
 /** 子图卡片上的只读缩略图：坐标已归一化到 0..100，直接喂 SVG viewBox */
@@ -81,6 +81,92 @@ export function detailOf(node: FlowNode): string {
     case 'end':
       return node.outcome;
   }
+}
+
+/** 属性面板可折叠的「高级」分组 id */
+export type InspectorGroupId = 'runtime' | 'contract' | 'fanout' | 'loop';
+
+/**
+ * 属性面板概览 chip：把运行时关键配置压成一行，不展开高级分组也能读到。
+ * group 指向点击后要展开的分组；action 表示 chip 自带动作（如直接打开子图）。
+ */
+export interface NodeSummaryChip {
+  key: 'runtime' | 'mode' | 'artifacts' | 'subflow' | 'fanout' | 'loop' | 'branches';
+  label: string;
+  group?: InspectorGroupId;
+  action?: 'open-subflow';
+}
+
+/** 线程摘要：省掉「一次性」这种默认值，避免每个节点都多一个无信息 chip */
+export function threadSummary(thread: string | undefined): string | undefined {
+  if (thread === undefined || thread.trim() === '' || thread === 'new') return undefined;
+  return `线程 ${thread}`;
+}
+
+export function artifactSummary(
+  produces: string[] | undefined,
+  consumes: string[] | undefined,
+): string | undefined {
+  const from = (produces ?? []).filter((key) => key.trim() !== '');
+  const to = (consumes ?? []).filter((key) => key.trim() !== '');
+  if (from.length === 0 && to.length === 0) return undefined;
+  if (from.length > 0 && to.length > 0) return `${from.join('/')} → ${to.join('/')}`;
+  return from.length > 0 ? `产出 ${from.join('/')}` : `消费 ${to.join('/')}`;
+}
+
+export function fanoutSummary(fanOut: FanOutConfig | undefined): string | undefined {
+  if (fanOut === undefined) return undefined;
+  if (fanOut.from !== undefined && fanOut.from.trim() !== '') return `并行 ${fanOut.from}`;
+  if (fanOut.count !== undefined && fanOut.max !== undefined) return `并行 ${fanOut.count} 项 ≤${fanOut.max}`;
+  if (fanOut.count !== undefined) return `并行 ${fanOut.count} 项`;
+  if (fanOut.max !== undefined) return `并行 ≤${fanOut.max}`;
+  return undefined;
+}
+
+export function loopSummary(node: FlowNode): string | undefined {
+  const parts: string[] = [];
+  if (node.loopId !== undefined && node.loopId !== '') parts.push(`回路 ${node.loopId}`);
+  else if (node.maxRounds !== undefined) parts.push('回路');
+  if (node.maxRounds !== undefined) parts.push(`≤${node.maxRounds}`);
+  if (node.iterationLimit !== undefined) parts.push(`迭代 ≤${node.iterationLimit}`);
+  if (node.onLimitExceeded !== undefined) parts.push(`→ ${node.onLimitExceeded}`);
+  return parts.length === 0 ? undefined : parts.join(' ');
+}
+
+/** 概览 chip 的数据源：纯函数，便于单测与后续复用（运行图卡片等） */
+export function summarizeNode(
+  node: FlowNode,
+  context: { edgeCount?: number } = {},
+): NodeSummaryChip[] {
+  const chips: NodeSummaryChip[] = [];
+  if (node.type === 'subagent') {
+    const runtime = [node.role, threadSummary(node.thread)].filter((part): part is string => part !== undefined);
+    if (runtime.length > 0) chips.push({ key: 'runtime', label: runtime.join(' · '), group: 'runtime' });
+    if (node.mode === 'flowRef' && node.flowRef !== undefined && node.flowRef !== '') {
+      chips.push({ key: 'mode', label: `引用 ${node.flowRef}` });
+    }
+    const artifacts = artifactSummary(node.produces, node.consumes);
+    if (artifacts !== undefined) chips.push({ key: 'artifacts', label: artifacts, group: 'contract' });
+    if (node.subflow !== undefined) {
+      chips.push({
+        key: 'subflow',
+        label: `子图 ${node.subflow.nodes.length} 节点`,
+        action: 'open-subflow',
+      });
+    }
+    const fanout = fanoutSummary(node.fanOut);
+    if (fanout !== undefined) chips.push({ key: 'fanout', label: fanout, group: 'fanout' });
+  }
+  const loop = loopSummary(node);
+  if (loop !== undefined) chips.push({ key: 'loop', label: loop, group: 'loop' });
+  const branchCount = node.type === 'gate' ? node.options.length : (context.edgeCount ?? 0);
+  if (branchCount > 1) {
+    chips.push({
+      key: 'branches',
+      label: node.type === 'gate' ? `${branchCount} 个选项` : `${branchCount} 条分支`,
+    });
+  }
+  return chips;
 }
 
 function autoPosition(index: number): { x: number; y: number } {

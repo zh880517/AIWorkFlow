@@ -396,7 +396,8 @@ child run 调 `report_blocked` 时，该 child 置为 `failed`，随后由 7.5 �
 ### 9.1 编辑器
 
 - 画布拖拽建节点、连线即分支；选中连线编辑 `condition`，高级区可填 `when`。六种节点以颜色 / 图标区分，右侧按 `type` 显示对应字段表单
-- `subagent` 额外编辑 `role`（下拉引用全图角色表）、`thread`、`produces/consumes`、`reportHint`；属性面板底部可维护全图「角色表」（id/name/charter/produces/consumes）
+- **属性面板按使用频率分三层**：头部（类型、标题就地编辑、id 复制、入口标记 + 概览 chip）→ 核心字段（每类 1–3 个必填/最常改项）→ 折叠的高级设置（角色与线程、产物与汇报、并行派发、循环与逃生、本步指令）。概览 chip 由 `summarizeNode()` 生成（角色/线程、产物、子图、并行、回路、出口数），点击展开对应分组；高级字段的说明收进 label 右侧的 i 提示，不占常驻行高
+- 面板顶部页签「节点 / 图」；`subagent` 的 `role` 下拉引用全图角色表，角色表（id/name/charter/produces/consumes）在「图」页签维护，不再占节点面板
 - **技术选型：React Flow**。自定义节点、连线交互、缩放定位均现成
 - **插值提示的固有限制**：输入 `{{` 时能提示的只有前序**节点 id**，`payload` 字段名运行时才知道。补法是从历史 run 中学习该节点曾出现过的字段名作候选。首次画图无提示，用过几次后有
 

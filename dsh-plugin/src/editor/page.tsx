@@ -1438,6 +1438,11 @@ function Editor({ initial, flows, onBack, onExit }: EditorProps): React.ReactEle
             payloadFields={payloadFields}
             edges={selectedEdges}
             isEntry={selectedId !== null && entry === selectedId}
+            issues={
+              validation === null || selectedId === null
+                ? []
+                : [...validation.errors, ...validation.warnings].filter((issue) => issue.nodeId === selectedId)
+            }
             onPatch={patchNode}
             onDelete={deleteNode}
             onCondition={setCondition}

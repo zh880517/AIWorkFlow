@@ -11096,6 +11096,79 @@ function detailOf(node) {
 		case "end": return node.outcome;
 	}
 }
+/** 线程摘要：省掉「一次性」这种默认值，避免每个节点都多一个无信息 chip */
+function threadSummary(thread) {
+	if (thread === void 0 || thread.trim() === "" || thread === "new") return void 0;
+	return `线程 ${thread}`;
+}
+function artifactSummary(produces, consumes) {
+	const from = (produces ?? []).filter((key) => key.trim() !== "");
+	const to = (consumes ?? []).filter((key) => key.trim() !== "");
+	if (from.length === 0 && to.length === 0) return void 0;
+	if (from.length > 0 && to.length > 0) return `${from.join("/")} → ${to.join("/")}`;
+	return from.length > 0 ? `产出 ${from.join("/")}` : `消费 ${to.join("/")}`;
+}
+function fanoutSummary(fanOut) {
+	if (fanOut === void 0) return void 0;
+	if (fanOut.from !== void 0 && fanOut.from.trim() !== "") return `并行 ${fanOut.from}`;
+	if (fanOut.count !== void 0 && fanOut.max !== void 0) return `并行 ${fanOut.count} 项 ≤${fanOut.max}`;
+	if (fanOut.count !== void 0) return `并行 ${fanOut.count} 项`;
+	if (fanOut.max !== void 0) return `并行 ≤${fanOut.max}`;
+}
+function loopSummary(node) {
+	const parts = [];
+	if (node.loopId !== void 0 && node.loopId !== "") parts.push(`回路 ${node.loopId}`);
+	else if (node.maxRounds !== void 0) parts.push("回路");
+	if (node.maxRounds !== void 0) parts.push(`≤${node.maxRounds}`);
+	if (node.iterationLimit !== void 0) parts.push(`迭代 ≤${node.iterationLimit}`);
+	if (node.onLimitExceeded !== void 0) parts.push(`→ ${node.onLimitExceeded}`);
+	return parts.length === 0 ? void 0 : parts.join(" ");
+}
+/** 概览 chip 的数据源：纯函数，便于单测与后续复用（运行图卡片等） */
+function summarizeNode(node, context = {}) {
+	const chips = [];
+	if (node.type === "subagent") {
+		const runtime = [node.role, threadSummary(node.thread)].filter((part) => part !== void 0);
+		if (runtime.length > 0) chips.push({
+			key: "runtime",
+			label: runtime.join(" · "),
+			group: "runtime"
+		});
+		if (node.mode === "flowRef" && node.flowRef !== void 0 && node.flowRef !== "") chips.push({
+			key: "mode",
+			label: `引用 ${node.flowRef}`
+		});
+		const artifacts = artifactSummary(node.produces, node.consumes);
+		if (artifacts !== void 0) chips.push({
+			key: "artifacts",
+			label: artifacts,
+			group: "contract"
+		});
+		if (node.subflow !== void 0) chips.push({
+			key: "subflow",
+			label: `子图 ${node.subflow.nodes.length} 节点`,
+			action: "open-subflow"
+		});
+		const fanout = fanoutSummary(node.fanOut);
+		if (fanout !== void 0) chips.push({
+			key: "fanout",
+			label: fanout,
+			group: "fanout"
+		});
+	}
+	const loop = loopSummary(node);
+	if (loop !== void 0) chips.push({
+		key: "loop",
+		label: loop,
+		group: "loop"
+	});
+	const branchCount = node.type === "gate" ? node.options.length : context.edgeCount ?? 0;
+	if (branchCount > 1) chips.push({
+		key: "branches",
+		label: node.type === "gate" ? `${branchCount} 个选项` : `${branchCount} 条分支`
+	});
+	return chips;
+}
 function autoPosition(index) {
 	return {
 		x: 80 + index % 3 * 260,
@@ -11601,8 +11674,89 @@ var editorCss = `
   --xy-controls-box-shadow:0 0 0 1px var(--dsw-alias-border-l1);
   --xy-attribution-background-color:transparent}
 .wf-flow{width:100%;height:100%}
-.wf-inspector{flex:none;min-width:0;overflow-y:auto;
-  padding:12px;background:var(--dsw-alias-bg-layer-1);display:flex;flex-direction:column;gap:12px}
+.wf-inspector{flex:none;min-width:0;overflow:hidden;background:var(--dsw-alias-bg-layer-1)}
+/* 面板三段式：页签固定、内容滚动、底部动作固定；头部在滚动区里吸顶 */
+.wf-insp-root{display:flex;flex-direction:column;height:100%;min-height:0;container-type:inline-size}
+.wf-insp-tabs{flex:none;display:flex;gap:2px;padding:8px 12px 0;border-bottom:1px solid var(--dsw-alias-border-l1)}
+.wf-tab{height:30px;padding:0 10px;border:0;border-bottom:2px solid transparent;background:transparent;
+  color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;font-weight:600;cursor:pointer}
+.wf-tab:hover{color:var(--dsw-alias-label-primary)}
+.wf-tab[data-active="true"]{color:var(--dsw-alias-label-primary);border-bottom-color:var(--dsw-alias-brand-primary)}
+.wf-insp-scroll{flex:1;min-height:0;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:12px}
+.wf-insp-head{flex:none;padding:10px 12px 8px;
+  background:var(--dsw-alias-bg-layer-1);border-bottom:1px solid var(--dsw-alias-border-l1);
+  display:flex;flex-direction:column;gap:6px}
+.wf-insp-head-row{display:flex;align-items:center;gap:8px;min-width:0}
+.wf-insp-title{flex:1;min-width:0;height:26px;padding:0 2px;border:0;border-bottom:1px solid transparent;
+  background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:14px;font-weight:700;
+  outline:none;border-radius:0}
+.wf-insp-title:focus{border-bottom-color:var(--dsw-alias-brand-primary)}
+.wf-insp-title::placeholder{color:var(--dsw-alias-label-secondary);font-weight:600}
+.wf-icon-btn{flex:none;width:22px;height:22px;padding:0;border-radius:6px;border:1px solid var(--dsw-alias-border-l1);
+  background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font:inherit;font-size:11px;
+  line-height:1;cursor:pointer}
+.wf-icon-btn:hover{color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-brand-primary)}
+/* 概览 chip：头部一眼看到角色/线程/产物/子图/回路/分支；单行横滚，避免多行把头部撑高 */
+.wf-chips{display:flex;flex-wrap:nowrap;gap:4px;overflow-x:auto;scrollbar-width:none}
+.wf-chips::-webkit-scrollbar{display:none}
+.wf-sum-chip{flex:none;max-width:100%;padding:2px 7px;border-radius:999px;border:1px solid var(--dsw-alias-border-l1);
+  background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font:inherit;font-size:10.5px;
+  line-height:1.5;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+button.wf-sum-chip{cursor:pointer}
+button.wf-sum-chip:hover{border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-label-primary)}
+.wf-sum-label{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 高级字段的说明收进 label 右侧的小 i */
+.wf-tip{display:inline-flex;align-items:center;justify-content:center;width:13px;height:13px;margin-left:5px;
+  border-radius:50%;border:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-secondary);
+  font-size:9px;font-weight:700;font-style:normal;cursor:help;vertical-align:1px}
+/* 分段控件：执行方式 / 结束结果 */
+.wf-seg{display:flex;gap:2px;padding:2px;border-radius:8px;border:1px solid var(--dsw-alias-border-l1);
+  background:var(--dsw-alias-bg-base)}
+.wf-seg button{flex:1;height:22px;padding:0 6px;border:0;border-radius:6px;background:transparent;
+  color:var(--dsw-alias-label-secondary);font:inherit;font-size:11.5px;cursor:pointer;white-space:nowrap}
+.wf-seg button:hover:not([data-active="true"]){background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}
+.wf-seg button[data-active="true"]{background:var(--dsw-alias-brand-primary);color:var(--dsw-alias-bg-base);font-weight:600}
+.wf-mode-row{display:flex;align-items:center;gap:8px;justify-content:space-between}
+.wf-mode-row .wf-hint{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 高级设置：一行一个折叠组，折叠头显示当前值摘要 */
+.wf-adv{display:flex;flex-direction:column}
+.wf-acc{border-top:1px solid var(--dsw-alias-border-l1)}
+.wf-adv .wf-acc:last-child{border-bottom:1px solid var(--dsw-alias-border-l1)}
+.wf-acc-head{display:flex;align-items:center;gap:6px;width:100%;height:32px;padding:0 2px;border:0;
+  background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;text-align:left;cursor:pointer}
+.wf-acc-head:hover .wf-acc-title{color:var(--dsw-alias-brand-primary)}
+.wf-acc-caret{flex:none;font-size:10px;color:var(--dsw-alias-label-secondary);transition:transform .12s}
+.wf-acc-caret[data-open="true"]{transform:rotate(90deg)}
+.wf-acc-title{flex:none;font-weight:600}
+.wf-acc-summary{flex:1;min-width:0;text-align:right;font-size:10.5px;color:var(--dsw-alias-label-secondary);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wf-acc-body{display:flex;flex-direction:column;gap:10px;padding:2px 0 10px}
+/* 窄面板下高级两列退化成单列 */
+.wf-grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+@container (max-width:280px){.wf-grid2{grid-template-columns:1fr}}
+/* 卡点选项行：label + 目标 + 删除 */
+.wf-opt-row{display:flex;align-items:center;gap:6px}
+.wf-opt-row .wf-input{flex:1;min-width:0}
+.wf-opt-target{flex:none;max-width:84px;font-size:10.5px;color:var(--dsw-alias-label-secondary);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wf-opt-target[data-empty="true"]{color:var(--dsw-alias-state-warn-primary)}
+/* 当前节点的校验问题 */
+.wf-issues{display:flex;flex-direction:column;gap:4px;padding:8px 10px;border-radius:8px;
+  border:1px solid var(--dsw-alias-state-warn-primary);background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 7%,transparent)}
+.wf-issues[data-has-error="true"]{border-color:var(--dsw-alias-state-error-primary);
+  background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 7%,transparent)}
+.wf-issues-head{font-size:11px;font-weight:700;color:var(--dsw-alias-state-warn-primary)}
+.wf-issues[data-has-error="true"] .wf-issues-head{color:var(--dsw-alias-state-error-primary)}
+.wf-issue{display:flex;gap:6px;font-size:11px;line-height:1.45;color:var(--dsw-alias-label-secondary)}
+.wf-issue code{flex:none;font-size:10px;color:var(--dsw-alias-state-error-primary)}
+.wf-issue[data-kind="warning"] code{color:var(--dsw-alias-state-warn-primary)}
+/* 图页签里的角色卡 */
+.wf-agent{display:flex;flex-direction:column;gap:6px;padding:8px;border-radius:8px;
+  border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1)}
+.wf-insp-empty{display:flex;flex-direction:column;gap:8px;padding:4px 2px}
+.wf-insp-empty-title{font-size:12px;font-weight:700}
+.wf-insp-foot{flex:none;display:flex;align-items:center;gap:8px;padding:10px 12px;
+  border-top:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1)}
 /* 画布 / 属性面板之间的分隔条：拖动改宽度，双击复位 */
 .wf-splitter{flex:none;width:7px;cursor:col-resize;position:relative;background:transparent;
   touch-action:none;user-select:none;outline:none}
@@ -11618,16 +11772,12 @@ var editorCss = `
 .wf-section{display:flex;flex-direction:column;gap:10px}
 .wf-section-title{font-size:10.5px;font-weight:700;color:var(--dsw-alias-label-secondary);letter-spacing:.08em;
   text-transform:uppercase;padding-bottom:5px;border-bottom:1px solid var(--dsw-alias-border-l1)}
-.wf-insp-head{display:flex;align-items:center;gap:8px;padding-bottom:9px;border-bottom:1px solid var(--dsw-alias-border-l1)}
 .wf-kind{font-size:10.5px;font-weight:700;letter-spacing:.04em;padding:2px 7px;border-radius:6px;
   border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary)}
-.wf-id{flex:1;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;color:var(--dsw-alias-label-secondary);
+.wf-id{flex:1;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:10.5px;color:var(--dsw-alias-label-secondary);
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .wf-chip{font-size:10px;font-weight:700;padding:1px 6px;border-radius:999px;color:var(--dsw-alias-bg-base);
   background:var(--dsw-alias-brand-primary)}
-.wf-insp-empty{display:flex;flex-direction:column;gap:8px;padding:4px 2px}
-.wf-insp-empty-title{font-size:12px;font-weight:700}
-.wf-insp-foot{display:flex;gap:8px;margin-top:auto;padding-top:10px;border-top:1px solid var(--dsw-alias-border-l1)}
 .wf-area{min-height:76px;padding:6px 8px;border-radius:8px;border:1px solid var(--dsw-alias-border-l1);
   background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;
   resize:vertical;outline:none;width:100%;box-sizing:border-box}
@@ -11923,17 +12073,33 @@ function FlowCanvas(props) {
 }
 //#endregion
 //#region dsh-plugin/src/editor/inspector.tsx
-function Field({ label, hint, children }) {
-	return /* @__PURE__ */ react.createElement("div", { className: "wf-field" }, /* @__PURE__ */ react.createElement("span", { className: "wf-label" }, label), children, hint !== void 0 && /* @__PURE__ */ react.createElement("span", { className: "wf-hint" }, hint));
+function Field({ label, hint, tip, children }) {
+	return /* @__PURE__ */ react.createElement("div", { className: "wf-field" }, /* @__PURE__ */ react.createElement("span", { className: "wf-label" }, label, tip !== void 0 && /* @__PURE__ */ react.createElement("span", {
+		className: "wf-tip",
+		title: tip,
+		"aria-label": tip
+	}, "i")), children, hint !== void 0 && /* @__PURE__ */ react.createElement("span", { className: "wf-hint" }, hint));
 }
 function Section({ title, children }) {
 	return /* @__PURE__ */ react.createElement("section", { className: "wf-section" }, /* @__PURE__ */ react.createElement("div", { className: "wf-section-title" }, title), children);
 }
-var MODE_HINTS = {
-	inline: "在同一个会话里派子 Agent 执行一个子任务",
-	subflow: "子图直接嵌在主图里，点「打开子图」编辑；运行时 child 跑这段子图",
-	flowRef: "引用另一张已存在的图，启动 run 时递归解析进快照"
-};
+var MODE_OPTIONS = [
+	{
+		value: "inline",
+		label: "inline",
+		title: "在同一个会话里派子 Agent 执行一个子任务"
+	},
+	{
+		value: "subflow",
+		label: "子图",
+		title: "子图直接嵌在主图里，运行时 child 跑这段子图"
+	},
+	{
+		value: "flowRef",
+		label: "引用图",
+		title: "引用另一张已存在的图，启动 run 时递归解析进快照"
+	}
+];
 /** 空串 / 非正整数都按「不设」处理，避免把 NaN 写进 DSL */
 function positiveInt(text) {
 	if (text.trim() === "") return void 0;
@@ -11951,32 +12117,154 @@ function splitKeys(text) {
 	const keys = text.split(/[,，\s]+/).map((key) => key.trim()).filter((key) => key !== "");
 	return keys.length === 0 ? void 0 : keys;
 }
+/** 折叠头摘要只显示第一行，避免一段长文本把整行撑开 */
+function firstLine(text, max = 18) {
+	const line = text.trim().split("\n")[0]?.trim() ?? "";
+	return line.length > max ? `${line.slice(0, max)}…` : line;
+}
+function orUndefined(text) {
+	return text === void 0 || text === "" ? void 0 : text;
+}
 function Inspector(props) {
+	const [tab, setTab] = react.useState("node");
+	const [openGroups, setOpenGroups] = react.useState({});
 	const { body } = props;
+	const toggleGroup = (id) => {
+		setOpenGroups((prev) => ({
+			...prev,
+			[id]: prev[id] !== true
+		}));
+	};
+	const openGroup = (id) => {
+		setOpenGroups((prev) => ({
+			...prev,
+			[id]: true
+		}));
+	};
+	react.useEffect(() => {
+		if (props.body !== void 0) setTab("node");
+	}, [props.body?.id]);
+	return /* @__PURE__ */ react.createElement("div", { className: "wf-insp-root" }, /* @__PURE__ */ react.createElement("div", {
+		className: "wf-insp-tabs",
+		role: "tablist",
+		"aria-label": "属性面板"
+	}, /* @__PURE__ */ react.createElement("button", {
+		type: "button",
+		role: "tab",
+		className: "wf-tab",
+		"data-active": tab === "node",
+		"aria-selected": tab === "node",
+		onClick: () => setTab("node")
+	}, "节点"), /* @__PURE__ */ react.createElement("button", {
+		type: "button",
+		role: "tab",
+		className: "wf-tab",
+		"data-active": tab === "flow",
+		"aria-selected": tab === "flow",
+		onClick: () => setTab("flow")
+	}, "图", props.agents.length > 0 ? ` · 角色 ${props.agents.length}` : "")), tab === "flow" ? /* @__PURE__ */ react.createElement("div", { className: "wf-insp-scroll" }, /* @__PURE__ */ react.createElement(FlowTab, {
+		agents: props.agents,
+		onAgentsChange: props.onAgentsChange
+	})) : body === void 0 ? /* @__PURE__ */ react.createElement("div", { className: "wf-insp-scroll" }, /* @__PURE__ */ react.createElement(EmptyInspector, null)) : /* @__PURE__ */ react.createElement(NodePanel, {
+		...props,
+		body,
+		issues: props.issues ?? [],
+		openGroups,
+		onToggleGroup: toggleGroup,
+		onOpenGroup: openGroup
+	}));
+}
+function EmptyInspector() {
+	return /* @__PURE__ */ react.createElement("div", { className: "wf-insp-empty" }, /* @__PURE__ */ react.createElement("div", { className: "wf-insp-empty-title" }, "未选中节点"), /* @__PURE__ */ react.createElement("div", { className: "wf-hint" }, "点选画布上的节点编辑属性；从节点右侧圆点拖线到另一个节点即可连边。"), /* @__PURE__ */ react.createElement("div", { className: "wf-hint" }, "右键画布：在指针处新建 / 粘贴；右键节点：复制、设为入口、删除。"), /* @__PURE__ */ react.createElement("div", { className: "wf-hint" }, "快捷键：Ctrl+Z 撤销、Ctrl+Shift+Z 重做、Ctrl+S 保存、Delete 删除。"));
+}
+function NodePanel(props) {
+	const { body } = props;
+	const [copied, setCopied] = react.useState(false);
 	const instrRef = react.useRef(null);
 	const extraRef = react.useRef(null);
 	const aggRef = react.useRef(null);
-	if (body === void 0) return /* @__PURE__ */ react.createElement("div", { className: "wf-insp-empty" }, /* @__PURE__ */ react.createElement("div", { className: "wf-insp-empty-title" }, "未选中节点"), /* @__PURE__ */ react.createElement("div", { className: "wf-hint" }, "点选画布上的节点编辑属性；从节点右侧圆点拖线到另一个节点即可连边。"), /* @__PURE__ */ react.createElement("div", { className: "wf-hint" }, "右键画布：在指针处新建 / 粘贴；右键节点：复制、设为入口、删除。"), /* @__PURE__ */ react.createElement("div", { className: "wf-hint" }, "快捷键：Ctrl+Z 撤销、Ctrl+Shift+Z 重做、Ctrl+S 保存、Delete 删除选中。"));
+	const branchRef = react.useRef(null);
 	const patch = (value) => props.onPatch(value);
 	const multi = props.edges.length > 1;
-	const options = body.type === "gate" ? body.options ?? [] : [];
-	/** 画布上先拉了线、还没归属任何选项的出边（提示用户去认领或删掉） */
+	const options = body.type === "gate" ? body.options : [];
+	/** 画布上先拉了线、还没归属任何选项的出边 */
 	const loose = body.type === "gate" ? props.edges.filter((edge) => edge.data?.outlet === void 0) : [];
 	const others = props.nodes.filter((node) => node.id !== body.id);
 	const danglingRef = (id) => id !== void 0 && id !== "" && !props.nodes.some((node) => node.id === id) ? id : void 0;
-	return /* @__PURE__ */ react.createElement(react.Fragment, null, /* @__PURE__ */ react.createElement("div", { className: "wf-insp-head" }, /* @__PURE__ */ react.createElement("span", {
+	const chips = summarizeNode(body, { edgeCount: props.edges.length });
+	const chipLabel = (key) => chips.find((chip) => chip.key === key)?.label;
+	const groupOpen = (id) => props.openGroups[id] === true;
+	const toggleGroup = (id) => props.onToggleGroup(id);
+	const openGroup = (group) => {
+		props.onOpenGroup(group);
+		window.requestAnimationFrame(() => {
+			document.getElementById(`wf-grp-${group}`)?.scrollIntoView({ block: "nearest" });
+		});
+	};
+	const onChip = (chip) => {
+		if (chip.action === "open-subflow") {
+			props.onOpenSubflow(body.id);
+			return;
+		}
+		if (chip.group !== void 0) {
+			openGroup(chip.group);
+			return;
+		}
+		if (chip.key === "branches") branchRef.current?.scrollIntoView({ block: "nearest" });
+	};
+	const copyId = () => {
+		const clipboard = typeof navigator === "undefined" ? void 0 : navigator.clipboard;
+		if (clipboard === void 0) return;
+		clipboard.writeText(body.id).then(() => {
+			setCopied(true);
+			window.setTimeout(() => setCopied(false), 1200);
+		}).catch(() => void 0);
+	};
+	const targetTitle = (id) => {
+		const title = props.nodes.find((node) => node.id === id)?.data.title;
+		return title === void 0 || title === "" ? id : title;
+	};
+	const reportSummary = body.type === "subagent" && body.reportHint !== void 0 && body.reportHint.trim() !== "" ? `汇报 ${firstLine(body.reportHint)}` : void 0;
+	const contractSummary = orUndefined([chipLabel("artifacts"), reportSummary].filter(Boolean).join(" · "));
+	return /* @__PURE__ */ react.createElement(react.Fragment, null, /* @__PURE__ */ react.createElement("div", { className: "wf-insp-head" }, /* @__PURE__ */ react.createElement("div", { className: "wf-insp-head-row" }, /* @__PURE__ */ react.createElement("span", {
 		className: "wf-kind",
 		"data-kind": body.type
-	}, typeLabel(body.type)), /* @__PURE__ */ react.createElement("code", { className: "wf-id" }, body.id), props.isEntry && /* @__PURE__ */ react.createElement("span", { className: "wf-chip" }, "入口")), /* @__PURE__ */ react.createElement(Section, { title: "基本信息" }, /* @__PURE__ */ react.createElement(Field, {
-		label: "标题",
-		hint: "显示在画布节点上；留空则显示节点 id"
-	}, /* @__PURE__ */ react.createElement("input", {
-		className: "wf-input",
+	}, typeLabel(body.type)), /* @__PURE__ */ react.createElement("input", {
+		className: "wf-insp-title",
 		value: body.title ?? "",
+		placeholder: body.id,
+		"aria-label": "节点标题",
 		onChange: (event) => patch({ title: event.target.value })
-	}))), body.type === "prompt" && /* @__PURE__ */ react.createElement(Section, { title: "指令内容" }, /* @__PURE__ */ react.createElement(Field, {
+	}), props.isEntry && /* @__PURE__ */ react.createElement("span", { className: "wf-chip" }, "入口")), /* @__PURE__ */ react.createElement("div", { className: "wf-insp-head-row" }, /* @__PURE__ */ react.createElement("code", {
+		className: "wf-id",
+		title: body.id
+	}, body.id), /* @__PURE__ */ react.createElement("button", {
+		type: "button",
+		className: "wf-icon-btn",
+		title: copied ? "已复制" : "复制节点 id",
+		"aria-label": copied ? "已复制" : "复制节点 id",
+		onClick: copyId
+	}, copied ? "✓" : "⧉")), chips.length > 0 && /* @__PURE__ */ react.createElement("div", { className: "wf-chips" }, chips.map((chip) => {
+		const interactive = chip.action !== void 0 || chip.group !== void 0 || chip.key === "branches" && body.type !== "gate";
+		const content = /* @__PURE__ */ react.createElement("span", {
+			className: "wf-sum-label",
+			title: chip.label
+		}, chip.label);
+		if (!interactive) return /* @__PURE__ */ react.createElement("span", {
+			className: "wf-sum-chip",
+			key: chip.key
+		}, content);
+		return /* @__PURE__ */ react.createElement("button", {
+			type: "button",
+			className: "wf-sum-chip",
+			"data-interactive": "true",
+			key: chip.key,
+			title: chip.action === "open-subflow" ? "打开子图" : "展开对应设置",
+			onClick: () => onChip(chip)
+		}, content);
+	}))), /* @__PURE__ */ react.createElement("div", { className: "wf-insp-scroll" }, props.issues.length > 0 && /* @__PURE__ */ react.createElement(IssueList, { issues: props.issues }), body.type === "prompt" && /* @__PURE__ */ react.createElement(Section, { title: "指令" }, /* @__PURE__ */ react.createElement(Field, {
 		label: "指令",
-		hint: "这一步要 Agent 做什么；可用 {{nodeId.payload.field}} 插值"
+		hint: "这一步要 Agent 做什么；支持 {{节点.payload.字段}} 插值"
 	}, /* @__PURE__ */ react.createElement("textarea", {
 		ref: instrRef,
 		className: "wf-area",
@@ -11989,18 +12277,18 @@ function Inspector(props) {
 		areaRef: instrRef
 	}))), body.type === "tool" && /* @__PURE__ */ react.createElement(Section, { title: "工具调用" }, /* @__PURE__ */ react.createElement(Field, {
 		label: "工具名",
-		hint: "Agent 可调用的工具名，例如 web_search、read"
+		hint: "例如 web_search、read"
 	}, /* @__PURE__ */ react.createElement("input", {
 		className: "wf-input",
 		value: body.toolName ?? "",
 		onChange: (event) => patch({ toolName: event.target.value })
 	})), /* @__PURE__ */ react.createElement(Field, {
 		label: "参数",
-		hint: "键值对；值能按 JSON 解析就当 JSON，否则按字符串。会作为 view.tool.params 下发给 Agent"
+		hint: "键值对；会作为 view.tool.params 下发给 Agent"
 	}, /* @__PURE__ */ react.createElement(ParamsEditor, {
 		value: body.params,
 		onChange: (params) => patch({ params })
-	}))), body.type === "subagent" && /* @__PURE__ */ react.createElement(Section, { title: "子 Agent" }, /* @__PURE__ */ react.createElement(Field, {
+	}))), body.type === "subagent" && /* @__PURE__ */ react.createElement(Section, { title: "任务" }, /* @__PURE__ */ react.createElement(Field, {
 		label: "附加指令",
 		hint: "追加给子 Agent 的上下文；主指令来自上游节点"
 	}, /* @__PURE__ */ react.createElement("textarea", {
@@ -12014,13 +12302,14 @@ function Inspector(props) {
 		payloadFields: props.payloadFields,
 		areaRef: extraRef
 	})), /* @__PURE__ */ react.createElement(Field, {
-		label: "执行模式",
-		hint: MODE_HINTS[body.mode] ?? ""
-	}, /* @__PURE__ */ react.createElement("select", {
-		className: "wf-input",
+		label: "执行方式",
+		tip: "inline 同一会话执行；子图 内嵌可编辑子流程；引用图 复用另一张已保存的图"
+	}, /* @__PURE__ */ react.createElement(Segmented, {
+		ariaLabel: "子 Agent 执行方式",
 		value: body.mode,
-		onChange: (event) => {
-			const mode = event.target.value;
+		options: MODE_OPTIONS,
+		onChange: (mode) => {
+			if (mode === body.mode) return;
 			if (mode === "subflow" && body.subflow === void 0) {
 				patch({
 					mode,
@@ -12030,98 +12319,22 @@ function Inspector(props) {
 			}
 			patch({ mode });
 		}
-	}, /* @__PURE__ */ react.createElement("option", { value: "inline" }, "inline — 同一会话内执行"), /* @__PURE__ */ react.createElement("option", { value: "flowRef" }, "flowRef — 引用另一张图"), /* @__PURE__ */ react.createElement("option", { value: "subflow" }, "subflow — 内嵌子图"))), body.mode === "subflow" && /* @__PURE__ */ react.createElement(Field, {
-		label: "内嵌子图",
-		hint: "子图随主图一起保存；点「打开子图」在主画布里编辑它，返回后保存主图即可"
-	}, /* @__PURE__ */ react.createElement("div", { className: "wf-row" }, /* @__PURE__ */ react.createElement("span", { className: "wf-hint" }, body.subflow === void 0 ? "尚未创建" : `${body.subflow.nodes.length} 个节点 · 入口 ${body.subflow.entry}`), /* @__PURE__ */ react.createElement("button", {
+	}), body.mode === "subflow" && /* @__PURE__ */ react.createElement("div", { className: "wf-mode-row" }, /* @__PURE__ */ react.createElement("span", {
+		className: "wf-hint",
+		title: body.subflow === void 0 ? "尚未创建" : void 0
+	}, body.subflow === void 0 ? "尚未创建" : `${body.subflow.nodes.length} 个节点 · 入口 ${body.subflow.entry}`), /* @__PURE__ */ react.createElement("button", {
 		type: "button",
 		className: "wf-btn",
 		onClick: () => props.onOpenSubflow(body.id)
-	}, "打开子图"))), body.mode === "inline" && /* @__PURE__ */ react.createElement(Field, {
-		label: "内嵌子图",
-		hint: "不想让子 Agent 只执行一个内联任务时，可以直接创建一张随主图保存的子图"
-	}, /* @__PURE__ */ react.createElement("div", { className: "wf-row" }, /* @__PURE__ */ react.createElement("span", { className: "wf-hint" }, body.subflow === void 0 ? "当前是 inline 模式" : "已有子图，可切换并打开"), /* @__PURE__ */ react.createElement("button", {
-		type: "button",
-		className: "wf-btn",
-		onClick: () => props.onOpenSubflow(body.id)
-	}, body.subflow === void 0 ? "创建子图并打开" : "打开已有子图"))), /* @__PURE__ */ react.createElement(Field, {
-		label: "角色",
-		hint: "引用全图角色表；角色章程与线程摘要会拼进 child preamble"
-	}, /* @__PURE__ */ react.createElement("select", {
+	}, body.subflow === void 0 ? "创建子图并打开" : "打开子图")), body.mode === "flowRef" && /* @__PURE__ */ react.createElement("div", { className: "wf-field" }, /* @__PURE__ */ react.createElement("select", {
 		className: "wf-input",
-		value: body.role ?? "",
-		onChange: (event) => patch({ role: event.target.value === "" ? void 0 : event.target.value })
-	}, /* @__PURE__ */ react.createElement("option", { value: "" }, "（无角色）"), props.agents.map((agent) => /* @__PURE__ */ react.createElement("option", {
-		key: agent.id,
-		value: agent.id
-	}, agent.name, " · ", agent.id)), body.role !== void 0 && !props.agents.some((agent) => agent.id === body.role) && /* @__PURE__ */ react.createElement("option", { value: body.role }, "（角色 ", body.role, " 不存在）"))), /* @__PURE__ */ react.createElement(Field, {
-		label: "线程",
-		hint: "留空或 new = 一次性；role = 同角色跨轮共享；也可以填自定义线程 key"
-	}, /* @__PURE__ */ react.createElement("input", {
-		className: "wf-input",
-		value: body.thread ?? "",
-		placeholder: "new / role / 自定义",
-		onChange: (event) => {
-			const value = event.target.value.trim();
-			patch({ thread: value === "" ? void 0 : value });
-		}
-	})), /* @__PURE__ */ react.createElement(Field, {
-		label: "产出 / 消费产物",
-		hint: "逗号分隔的 key；只用于校验与面板，运行时以 complete_step.artifacts 为准"
-	}, /* @__PURE__ */ react.createElement("div", { className: "wf-row" }, /* @__PURE__ */ react.createElement("input", {
-		className: "wf-input",
-		value: keysText(body.produces),
-		placeholder: "produces: design",
-		onChange: (event) => patch({ produces: splitKeys(event.target.value) })
-	}), /* @__PURE__ */ react.createElement("input", {
-		className: "wf-input",
-		value: keysText(body.consumes),
-		placeholder: "consumes: design",
-		onChange: (event) => patch({ consumes: splitKeys(event.target.value) })
-	}))), /* @__PURE__ */ react.createElement(Field, {
-		label: "汇报契约",
-		hint: "告诉子 Agent 的 payload/产物格式，会拼进 preamble"
-	}, /* @__PURE__ */ react.createElement("textarea", {
-		className: "wf-area",
-		value: body.reportHint ?? "",
-		onChange: (event) => patch({ reportHint: event.target.value }),
-		placeholder: "例如：payload 带 verdict（pass/fail）、issues[]；产物 key=design"
-	})), body.mode === "flowRef" && /* @__PURE__ */ react.createElement(Field, {
-		label: "引用的图",
-		hint: "目标图必须已保存；run 启动时按 id 递归解析"
-	}, /* @__PURE__ */ react.createElement("select", {
-		className: "wf-input",
+		"aria-label": "引用的图",
 		value: body.flowRef ?? "",
 		onChange: (event) => patch({ flowRef: event.target.value === "" ? void 0 : event.target.value })
 	}, /* @__PURE__ */ react.createElement("option", { value: "" }, "（选择一张图）"), props.flows.map((flow) => /* @__PURE__ */ react.createElement("option", {
 		key: flow.id,
 		value: flow.id
-	}, flow.name, " · ", flow.id)), body.flowRef !== void 0 && body.flowRef !== "" && !props.flows.some((flow) => flow.id === body.flowRef) && /* @__PURE__ */ react.createElement("option", { value: body.flowRef }, "（当前值 ", body.flowRef, "，不在列表）"))), /* @__PURE__ */ react.createElement(Field, {
-		label: "并行派发来源",
-		hint: "插值表达式（解析成数组）；与下面的固定数量二选一。用 {{item}} 引用各条目"
-	}, /* @__PURE__ */ react.createElement("input", {
-		className: "wf-input",
-		value: body.fanOut?.from ?? "",
-		placeholder: "{{n2.payload.modules}}",
-		onChange: (event) => patchFanOut(patch, body, { from: event.target.value })
-	})), /* @__PURE__ */ react.createElement(Field, {
-		label: "或固定数量 / 上限",
-		hint: "max 截断超出项；被丢弃的条目会在派发轨迹里显式记录"
-	}, /* @__PURE__ */ react.createElement("div", { className: "wf-row" }, /* @__PURE__ */ react.createElement("input", {
-		className: "wf-input",
-		type: "number",
-		min: 1,
-		placeholder: "数量",
-		value: body.fanOut?.count ?? "",
-		onChange: (event) => patchFanOut(patch, body, { count: positiveInt(event.target.value) })
-	}), /* @__PURE__ */ react.createElement("input", {
-		className: "wf-input",
-		type: "number",
-		min: 1,
-		placeholder: "max 上限",
-		value: body.fanOut?.max ?? "",
-		onChange: (event) => patchFanOut(patch, body, { max: positiveInt(event.target.value) })
-	})))), body.type === "gate" && /* @__PURE__ */ react.createElement(Section, { title: "人工卡点" }, /* @__PURE__ */ react.createElement(Field, {
+	}, flow.name, " · ", flow.id)), body.flowRef !== void 0 && body.flowRef !== "" && !props.flows.some((flow) => flow.id === body.flowRef) && /* @__PURE__ */ react.createElement("option", { value: body.flowRef }, "（当前值 ", body.flowRef, "，不在列表）")), /* @__PURE__ */ react.createElement("span", { className: "wf-hint" }, "目标图必须已保存；run 启动时按 id 递归解析。")))), body.type === "gate" && /* @__PURE__ */ react.createElement(Section, { title: "人工卡点" }, /* @__PURE__ */ react.createElement(Field, {
 		label: "问题",
 		hint: "卡点会挂起 run，等人工答复后才继续"
 	}, /* @__PURE__ */ react.createElement("textarea", {
@@ -12131,25 +12344,32 @@ function Inspector(props) {
 		placeholder: "例如：这次改动可以合并吗？"
 	})), /* @__PURE__ */ react.createElement(Field, {
 		label: "选项",
-		hint: "加一个选项，下面「出口分支」就会多一行；删选项会连带删掉它的出边"
-	}, options.map((option, index) => /* @__PURE__ */ react.createElement("div", {
-		className: "wf-row",
-		key: option.id
-	}, /* @__PURE__ */ react.createElement("input", {
-		className: "wf-input",
-		value: option.label,
-		onChange: (event) => {
-			const next = options.map((entry, i) => i === index ? {
-				...entry,
-				label: event.target.value
-			} : entry);
-			patch({ options: next });
-		}
-	}), /* @__PURE__ */ react.createElement("button", {
-		type: "button",
-		className: "wf-btn",
-		onClick: () => patch({ options: options.filter((_, i) => i !== index) })
-	}, "删"))), /* @__PURE__ */ react.createElement("button", {
+		hint: "每个选项就是一个出口；从卡片右侧的圆点拖线连接目标"
+	}, options.map((option, index) => {
+		const targets = props.edges.filter((edge) => edge.data?.outlet === option.id).map((edge) => edge.target);
+		return /* @__PURE__ */ react.createElement("div", {
+			className: "wf-opt-row",
+			key: option.id
+		}, /* @__PURE__ */ react.createElement("input", {
+			className: "wf-input",
+			value: option.label,
+			onChange: (event) => {
+				const next = options.map((entry, i) => i === index ? {
+					...entry,
+					label: event.target.value
+				} : entry);
+				patch({ options: next });
+			}
+		}), /* @__PURE__ */ react.createElement("span", {
+			className: "wf-opt-target",
+			"data-empty": targets.length === 0,
+			title: targets.length === 0 ? "还没有连线" : targets.map((id) => `${targetTitle(id)} · ${id}`).join("\n")
+		}, targets.length === 0 ? "未连接" : `→ ${targets.map(targetTitle).join("、")}`), /* @__PURE__ */ react.createElement("button", {
+			type: "button",
+			className: "wf-btn",
+			onClick: () => patch({ options: options.filter((_, i) => i !== index) })
+		}, "删"));
+	}), loose.length > 0 && /* @__PURE__ */ react.createElement("div", { className: "wf-hint wf-hint-warn" }, "还有 ", loose.length, " 条出边没有绑定选项（", loose.map((edge) => `→ ${edge.target}`).join("、"), "）：从对应出口重连，保存时会按选项顺序兜底。"), /* @__PURE__ */ react.createElement("button", {
 		type: "button",
 		className: "wf-btn",
 		onClick: () => patch({ options: [...options, {
@@ -12181,28 +12401,119 @@ function Inspector(props) {
 	}, nodeLabel(node))), danglingRef(body.waitFor) !== void 0 && /* @__PURE__ */ react.createElement("option", { value: body.waitFor }, "（节点 ", body.waitFor, " 已不存在）")))), body.type === "end" && /* @__PURE__ */ react.createElement(Section, { title: "结束" }, /* @__PURE__ */ react.createElement(Field, {
 		label: "结果",
 		hint: "success 正常结束；fail 判 run 失败但仍记录轨迹"
+	}, /* @__PURE__ */ react.createElement(Segmented, {
+		ariaLabel: "结束结果",
+		value: body.outcome,
+		options: [{
+			value: "success",
+			label: "success"
+		}, {
+			value: "fail",
+			label: "fail"
+		}],
+		onChange: (outcome) => patch({ outcome })
+	}))), /* @__PURE__ */ react.createElement("div", { className: "wf-adv" }, body.type === "subagent" && /* @__PURE__ */ react.createElement(react.Fragment, null, /* @__PURE__ */ react.createElement(Accordion, {
+		id: "runtime",
+		title: "角色与线程",
+		summary: chipLabel("runtime"),
+		open: groupOpen("runtime"),
+		onToggle: () => toggleGroup("runtime")
+	}, /* @__PURE__ */ react.createElement(Field, {
+		label: "角色",
+		tip: "引用全图角色表；角色章程与线程摘要会拼进 child preamble"
 	}, /* @__PURE__ */ react.createElement("select", {
 		className: "wf-input",
-		value: body.outcome,
-		onChange: (event) => patch({ outcome: event.target.value })
-	}, /* @__PURE__ */ react.createElement("option", { value: "success" }, "success"), /* @__PURE__ */ react.createElement("option", { value: "fail" }, "fail")))), body.type !== "prompt" && body.type !== "end" && /* @__PURE__ */ react.createElement(Section, { title: "补充说明" }, /* @__PURE__ */ react.createElement(Field, {
-		label: "instruction（可选）",
-		hint: "会作为这一步的 instruction 下发给 Agent；不填则用该类型的默认说明"
+		value: body.role ?? "",
+		onChange: (event) => patch({ role: event.target.value === "" ? void 0 : event.target.value })
+	}, /* @__PURE__ */ react.createElement("option", { value: "" }, "（无角色）"), props.agents.map((agent) => /* @__PURE__ */ react.createElement("option", {
+		key: agent.id,
+		value: agent.id
+	}, agent.name, " · ", agent.id)), body.role !== void 0 && !props.agents.some((agent) => agent.id === body.role) && /* @__PURE__ */ react.createElement("option", { value: body.role }, "（角色 ", body.role, " 不存在）"))), /* @__PURE__ */ react.createElement(Field, {
+		label: "线程",
+		tip: "留空或 new = 一次性；role = 同角色跨轮共享；也可以填自定义线程 key"
+	}, /* @__PURE__ */ react.createElement("input", {
+		className: "wf-input",
+		value: body.thread ?? "",
+		placeholder: "new / role / 自定义",
+		onChange: (event) => {
+			const value = event.target.value.trim();
+			patch({ thread: value === "" ? void 0 : value });
+		}
+	}))), /* @__PURE__ */ react.createElement(Accordion, {
+		id: "contract",
+		title: "产物与汇报",
+		summary: contractSummary,
+		open: groupOpen("contract"),
+		onToggle: () => toggleGroup("contract")
+	}, /* @__PURE__ */ react.createElement(Field, {
+		label: "产出 / 消费产物",
+		tip: "逗号分隔的 key；只用于校验与面板，运行时以 complete_step.artifacts 为准"
+	}, /* @__PURE__ */ react.createElement("div", { className: "wf-row" }, /* @__PURE__ */ react.createElement("input", {
+		className: "wf-input",
+		value: keysText(body.produces),
+		placeholder: "produces: design",
+		onChange: (event) => patch({ produces: splitKeys(event.target.value) })
+	}), /* @__PURE__ */ react.createElement("input", {
+		className: "wf-input",
+		value: keysText(body.consumes),
+		placeholder: "consumes: design",
+		onChange: (event) => patch({ consumes: splitKeys(event.target.value) })
+	}))), /* @__PURE__ */ react.createElement(Field, {
+		label: "汇报格式",
+		tip: "告诉子 Agent 的 payload/产物格式，会拼进 preamble"
 	}, /* @__PURE__ */ react.createElement("textarea", {
 		className: "wf-area",
-		value: body.instruction ?? "",
-		onChange: (event) => patch({ instruction: event.target.value })
-	}))), body.type !== "end" && /* @__PURE__ */ react.createElement(Section, { title: "循环与逃生" }, /* @__PURE__ */ react.createElement(Field, {
+		value: body.reportHint ?? "",
+		onChange: (event) => patch({ reportHint: event.target.value }),
+		placeholder: "例如：payload 带 verdict（pass/fail）、issues[]；产物 key=design"
+	}))), /* @__PURE__ */ react.createElement(Accordion, {
+		id: "fanout",
+		title: "并行派发",
+		summary: chipLabel("fanout"),
+		open: groupOpen("fanout"),
+		onToggle: () => toggleGroup("fanout")
+	}, /* @__PURE__ */ react.createElement(Field, {
+		label: "派发来源",
+		tip: "插值表达式（解析成数组）；与下面的固定数量二选一。用 {{item}} 引用各条目"
+	}, /* @__PURE__ */ react.createElement("input", {
+		className: "wf-input",
+		value: body.fanOut?.from ?? "",
+		placeholder: "{{n2.payload.modules}}",
+		onChange: (event) => patchFanOut(patch, body, { from: event.target.value })
+	})), /* @__PURE__ */ react.createElement(Field, {
+		label: "或固定数量 / 上限",
+		tip: "max 截断超出项；被丢弃的条目会在派发轨迹里显式记录"
+	}, /* @__PURE__ */ react.createElement("div", { className: "wf-row" }, /* @__PURE__ */ react.createElement("input", {
+		className: "wf-input",
+		type: "number",
+		min: 1,
+		placeholder: "数量",
+		value: body.fanOut?.count ?? "",
+		onChange: (event) => patchFanOut(patch, body, { count: positiveInt(event.target.value) })
+	}), /* @__PURE__ */ react.createElement("input", {
+		className: "wf-input",
+		type: "number",
+		min: 1,
+		placeholder: "max 上限",
+		value: body.fanOut?.max ?? "",
+		onChange: (event) => patchFanOut(patch, body, { max: positiveInt(event.target.value) })
+	}))))), body.type !== "end" && /* @__PURE__ */ react.createElement(Accordion, {
+		id: "loop",
+		title: "循环与逃生",
+		summary: chipLabel("loop"),
+		open: groupOpen("loop"),
+		onToggle: () => toggleGroup("loop")
+	}, /* @__PURE__ */ react.createElement("div", { className: "wf-grid2" }, /* @__PURE__ */ react.createElement(Field, {
 		label: "回路 id",
-		hint: "同一回路的节点共用一个 loopId；可只填在控制器上，其它节点靠 maxRounds 控制器共享计数"
+		tip: "同一回路的节点共用一个 loopId；至少有一个节点配最大轮次当控制器"
 	}, /* @__PURE__ */ react.createElement("input", {
 		className: "wf-input",
 		value: body.loopId ?? "",
 		placeholder: "review-loop",
 		onChange: (event) => patch({ loopId: event.target.value.trim() === "" ? void 0 : event.target.value.trim() })
 	})), /* @__PURE__ */ react.createElement(Field, {
-		label: "回路最大轮次",
-		hint: "配在控制器节点上；控制器每执行一次算一轮，超限走 onLimitExceeded"
+		label: "最大轮次",
+		tip: "配在控制器节点上；控制器每执行一次算一轮，超限走 onLimitExceeded"
 	}, /* @__PURE__ */ react.createElement("input", {
 		className: "wf-input",
 		type: "number",
@@ -12211,7 +12522,7 @@ function Inspector(props) {
 		onChange: (event) => patch({ maxRounds: positiveInt(event.target.value) })
 	})), /* @__PURE__ */ react.createElement(Field, {
 		label: "迭代上限",
-		hint: "节点级兜底；环上节点建议设置，不设时只在全局步数上限处兜底"
+		tip: "节点级兜底；环上节点建议设置，不设时只在全局步数上限处兜底"
 	}, /* @__PURE__ */ react.createElement("input", {
 		className: "wf-input",
 		type: "number",
@@ -12219,8 +12530,8 @@ function Inspector(props) {
 		value: body.iterationLimit ?? "",
 		onChange: (event) => patch({ iterationLimit: positiveInt(event.target.value) })
 	})), /* @__PURE__ */ react.createElement(Field, {
-		label: "撞上限后跳转到",
-		hint: "不设则撞上限直接判 run 失败；回路级上限优先用控制器上的出口"
+		label: "撞上限后跳转",
+		tip: "不设则撞上限直接判 run 失败；回路级上限优先用控制器上的出口"
 	}, /* @__PURE__ */ react.createElement("select", {
 		className: "wf-input",
 		value: body.onLimitExceeded ?? "",
@@ -12228,13 +12539,21 @@ function Inspector(props) {
 	}, /* @__PURE__ */ react.createElement("option", { value: "" }, "（不设，判失败）"), others.map((node) => /* @__PURE__ */ react.createElement("option", {
 		key: node.id,
 		value: node.id
-	}, nodeLabel(node))), danglingRef(body.onLimitExceeded) !== void 0 && /* @__PURE__ */ react.createElement("option", { value: body.onLimitExceeded }, "（节点 ", body.onLimitExceeded, " 已不存在）")))), body.type === "gate" && options.length > 0 && /* @__PURE__ */ react.createElement(Section, { title: "出口分支" }, /* @__PURE__ */ react.createElement("div", { className: "wf-hint" }, "一个选项一个出口：没有连线的出口名字显示在节点右侧，从它的圆点拖线（或点名字再点目标节点）就能连上。"), options.map((option) => {
-		const bound = props.edges.filter((edge) => edge.data?.outlet === option.id);
-		return /* @__PURE__ */ react.createElement("div", {
-			className: "wf-outlet-row",
-			key: option.id
-		}, /* @__PURE__ */ react.createElement("span", { className: "wf-outlet-name" }, option.label), /* @__PURE__ */ react.createElement("span", { className: "wf-hint" }, bound.length === 0 ? "未连接" : `→ ${bound.map((edge) => edge.target).join("、")}`));
-	}), loose.length > 0 && /* @__PURE__ */ react.createElement("div", { className: "wf-hint wf-hint-warn" }, "还有 ", loose.length, " 条出边没有绑定选项（", loose.map((edge) => `→ ${edge.target}`).join("、"), "）：在画布上删掉重连，从对应的出口拖线即可；保存时会按选项顺序兜底。")), body.type === "gate" && options.length === 0 && props.edges.length > 0 && /* @__PURE__ */ react.createElement("div", { className: "wf-hint wf-hint-warn" }, "这个卡点还没有选项：先在「人工卡点」里加选项，出口会出现在卡片右侧。"), body.type !== "gate" && multi && /* @__PURE__ */ react.createElement(Section, { title: "出口分支" }, /* @__PURE__ */ react.createElement("div", { className: "wf-hint" }, "第一路填 * 表示默认分支；其余填自然语言条件，由 Agent 自行判断。"), props.edges.map((edge, index) => /* @__PURE__ */ react.createElement(Field, {
+	}, nodeLabel(node))), danglingRef(body.onLimitExceeded) !== void 0 && /* @__PURE__ */ react.createElement("option", { value: body.onLimitExceeded }, "（节点 ", body.onLimitExceeded, " 已不存在）"))))), body.type !== "prompt" && body.type !== "end" && /* @__PURE__ */ react.createElement(Accordion, {
+		id: "instruction",
+		title: "本步指令",
+		summary: orUndefined(body.instruction?.trim() === "" ? void 0 : firstLine(body.instruction ?? "")),
+		open: groupOpen("instruction"),
+		onToggle: () => toggleGroup("instruction")
+	}, /* @__PURE__ */ react.createElement(Field, {
+		label: "instruction（可选）",
+		hint: body.type === "join" ? "汇聚步会用「汇聚指令」覆盖这里的值，通常不用填。" : void 0,
+		tip: "会作为这一步的 instruction 下发给 Agent；不填则用该类型的默认说明"
+	}, /* @__PURE__ */ react.createElement("textarea", {
+		className: "wf-area",
+		value: body.instruction ?? "",
+		onChange: (event) => patch({ instruction: event.target.value })
+	})))), body.type !== "gate" && multi && /* @__PURE__ */ react.createElement("div", { ref: branchRef }, /* @__PURE__ */ react.createElement(Section, { title: "分支" }, /* @__PURE__ */ react.createElement("div", { className: "wf-hint" }, "第一路填 * 表示默认分支；其余填自然语言条件，由 Agent 自行判断。"), props.edges.map((edge, index) => /* @__PURE__ */ react.createElement(Field, {
 		key: edge.id,
 		label: `第 ${index + 1} 路`,
 		hint: `→ ${edge.target}`
@@ -12248,14 +12567,70 @@ function Inspector(props) {
 		value: String(edge.data?.when ?? ""),
 		onChange: (event) => props.onWhen(edge.id, event.target.value),
 		placeholder: "when（可选）：{{review.payload.verdict}} == 'pass'"
-	})))), /* @__PURE__ */ react.createElement("details", { className: "wf-section" }, /* @__PURE__ */ react.createElement("summary", { className: "wf-section-title" }, "角色表（", props.agents.length, "）"), /* @__PURE__ */ react.createElement("div", { className: "wf-hint" }, "全图共享；subagent 节点用「角色」下拉引用。章程会随每轮 preamble 注入。"), props.agents.map((agent, index) => /* @__PURE__ */ react.createElement("div", {
-		key: `${agent.id}-${index}`,
-		className: "wf-field"
+	})))))), /* @__PURE__ */ react.createElement("div", { className: "wf-insp-foot" }, props.isEntry ? /* @__PURE__ */ react.createElement("span", { className: "wf-chip" }, "当前入口") : /* @__PURE__ */ react.createElement("button", {
+		type: "button",
+		className: "wf-btn",
+		onClick: props.onSetEntry
+	}, "设为入口"), /* @__PURE__ */ react.createElement("span", { className: "wf-spacer" }), /* @__PURE__ */ react.createElement("button", {
+		type: "button",
+		className: "wf-btn",
+		"data-danger": "true",
+		onClick: props.onDelete
+	}, "删除节点")));
+}
+function IssueList({ issues }) {
+	const hasError = issues.some((issue) => issue.severity === "error");
+	return /* @__PURE__ */ react.createElement("div", {
+		className: "wf-issues",
+		"data-has-error": hasError
+	}, /* @__PURE__ */ react.createElement("div", { className: "wf-issues-head" }, hasError ? "✕" : "⚠", " ", issues.length, " 个问题"), issues.map((issue, index) => /* @__PURE__ */ react.createElement("div", {
+		className: "wf-issue",
+		"data-kind": issue.severity,
+		key: `${issue.code}-${index}`
+	}, /* @__PURE__ */ react.createElement("code", null, issue.code), /* @__PURE__ */ react.createElement("span", null, issue.message))));
+}
+function Segmented({ value, options, onChange, ariaLabel }) {
+	return /* @__PURE__ */ react.createElement("div", {
+		className: "wf-seg",
+		role: "group",
+		"aria-label": ariaLabel
+	}, options.map((option) => /* @__PURE__ */ react.createElement("button", {
+		key: option.value,
+		type: "button",
+		"data-active": option.value === value,
+		title: option.title,
+		"aria-pressed": option.value === value,
+		onClick: () => {
+			if (option.value !== value) onChange(option.value);
+		}
+	}, option.label)));
+}
+function Accordion({ id, title, summary, open, onToggle, children }) {
+	return /* @__PURE__ */ react.createElement("section", {
+		className: "wf-acc",
+		id: `wf-grp-${id}`
+	}, /* @__PURE__ */ react.createElement("button", {
+		type: "button",
+		className: "wf-acc-head",
+		"aria-expanded": open,
+		onClick: onToggle
+	}, /* @__PURE__ */ react.createElement("span", {
+		className: "wf-acc-caret",
+		"data-open": open
+	}, "▸"), /* @__PURE__ */ react.createElement("span", { className: "wf-acc-title" }, title), summary !== void 0 && /* @__PURE__ */ react.createElement("span", {
+		className: "wf-acc-summary",
+		title: summary
+	}, summary)), open && /* @__PURE__ */ react.createElement("div", { className: "wf-acc-body" }, children));
+}
+function FlowTab({ agents, onAgentsChange }) {
+	return /* @__PURE__ */ react.createElement(Section, { title: `角色表（${agents.length}）` }, /* @__PURE__ */ react.createElement("div", { className: "wf-hint" }, "全图共享；子 Agent 节点用「角色」下拉引用。章程会随每轮 preamble 注入。"), agents.length === 0 && /* @__PURE__ */ react.createElement("div", { className: "wf-hint" }, "还没有角色。先加一个，节点里就能选它。"), agents.map((agent, index) => /* @__PURE__ */ react.createElement("div", {
+		className: "wf-agent",
+		key: index
 	}, /* @__PURE__ */ react.createElement("div", { className: "wf-row" }, /* @__PURE__ */ react.createElement("input", {
 		className: "wf-input",
 		value: agent.id,
 		placeholder: "id（字母/数字/下划线）",
-		onChange: (event) => props.onAgentsChange(props.agents.map((item, i) => i === index ? {
+		onChange: (event) => onAgentsChange(agents.map((item, i) => i === index ? {
 			...item,
 			id: event.target.value
 		} : item))
@@ -12263,19 +12638,19 @@ function Inspector(props) {
 		className: "wf-input",
 		value: agent.name,
 		placeholder: "显示名",
-		onChange: (event) => props.onAgentsChange(props.agents.map((item, i) => i === index ? {
+		onChange: (event) => onAgentsChange(agents.map((item, i) => i === index ? {
 			...item,
 			name: event.target.value
 		} : item))
 	}), /* @__PURE__ */ react.createElement("button", {
 		type: "button",
 		className: "wf-btn",
-		onClick: () => props.onAgentsChange(props.agents.filter((_, i) => i !== index))
+		onClick: () => onAgentsChange(agents.filter((_, i) => i !== index))
 	}, "删")), /* @__PURE__ */ react.createElement("textarea", {
 		className: "wf-area",
 		value: agent.charter,
 		placeholder: "角色章程：职责、边界、完成标准",
-		onChange: (event) => props.onAgentsChange(props.agents.map((item, i) => i === index ? {
+		onChange: (event) => onAgentsChange(agents.map((item, i) => i === index ? {
 			...item,
 			charter: event.target.value
 		} : item))
@@ -12283,7 +12658,7 @@ function Inspector(props) {
 		className: "wf-input",
 		value: keysText(agent.produces),
 		placeholder: "produces: design",
-		onChange: (event) => props.onAgentsChange(props.agents.map((item, i) => i === index ? {
+		onChange: (event) => onAgentsChange(agents.map((item, i) => i === index ? {
 			...item,
 			produces: splitKeys(event.target.value)
 		} : item))
@@ -12291,7 +12666,7 @@ function Inspector(props) {
 		className: "wf-input",
 		value: keysText(agent.consumes),
 		placeholder: "consumes: design",
-		onChange: (event) => props.onAgentsChange(props.agents.map((item, i) => i === index ? {
+		onChange: (event) => onAgentsChange(agents.map((item, i) => i === index ? {
 			...item,
 			consumes: splitKeys(event.target.value)
 		} : item))
@@ -12299,26 +12674,16 @@ function Inspector(props) {
 		type: "button",
 		className: "wf-btn",
 		onClick: () => {
-			let index = props.agents.length + 1;
-			const used = new Set(props.agents.map((agent) => agent.id));
+			let index = agents.length + 1;
+			const used = new Set(agents.map((agent) => agent.id));
 			while (used.has(`agent_${index}`)) index += 1;
-			props.onAgentsChange([...props.agents, {
+			onAgentsChange([...agents, {
 				id: `agent_${index}`,
 				name: "新角色",
 				charter: ""
 			}]);
 		}
-	}, "+ 添加角色")), /* @__PURE__ */ react.createElement("div", { className: "wf-insp-foot" }, /* @__PURE__ */ react.createElement("button", {
-		type: "button",
-		className: "wf-btn",
-		onClick: props.onSetEntry,
-		disabled: props.isEntry
-	}, props.isEntry ? "当前入口" : "设为入口"), /* @__PURE__ */ react.createElement("button", {
-		type: "button",
-		className: "wf-btn",
-		"data-danger": "true",
-		onClick: props.onDelete
-	}, "删除节点")));
+	}, "+ 添加角色"));
 }
 /** 选项 id 要唯一：复用最小可用的 oN（删掉 o1 后再加不会撞 o2） */
 function nextOptionId(options) {
@@ -13788,6 +14153,7 @@ function Editor({ initial, flows, onBack, onExit }) {
 		payloadFields: payloadFields$1,
 		edges: selectedEdges,
 		isEntry: selectedId !== null && entry === selectedId,
+		issues: validation === null || selectedId === null ? [] : [...validation.errors, ...validation.warnings].filter((issue) => issue.nodeId === selectedId),
 		onPatch: patchNode,
 		onDelete: deleteNode,
 		onCondition: setCondition,

@@ -8,11 +8,13 @@ import {
   makeTestSubflow,
   spreadSourceHandles,
   subflowPreview,
+  summarizeNode,
   TEMPLATES,
   type CanvasEdge,
   type CanvasNode,
 } from '../dsh-plugin/src/editor/model.js';
 import { validateFlow } from '../shared/src/validate.js';
+import type { GateNode, SubagentNode } from '../shared/src/types.js';
 
 const node = (id: string, kind: 'prompt' | 'gate' | 'end', extra: Record<string, unknown> = {}) =>
   ({ id, type: kind, title: id, ...extra }) as never;
@@ -220,6 +222,75 @@ describe('回路模板', () => {
     });
     expect(result.errors).toEqual([]);
     expect(result.warnings).toEqual([]);
+  });
+});
+
+describe('summarizeNode：属性面板概览 chip', () => {
+  const subagent = (extra: Partial<SubagentNode> = {}): SubagentNode => ({
+    id: 'n2',
+    type: 'subagent',
+    title: '评审',
+    extraPrompt: '',
+    mode: 'inline',
+    ...extra,
+  });
+
+  it('inline 且没有运行时配置时不产生 chip', () => {
+    expect(summarizeNode(subagent(), { edgeCount: 1 })).toEqual([]);
+  });
+
+  it('按固定顺序产出角色/线程、产物、子图、并行、回路、分支', () => {
+    const chips = summarizeNode(
+      subagent({
+        role: 'review',
+        thread: 'role',
+        produces: ['design'],
+        consumes: ['issues'],
+        subflow: makeSubflow('评审子图'),
+        fanOut: { count: 3 },
+        loopId: 'review-loop',
+        maxRounds: 3,
+        onLimitExceeded: 'n9',
+      }),
+      { edgeCount: 2 },
+    );
+    expect(chips.map((chip) => chip.label)).toEqual([
+      'review · 线程 role',
+      'design → issues',
+      '子图 2 节点',
+      '并行 3 项',
+      '回路 review-loop ≤3 → n9',
+      '2 条分支',
+    ]);
+    expect(chips.find((chip) => chip.key === 'subflow')?.action).toBe('open-subflow');
+    expect(chips.find((chip) => chip.key === 'loop')?.group).toBe('loop');
+    expect(chips.find((chip) => chip.key === 'artifacts')?.group).toBe('contract');
+  });
+
+  it('线程 new 视为默认值，不占 chip；flowRef 单独显示引用目标', () => {
+    const chips = summarizeNode(subagent({ thread: 'new', mode: 'flowRef', flowRef: 'f_other' }));
+    expect(chips.map((chip) => chip.label)).toEqual(['引用 f_other']);
+  });
+
+  it('只有迭代上限时用「迭代」而不是「回路」表述', () => {
+    expect(summarizeNode(subagent({ iterationLimit: 5 })).map((chip) => chip.label)).toEqual(['迭代 ≤5']);
+  });
+
+  it('卡点的出口数来自选项，而不是出边', () => {
+    const gate: GateNode = {
+      id: 'g1',
+      type: 'gate',
+      question: '继续吗',
+      options: [
+        { id: 'o1', label: '继续' },
+        { id: 'o2', label: '终止' },
+      ],
+    };
+    expect(summarizeNode(gate, { edgeCount: 1 }).map((chip) => chip.label)).toEqual(['2 个选项']);
+  });
+
+  it('end 节点没有可展示的运行时配置', () => {
+    expect(summarizeNode({ id: 'e1', type: 'end', outcome: 'success' }, { edgeCount: 0 })).toEqual([]);
   });
 });
 
