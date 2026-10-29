@@ -609,22 +609,3 @@ export function buildFlow(
     _ui: { ...(base._ui ?? {}), positions },
   };
 }
-
-/** 保存前在图里做的廉价自检，避免把明显不完整的图送去校验 */
-export function localIssues(bodies: Record<string, FlowNode>, nodes: CanvasNode[]): string[] {
-  const issues: string[] = [];
-  for (const node of nodes) {
-    const body = bodies[node.id];
-    if (body === undefined) continue;
-    if (body.type === 'prompt' && (body.instruction ?? '').trim() === '') {
-      issues.push(`「${node.data.title}」是指令节点，但指令为空`);
-    }
-    if (body.type === 'tool' && (body.toolName ?? '').trim() === '') {
-      issues.push(`「${node.data.title}」是工具节点，但工具名为空`);
-    }
-    if (body.type === 'gate' && (body.question ?? '').trim() === '') {
-      issues.push(`「${node.data.title}」是卡点，但问题为空`);
-    }
-  }
-  return issues;
-}

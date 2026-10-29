@@ -14,7 +14,7 @@
 | `dsh-plugin/src/editor/page.tsx` | 页面壳：流程库（列出/新建/删除）→ 画布编辑器；保存、错误横幅、返回会话；撤销/重做历史、复制粘贴、右键菜单接线、快捷键 |
 | `dsh-plugin/src/editor/canvas.tsx` | React Flow 画布（provider / fitView / Background / Controls）；节点类型 `wf`；右键与拖动回调；视口中心 API |
 | `dsh-plugin/src/editor/menu.tsx` | 画布右键菜单（创建节点 / 复制 / 粘贴 / 删除 / 设为入口），视口坐标 + 贴边翻转 |
-| `dsh-plugin/src/editor/model.ts` | DSL ⇄ 画布映射：`canvasOf` / `buildFlow` / `makeNode` / `localIssues` / `typeLabel` |
+| `dsh-plugin/src/editor/model.ts` | DSL ⇄ 画布映射：`canvasOf` / `buildFlow` / `makeNode` / `typeLabel` |
 | `dsh-plugin/src/editor/inspector.tsx` | 右侧属性面板：分区标题 + 加粗字段名 + 独立灰色说明；按节点类型给字段、多出边时编辑分支条件、设入口、删除节点 |
 | `dsh-plugin/src/editor/api.ts` | 前端 HTTP：`GET/PUT/DELETE /aiworkflow/flows[/:id]` |
 | `dsh-plugin/src/editor/styles.ts` | `.wf-*` 样式，只用 `--dsw-alias-*` token |
@@ -75,7 +75,7 @@ npm run typecheck:plugin && npm run build:plugin
 - **分支出口排布**：`spreadSourceHandles()` 在渲染层把出边挂到正确的 source handle——卡点按 `edge.data.outlet` 匹配 `out-<选项 id>`，其他节点按出边顺序 `out-0 / out-1` …；节点卡按出口/出边数量渲染多个右侧 handle（从上到下均分）。state 里的边不保存 handle 绑定，`buildFlow` 按 outlet/边顺序生成 branches。
 - **属性面板宽度可拖**：画布与面板之间是 `.wf-splitter`（pointer capture 拖动，键盘 ←/→ 调 16px、Shift 48px、Home 复位、双击复位），宽度 240–640 且保证画布至少 280px；宽度写进 localStorage `aiworkflow.editor.inspectorWidth`。`.wf-inspector` 不再写死 `width:312px`，宽度由内联 style 给。
 - **运行图轮询去抖**：`runview/page.tsx` 用业务数据指纹（active/recent/selectedId/detail）判断是否 `setData`；`generatedAt` 每轮都变，不能参与比较。否则每 2 秒一次的空刷新会让边标签闪动。
-- `localIssues()` 仍是死代码；实时校验走 Host 的 `POST /flows/validate`（与保存同一个 `validateFlow`），页头 chip + 浮层定位；保存结果仍以服务端返回为准。
+- 实时校验走 Host 的 `POST /flows/validate`（与保存同一个 `validateFlow`），页头 chip + 浮层定位；保存结果仍以服务端返回为准。
 - 编辑器与运行图是两套东西：`runview/` 只读，别把编辑能力加进去。
 
 ## 排查顺序建议

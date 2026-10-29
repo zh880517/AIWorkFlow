@@ -19,10 +19,6 @@ export function dbPath(): string {
   return path.join(homeDir(), 'aiworkflow.db');
 }
 
-export function flowJsonPath(flowId: string): string {
-  return path.join(flowsDir(), `${flowId}.json`);
-}
-
 /** 确保目录布局存在（幂等） */
 export function ensureLayout(): void {
   fs.mkdirSync(flowsDir(), { recursive: true });

@@ -108,7 +108,8 @@ function flowTool(): AgentTool {
         },
         flowId: {
           type: 'string',
-          description: '流程 id 或展示名；get 必填，update 也可用它定位（与 flow.id 一致时以 flow.id 为准）',
+          description:
+            '流程 id 或展示名；get 必填。create/update 一律以 flow.id 为准（flowId 只用于 get 定位）。',
         },
         flow: {
           type: 'object',
@@ -210,8 +211,8 @@ function runTools(ctx: any): AgentTool[] {
       type: 'object',
       properties: {
         flowName: { type: 'string', description: '流程 id 或展示名' },
-        cwd: { type: 'string', description: '项目目录，面板按项目分组用；省略取当前会话的工作目录' },
-        projectName: { type: 'string', description: '项目名，面板展示用；省略只记目录' },
+        cwd: { type: 'string', description: '项目目录，随 run 落库供诊断（当前面板不按项目分组）；省略取当前会话工作目录' },
+        projectName: { type: 'string', description: '项目名，随 run 落库供诊断/展示；当前 UI 未使用' },
         inputs: {
           type: 'object',
           description: 'run 输入：图里用 {{inputs.字段}} 插值；child run 继承',

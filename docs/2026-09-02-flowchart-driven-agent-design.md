@@ -72,7 +72,7 @@ run 定位顺序：**childToken → runId → hostSession（`dsh:<sessionId>`）
 - `subflow` — 子 Agent 走一张内嵌子图；子图直接存在 `SubagentNode.subflow`，与主图一起保存/快照，不是另一张 flow
 - `flowRef` — 子 Agent 走另一张已保存的工作流图
 
-`SubflowDef._ui.positions` 和 `SubflowDef.name` 是面板布局/展示元数据：校验、引擎、快照都忽略；没有它们子图重新打开时会退回自动布局。
+`FlowNodeBase.outlets`（卡点出口的展示元数据）、`Flow._ui.positions`、`SubflowDef._ui.positions` 与 `SubflowDef.name` 都是面板元数据：校验、引擎、快照都忽略；没有 `_ui` 时重新打开会退回自动布局。`Flow.description` 是保留字段，当前没有 UI/引擎用途（兼容手写 JSON，不要据此实现逻辑）。
 
 子 Agent 协作字段（db v7+）：
 

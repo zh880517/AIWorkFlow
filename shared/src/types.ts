@@ -174,6 +174,7 @@ export interface Flow {
   name: string;
   /** flow（默认）= 可独立启动的主流程；agent = 可被 flowRef 引用的子 Agent 配置 */
   kind?: FlowKind;
+  /** 保留字段：当前没有 UI/引擎用途（历史/手写 JSON 兼容），不要据此实现逻辑 */
   description?: string;
   entry: string;
   /** run 级全局步数上限，默认 200 */
