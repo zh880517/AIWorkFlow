@@ -270,6 +270,11 @@ describe('summarizeNode：属性面板概览 chip', () => {
   it('线程 new 视为默认值，不占 chip；flowRef 单独显示引用目标', () => {
     const chips = summarizeNode(subagent({ thread: 'new', mode: 'flowRef', flowRef: 'f_other' }));
     expect(chips.map((chip) => chip.label)).toEqual(['引用 f_other']);
+    expect(
+      summarizeNode(subagent({ mode: 'flowRef', flowRef: 'f_other' }), {
+        flowNames: { f_other: '评审配置' },
+      }).map((chip) => chip.label),
+    ).toEqual(['引用 评审配置']);
   });
 
   it('只有迭代上限时用「迭代」而不是「回路」表述', () => {

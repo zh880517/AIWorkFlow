@@ -136,14 +136,15 @@ export function loopSummary(node: FlowNode): string | undefined {
 /** 概览 chip 的数据源：纯函数，便于单测与后续复用（运行图卡片等） */
 export function summarizeNode(
   node: FlowNode,
-  context: { edgeCount?: number } = {},
+  context: { edgeCount?: number; flowNames?: Record<string, string> } = {},
 ): NodeSummaryChip[] {
   const chips: NodeSummaryChip[] = [];
   if (node.type === 'subagent') {
     const runtime = [node.role, threadSummary(node.thread)].filter((part): part is string => part !== undefined);
     if (runtime.length > 0) chips.push({ key: 'runtime', label: runtime.join(' · '), group: 'runtime' });
     if (node.mode === 'flowRef' && node.flowRef !== undefined && node.flowRef !== '') {
-      chips.push({ key: 'mode', label: `引用 ${node.flowRef}` });
+      const name = context.flowNames?.[node.flowRef];
+      chips.push({ key: 'mode', label: `引用 ${name ?? node.flowRef}` });
     }
     const artifacts = artifactSummary(node.produces, node.consumes);
     if (artifacts !== undefined) chips.push({ key: 'artifacts', label: artifacts, group: 'contract' });

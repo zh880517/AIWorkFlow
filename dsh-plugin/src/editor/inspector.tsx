@@ -215,7 +215,10 @@ function NodePanel(
   const danglingRef = (id: string | undefined): string | undefined =>
     id !== undefined && id !== '' && !props.nodes.some((node) => node.id === id) ? id : undefined;
 
-  const chips = summarizeNode(body, { edgeCount: props.edges.length });
+  const chips = summarizeNode(body, {
+    edgeCount: props.edges.length,
+    flowNames: Object.fromEntries(props.flows.map((flow) => [flow.id, flow.name])),
+  });
   const chipLabel = (key: NodeSummaryChip['key']): string | undefined =>
     chips.find((chip) => chip.key === key)?.label;
   const profileFlows = props.flows.filter((flow) => flow.kind === 'agent');

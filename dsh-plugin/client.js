@@ -11134,10 +11134,13 @@ function summarizeNode(node, context = {}) {
 			label: runtime.join(" · "),
 			group: "runtime"
 		});
-		if (node.mode === "flowRef" && node.flowRef !== void 0 && node.flowRef !== "") chips.push({
-			key: "mode",
-			label: `引用 ${node.flowRef}`
-		});
+		if (node.mode === "flowRef" && node.flowRef !== void 0 && node.flowRef !== "") {
+			const name = context.flowNames?.[node.flowRef];
+			chips.push({
+				key: "mode",
+				label: `引用 ${name ?? node.flowRef}`
+			});
+		}
 		const artifacts = artifactSummary(node.produces, node.consumes);
 		if (artifacts !== void 0) chips.push({
 			key: "artifacts",
@@ -12201,7 +12204,10 @@ function NodePanel(props) {
 	const loose = body.type === "gate" ? props.edges.filter((edge) => edge.data?.outlet === void 0) : [];
 	const others = props.nodes.filter((node) => node.id !== body.id);
 	const danglingRef = (id) => id !== void 0 && id !== "" && !props.nodes.some((node) => node.id === id) ? id : void 0;
-	const chips = summarizeNode(body, { edgeCount: props.edges.length });
+	const chips = summarizeNode(body, {
+		edgeCount: props.edges.length,
+		flowNames: Object.fromEntries(props.flows.map((flow) => [flow.id, flow.name]))
+	});
 	const chipLabel = (key) => chips.find((chip) => chip.key === key)?.label;
 	const profileFlows = props.flows.filter((flow) => flow.kind === "agent");
 	const plainFlows = props.flows.filter((flow) => flow.kind !== "agent");
