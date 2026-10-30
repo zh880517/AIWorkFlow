@@ -1,12 +1,12 @@
 {
   "format": 1,
   "title": {
-    "en": "aiworkflow for DeepSeek Harness",
-    "zh": "aiworkflow 工作流插件"
+    "en": "AIWorkFlow DSH plugins",
+    "zh": "AIWorkFlow DSH 插件集"
   },
   "description": {
-    "en": "Flowchart-driven agent workflows inside DSH: progress pill, floating panel, run graph, and a visual flow editor.",
-    "zh": "在 DSH 里跑流程图驱动的 Agent 工作流：进度胶囊、浮动画板、运行图，以及可视化流程编辑器。"
+    "en": "DeepSeek Harness plugins maintained in the AIWorkFlow repository.",
+    "zh": "AIWorkFlow 仓库维护的 DeepSeek Harness 插件。"
   },
   "plugins": [
     {
@@ -19,12 +19,12 @@
         "en": "Run aiworkflow flows in a DSH session, watch the run graph, and edit flows on a canvas.",
         "zh": "在 DSH 会话里发起 aiworkflow 流程、查看运行图，并在画布上编辑流程图。"
       },
-      "icon": "../icon.svg",
+      "icon": "../plugins/aiworkflow/icon.svg",
       "author": "zh880517",
       "homepage": "https://github.com/zh880517/AIWorkFlow",
       "repository": {
         "url": "https://github.com/zh880517/AIWorkFlow",
-        "directory": "dsh-plugin"
+        "directory": "plugins/aiworkflow"
       },
       "metadata": {
         "keywords": [
@@ -37,13 +37,13 @@
       },
       "versions": [
         {
-          "version": "0.1.3",
-          "publishTimestamp": 1793279419,
+          "version": "0.1.4",
+          "publishTimestamp": 1793330218,
           "source": {
             "type": "git",
             "url": "https://github.com/zh880517/AIWorkFlow",
-            "commit": "dd2dfe81300db41a2b58820787a6321186b15879",
-            "path": "dsh-plugin"
+            "commit": "dc5faf6edc10f568281ed03634086b9815458066",
+            "path": "plugins/aiworkflow"
           }
         }
       ]

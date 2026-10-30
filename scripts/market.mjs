@@ -96,7 +96,10 @@ for (const plugin of plugins) {
     : {};
 
   const source = { type: 'git', url, commit: head, path: `plugins/${plugin.id}` };
-  const oldVersions = previous?.plugins?.find((entry) => entry.name === plugin.pkg.name)?.versions ?? [];
+  // 旧条目只有在同一个包目录下才继续可用；插件搬家后旧 path 装不到东西，直接丢弃
+  const oldVersions = (previous?.plugins?.find((entry) => entry.name === plugin.pkg.name)?.versions ?? []).filter(
+    (version) => version.source?.path === source.path,
+  );
   const latest = oldVersions[0];
   const unchanged =
     latest !== undefined && latest.version === plugin.pkg.version && latest.source?.commit === head;
