@@ -1,8 +1,9 @@
 # 流程图驱动的 AI Agent 执行引擎 — 设计文档
 
 日期：2026-09-02
-最后修订：2026-10-29（P1 多 Agent 语义、子 Agent 配置、审计修复、内嵌架构与关键流程图）
+最后修订：2026-10-30（迁入 `docs/plugins/aiworkflow/`，随多插件仓库改造更新路径）
 状态：已评审，当前实现依据
+适用范围：`plugins/aiworkflow/`（仓库内的一个插件包）
 图示：关键流程用 Mermaid 内嵌在正文里（GitHub / VS Code 直接渲染）；实现改动时同步 §3、§7、§8 的图。
 
 ---
@@ -606,7 +607,7 @@ child run 调 `report_blocked` 时，该 child 置为 `failed`，随后由 7.5 �
 sequenceDiagram
   autonumber
   participant DSH as DSH 宿主
-  participant PKG as 插件包 dsh-plugin
+  participant PKG as 插件包 plugins/aiworkflow
   participant H as Host 半 index.js
   participant C as Client 半 client.js
   participant UI as 宿主 UI

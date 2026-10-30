@@ -5,18 +5,18 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { openMemoryDb } from './support/db.js';
-import { FlowStore } from './support/flowStore.js';
+import { openMemoryDb } from '../support/db.js';
+import { FlowStore } from '../support/flowStore.js';
 import {
   ExecutionEngine,
   type RunFinishedResult,
   type SelfHealError,
   type StepResult,
-} from '../shared/src/engine.js';
-import { buildSnapshot } from '../shared/src/snapshot.js';
-import { readMonitorState } from '../shared/src/sql.js';
-import { validateFlow } from '../shared/src/validate.js';
-import type { Flow } from '../shared/src/types.js';
+} from '../../shared/src/engine.js';
+import { buildSnapshot } from '../../shared/src/snapshot.js';
+import { readMonitorState } from '../../shared/src/sql.js';
+import { validateFlow } from '../../shared/src/validate.js';
+import type { Flow } from '../../shared/src/types.js';
 
 let tmpHome: string;
 beforeAll(() => {
@@ -557,7 +557,7 @@ describe('放弃 run 与会话互斥', () => {
 
 describe('编辑器 buildFlow 往返', () => {
   it('只有一个分支（带 when）时保留 branches', async () => {
-    const { buildFlow, canvasOf } = await import('../dsh-plugin/src/editor/model.js');
+    const { buildFlow, canvasOf } = await import('../../plugins/aiworkflow/src/editor/model.js');
     const base: Flow = {
       id: 'f_single_branch',
       name: '单分支',
@@ -581,7 +581,7 @@ describe('编辑器 buildFlow 往返', () => {
   });
 
   it('清空 when（data.when = ""）会真的删掉它', async () => {
-    const { buildFlow, canvasOf } = await import('../dsh-plugin/src/editor/model.js');
+    const { buildFlow, canvasOf } = await import('../../plugins/aiworkflow/src/editor/model.js');
     const base: Flow = {
       id: 'f_when',
       name: 'when',
@@ -611,7 +611,7 @@ describe('编辑器 buildFlow 往返', () => {
   });
 
   it('两路条件都显式清空时都保持空（交给校验器统一报错）', async () => {
-    const { buildFlow, canvasOf } = await import('../dsh-plugin/src/editor/model.js');
+    const { buildFlow, canvasOf } = await import('../../plugins/aiworkflow/src/editor/model.js');
     const base: Flow = {
       id: 'f_clear_cond',
       name: '清空条件',

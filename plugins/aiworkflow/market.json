@@ -1,0 +1,11 @@
+{
+  "title": {
+    "en": "aiworkflow",
+    "zh": "AI 工作流"
+  },
+  "description": {
+    "en": "Run aiworkflow flows in a DSH session, watch the run graph, and edit flows on a canvas.",
+    "zh": "在 DSH 会话里发起 aiworkflow 流程、查看运行图，并在画布上编辑流程图。"
+  },
+  "keywords": ["workflow", "flowchart", "agent", "dsh", "editor"]
+}

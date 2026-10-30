@@ -12,9 +12,9 @@ import {
   TEMPLATES,
   type CanvasEdge,
   type CanvasNode,
-} from '../dsh-plugin/src/editor/model.js';
-import { validateFlow } from '../shared/src/validate.js';
-import type { GateNode, SubagentNode } from '../shared/src/types.js';
+} from '../../plugins/aiworkflow/src/editor/model.js';
+import { validateFlow } from '../../shared/src/validate.js';
+import type { GateNode, SubagentNode } from '../../shared/src/types.js';
 
 const node = (id: string, kind: 'prompt' | 'gate' | 'end', extra: Record<string, unknown> = {}) =>
   ({ id, type: kind, title: id, ...extra }) as never;

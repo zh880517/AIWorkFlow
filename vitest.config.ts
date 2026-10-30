@@ -7,7 +7,7 @@ const sharedSrc = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'sh
 export default defineConfig({
   resolve: {
     alias: [
-      // 与 dsh-plugin/build.mjs 的别名保持一致：`@shared/x.js` → `shared/src/x.ts`
+      // 与 scripts/build-plugin.mjs 的别名保持一致：`@shared/x.js` → `shared/src/x.ts`
       { find: /^@shared\/(.*)\.js$/, replacement: path.join(sharedSrc, '$1.ts') },
       { find: '@shared', replacement: sharedSrc },
     ],

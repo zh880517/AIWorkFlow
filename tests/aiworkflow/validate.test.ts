@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { validateFlow } from '../shared/src/validate.js';
-import type { Flow, FlowNode } from '../shared/src/types.js';
+import { validateFlow } from '../../shared/src/validate.js';
+import type { Flow, FlowNode } from '../../shared/src/types.js';
 
 function flow(nodes: FlowNode[], entry = 'n1'): Flow {
   return { id: 'f_test', name: '测试图', entry, nodes };

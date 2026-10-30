@@ -2,9 +2,9 @@
 import * as React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import type { SubagentNode } from '../shared/src/types.js';
-import { Inspector, type InspectorProps } from '../dsh-plugin/src/editor/inspector.js';
-import type { CanvasNode } from '../dsh-plugin/src/editor/model.js';
+import type { SubagentNode } from '../../shared/src/types.js';
+import { Inspector, type InspectorProps } from '../../plugins/aiworkflow/src/editor/inspector.js';
+import type { CanvasNode } from '../../plugins/aiworkflow/src/editor/model.js';
 
 const base: InspectorProps = {
   body: undefined,

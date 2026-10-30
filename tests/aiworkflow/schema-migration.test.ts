@@ -4,9 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { MIGRATIONS, migrateSchema } from '../shared/src/schema.js';
-import { NodeSqliteDb } from '../dsh-plugin/src/sqlite.js';
-import { openMemoryDb } from './support/db.js';
+import { MIGRATIONS, migrateSchema } from '../../shared/src/schema.js';
+import { NodeSqliteDb } from '../../plugins/aiworkflow/src/sqlite.js';
+import { openMemoryDb } from '../support/db.js';
 
 let tmp: string;
 

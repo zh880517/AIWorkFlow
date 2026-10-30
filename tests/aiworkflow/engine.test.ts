@@ -3,8 +3,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { openMemoryDb, type TestDb } from './support/db.js';
-import { FlowStore } from './support/flowStore.js';
+import { openMemoryDb, type TestDb } from '../support/db.js';
+import { FlowStore } from '../support/flowStore.js';
 import {
   ExecutionEngine,
   DISCIPLINE_TEXT,
@@ -12,8 +12,8 @@ import {
   type RunFinishedResult,
   type SelfHealError,
   type EngineEvent,
-} from '../shared/src/engine.js';
-import type { Flow } from '../shared/src/types.js';
+} from '../../shared/src/engine.js';
+import type { Flow } from '../../shared/src/types.js';
 
 let tmpHome: string;
 

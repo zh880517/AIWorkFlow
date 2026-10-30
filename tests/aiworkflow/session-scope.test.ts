@@ -1,8 +1,8 @@
 // 会话隔离：面板/运行图只能看到本会话的 run（runs.host_session = 'dsh:<sessionId>'）。
 // 这条语义由 shared/sql.ts 的 readMonitorState 第四个参数承载，不带 session 参数即看全部。
 import { describe, expect, it } from 'vitest';
-import { openMemoryDb } from './support/db.js';
-import { readMonitorState } from '../shared/src/sql.js';
+import { openMemoryDb } from '../support/db.js';
+import { readMonitorState } from '../../shared/src/sql.js';
 
 const NOW = '2026-10-23T10:00:00.000Z';
 

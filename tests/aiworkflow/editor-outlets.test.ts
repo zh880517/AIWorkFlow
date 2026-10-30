@@ -1,6 +1,6 @@
 // 卡点出口：一个选项一个出口（未连线的也画出来），出边挂到正确的 handle 上。
 import { describe, expect, it } from 'vitest';
-import { canvasOf, outletsOf, spreadSourceHandles, type CanvasEdge } from '../dsh-plugin/src/editor/model.js';
+import { canvasOf, outletsOf, spreadSourceHandles, type CanvasEdge } from '../../plugins/aiworkflow/src/editor/model.js';
 
 const gateBody = {
   id: 'g',

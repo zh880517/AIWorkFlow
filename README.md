@@ -1,178 +1,81 @@
-# aiworkflow
+# DSH 插件集合
 
-**把「这件事该怎么做」画成流程图，Agent 一次只领一步。**
+DeepSeek Harness 插件集合：**每个插件是一个独立包，装哪个装哪个**。一个仓库可以放多个插件，
+DSH 侧就是 Plugins 里的多张卡片，各自安装、开关、卸载、升级。
 
-它解决的不是「Agent 不听话」，而是「一次把几千字流程灌进去，它就不专注了」。流程图在这里的作用是描述
-**何时披露什么**，而不是当笼子。Agent 每领一步 → 做完回报 `summary`/`payload` → 再领下一步。
+## 插件
 
-这是一个 **DeepSeek Harness（DSH）插件**：不依赖独立服务，也不支持其它 Agent 客户端。
-插件 Host 半直接用 `node:sqlite` 打开 `~/.aiworkflow/aiworkflow.db`，执行引擎复用 `shared/` 里的同一份实现；
-Client 半在 DSH 里提供画布编辑器、进度面板和只读运行图。
-
----
-
-## 能做什么
-
-### 画：可视化流程编辑器
-
-- React Flow 画布：拖拽定位、从节点出口拖线连边、右键菜单、复制粘贴、撤销重做；
-- 六种节点：`prompt` 指令、`tool` 工具、`subagent` 子 Agent、`gate` 人工卡点、`join` 汇聚、`end` 结束；
-- 卡点**一个选项一个出口**：没连线的出口名字挂在节点右侧，可以从它拖线（或点名字再点目标节点）；
-- 属性面板按「头部概览 → 核心字段 → 折叠的高级设置」分层，角色/线程/产物/回路等在头部 chip 直接可读；
-- 流程库分「流程 / 子 Agent 配置」：子 Agent 配置可保存自己的角色表和子图，用同一画布创建/编辑，供主流程引用；
-- 改动后实时校验：页头显示「校验通过 / 几条警告 / 几处硬拒」，点条目直接定位到节点；
-- 保存前跑与 Agent 工具完全相同的 `validateFlow`，不通过不会写库，原图保持不变。
-
-### 跑：把流程交给 Agent 执行
-
-- **逐步披露**：每次只下发当前节点的指令和当前岔路口的条件，图结构不下发；
-- **分支用自然语言**：Agent 自己判断该走哪条；`*` 表示默认分支；
-- **数据传递**：`complete_step` 回报 `summary`（给人看）+ `payload`（给机器用），后续节点可用 `{{节点.payload.字段}}` 插值；
-- **子 Agent**：`inline` / `subflow` / `flowRef` 三种模式；`flowRef` 可以引用一张主流程，也可以引用「子 Agent 配置」（带自己的角色表和子图）；支持 `fanOut`（按数组或固定数量并行）与 `join` 汇总；
-- **人工卡点**：run 挂起等人；用户在对话里答复，Agent 用 `answer_gate` 代填（`source: chat`）后继续；
-- **循环可控**：节点级 `iterationLimit` + 回路级 `maxRounds`，撞上限可跳到逃生节点，也可以直接判失败。
-
-### 看：进度与运行图
-
-- 标题栏状态胶囊 + 浮动面板（当前步、卡点、已走路径、执行轨迹、payload）；
-- 只读运行图：节点按状态着色、走过的边高亮、点节点看这一步的记录；
-- 所有 run 落 SQLite，切换会话/重开面板都能按 `dsh:<sessionId>` 找回当时的快照与轨迹。
-
----
-
-## 设计思想
-
-1. **管理注意力预算，而不是约束 Agent**
-   唯一硬性要求是「每步做完必须回报」，否则链条断裂。节点执行中 Agent 想多读文件、多跑命令，完全放开。
-
-2. **图结构对 Agent 隐藏，是降噪而不是保密**
-   拓扑对完成当前这步没有用，给了只会稀释注意力。默认不下发；Agent 能不能看到全图是次要问题。
-
-3. **SQLite 是唯一事实源**
-   `~/.aiworkflow/flows/*.json`、`cache/` 都是派生镜像，删掉不影响运行；镜像在每次保存时刷新
-   （目前没有单独的全量重建命令，需要时从 SQLite 重新保存即可）。任何写入先落库，永不只写 JSON。
-
-4. **run 对着快照跑（copy-on-run）**
-   启动 run 时把图序列化成快照，`flowRef` 递归解析；之后再改图不影响进行中的 run。
-
-5. **报错必须自愈**
-   执行类工具与校验拒绝都返回「错在哪 + 正确姿势 + 当前这一步是什么」三段式，一次往返就能修好；
-   建图类工具（`aiworkflow_flow`）是「错在哪 + 正确姿势」两段（没有"当前步"概念）。
-
-6. **人类卡点只能人类放行**
-   插件不会替用户做选择；`answer_gate` 只用于转达用户已经说出口的答复。
-
-7. **不静默截断**
-   fan-out 超出 `max`、子 Agent 失败后放弃，都会在面板上显性列出，不偷偷丢弃。
-
----
+| 插件 | 一句话 | 安装 | 文档 |
+|---|---|---|---|
+| aiworkflow | 把流程画成图，Agent 一次只领一步 | `git+https://github.com/zh880517/AIWorkFlow.git#main&path:/plugins/aiworkflow` | [docs/plugins/aiworkflow](docs/plugins/aiworkflow/README.md) |
 
 ## 安装
 
-仓库里已经带了构建好的产物，安装时不需要 clone、不需要在本机构建。DSH 侧栏
-**Plugins → Add plugin**，粘贴：
+在 DSH 侧栏 **Plugins → Add plugin** 里粘一条 spec（也可以让 Agent 调 `plugin_manager` 的 `install_bundle`）：
 
 ```
-git+https://github.com/zh880517/AIWorkFlow.git#main&path:/dsh-plugin
+git+<仓库地址>.git#<ref>&path:/plugins/<插件 id>
 ```
 
-- `#main` 跟随主分支；要固定版本就换成 commit（只能钉在包含构建产物的提交上，用 `git log --oneline -- dsh-plugin/index.js` 查）；
-- `&path:/dsh-plugin` 指定插件在仓库子目录里；
-- 装完自动加入 profile 的 bundle 列表并启用，重开 DSH 生效。
+- `#<ref>`：分支名（如 `main`）或 40 位 commit；钉版本用包含构建产物的 commit。
+- `&path:/plugins/<id>`：插件包在仓库里的目录。**一次安装只装一个插件**，装第二个再加一条 spec。
+- 构建产物已提交，安装时不在本机构建；装完自动加入 profile 的 bundle 列表并启用，重开 DSH 生效。
+- 升级 = Remove 后按新 commit 重装（DSH 目前没有原地升级）。
 
-也可以让 Agent 代装：`plugin_manager` 的 `install_bundle`，`target` 填同一串。
-
-如果你启用了插件市场（Discover）实验 bundle，还可以加索引来源，然后在市场里点安装：
-
-```
-https://raw.githubusercontent.com/zh880517/AIWorkFlow/main/dsh-plugin/market/index.json
-```
-
-市场索引钉在一个 commit 上，只有跑过 `npm run release:plugin` 才会更新；如果索引落后于 `main`，
-优先用上面的 `#main` 安装链接，或按 `git log` 指定包含新产物的 commit。
-
-装好之后：
-
-- 侧栏出现「可视化工作流」，进去是流程库 + 画布编辑器；
-- 对话输入框左侧的「工作流」按钮列出可启动的主流程（`kind=flow`；子 Agent 配置不出现，它只能被主流程引用），
-  选一张就直接建 run（不经过输入框、不产生用户消息；
-  Host 会用 `followup` 注入一条唤醒 Agent 的系统消息）；同一会话已有活跃 run 时会提示先完成或放弃；
-- 跑起来后标题栏出现胶囊，点开是进度面板；面板里可以打开「运行图」或「放弃」当前 run。
-
----
-
-## 一次 run 的样子
-
-1. 在「可视化工作流」里画好图，设好入口；
-2. 在输入框左侧点「工作流」选一张图（或让 Agent 调 `aiworkflow_start_run`）建 run；
-3. Agent 拿到纪律文本 + 第一步，干活后 `aiworkflow_complete_step` 回报 `{ summary, payload? }`；有分支时给 `branchId`；
-4. 撞到 `gate` 节点就挂起：人在对话里答复，Agent 调 `answer_gate` 后继续；
-5. 走到 `end` 节点结束（`success` / `fail`），面板里能回看整条轨迹。
-
----
-
-## 流程图长什么样
-
-```jsonc
-{
-  "id": "f_release",
-  "name": "发版检查",
-  "entry": "n1",
-  "nodes": [
-    { "id": "n1", "type": "prompt", "title": "看 diff", "instruction": "列出这次改动的风险点", "next": "n2" },
-    { "id": "n2", "type": "tool", "title": "跑测试", "toolName": "Bash",
-      "params": { "command": "npm test" },
-      "iterationLimit": 3, "onLimitExceeded": "n_fail",
-      "branches": [
-        { "id": "b1", "condition": "全部通过", "to": "n3" },
-        { "id": "b2", "condition": "有失败", "to": "n_fail" }
-      ] },
-    { "id": "n3", "type": "gate", "title": "能发吗",
-      "question": "这次改动可以发版吗？",
-      "options": [{ "id": "o1", "label": "发" }, { "id": "o2", "label": "不发" }],
-      "branches": [
-        { "id": "g1", "condition": "发", "outlet": "o1", "to": "n_ok" },
-        { "id": "g2", "condition": "不发", "outlet": "o2", "to": "n_fail" }
-      ] },
-    { "id": "n_ok", "type": "end", "outcome": "success" },
-    { "id": "n_fail", "type": "end", "outcome": "fail" }
-  ]
-}
-```
-
-画布编辑器和 JSON 是同一份数据的两个视图：连线就是 `next` / `branches`，卡点的出口就是 `outlet`。
-
----
-
-## 目录
+启用了插件市场（Discover）实验 bundle 后，也可以添加索引来源，在市场里逐个安装：
 
 ```
-shared/src/  公用层：DSL 类型、校验、执行引擎、快照、SQLite 表结构、只读查询
-dsh-plugin/  DeepSeek Harness 插件（Host 半 + Client 半，构建成 index.js / client.js）
-tests/       vitest（内存 node:sqlite）
-docs/        设计文档与开发笔记
+https://raw.githubusercontent.com/zh880517/AIWorkFlow/main/market/index.json
 ```
 
-依赖方向固定：`dsh-plugin/ → shared/`。有测试守着，插件或公用层里出现反向依赖会直接失败。
+## 仓库结构
 
----
+```
+plugins/<id>/        每个插件一个独立的 npm 包（Host + Client，构建成 index.js / client.js）
+  package.json       dsh.bundle.patch 声明它是插件；dsh.client 声明浏览器半
+  src/               源码
+  index.js client.js 构建产物（要提交）
+  market.json        市场展示元数据（标题/描述/关键词）
+shared/src/          构建期内联层：DSL、校验、执行引擎、SQLite 表结构、只读查询
+tests/<id>/          与插件目录同名的测试
+market/index.json    一个索引列全部插件（format 1）
+scripts/             构建 / 检查 / 发布 / 索引 / 文档检查，全部按 plugins/* 循环
+docs/plugins/<id>/   每个插件一个文档目录（入口 README.md + design.md）
+docs/dev/            开发临时文档，验收后删除
+```
+
+依赖方向固定：`plugins/*/ → shared/`，插件之间不互相 import（有测试守着）。所有插件共用一份 `shared/`，
+构建时各自内联，不做运行期跨包依赖。
 
 ## 开发
 
 ```bash
 npm install
-npm run typecheck        # shared + 插件
+npm run typecheck        # shared + 每个插件
 npm test                 # vitest
-npm run build:plugin     # 生成 index.js / client.js（产物要提交）
-npm run check:plugin     # 重建并与暂存区比对，防止产物和源码脱节
-npm run release:plugin   # 一键：构建 → 提交产物 → 刷新市场索引 → 提交索引 → 打印安装链接
-npm run release:plugin -- --dry-run   # 只看会做什么，不动 git 历史
+npm run build            # 构建全部插件；`-- --only <id>` 只构建一个
+npm run check:plugin     # 重建并与暂存区比对，防止产物与源码脱节
+npm run check:docs       # 每个插件必须有 docs/plugins/<id>/ 且 README 链接到它
+npm run check            # typecheck + test + check:plugin + check:docs
+npm run release:plugin   # 构建 → 提交 → 刷新市场索引 → 提交索引 → 打印安装链接
+npm run release:plugin -- --only aiworkflow
+npm run release:plugin -- --dry-run    # 只看会做什么，不动 git 历史
 ```
 
+新增一个插件：
+
+1. 建 `plugins/<id>/`（复制现有插件的 package.json / cordis.patch.yml / tsconfig.json 与 src 骨架，改包名、row id 前缀、路由前缀）；
+2. 建 `docs/plugins/<id>/README.md` 与 `design.md`；
+3. 在本文的「插件」表加一行，在 `docs/README.md` 的插件索引加一行；
+4. 跑 `npm run build -- --only <id>` 与 `npm run check:docs`；
+5. 跑 `npm run release:plugin -- --only <id>` 生成索引条目。
+
 > 为什么产物要提交：pnpm 11 默认拦下 git 依赖的 `prepare` 脚本，安装时会多一步「允许脚本并重试」；
-> 把产物放进仓库就是零构建、零脚本，粘一行链接就能装。构建是确定性的（同源码两次构建哈希一致、不含机器路径/时间戳）。
+> 把产物放进仓库就是零构建、零脚本。构建是确定性的（同源码两次构建哈希一致、不含机器路径/时间戳）。
 
 ## 文档
 
-- 设计文档（含架构与关键流程图：装载 / 启动 / 步进闭环 / 子 Agent / 卡点）：[docs/2026-09-02-flowchart-driven-agent-design.md](docs/2026-09-02-flowchart-driven-agent-design.md)
-- 插件细节（界面、工具、边界）：[dsh-plugin/README.md](dsh-plugin/README.md)
+- 文档索引与规则：[docs/README.md](docs/README.md)
+- 每个插件一个文档目录：`docs/plugins/<id>/`（入口 + 架构）；代码目录里的 README 只留短版并链到它。
+- aiworkflow 设计文档（架构与关键流程图）：[docs/plugins/aiworkflow/design.md](docs/plugins/aiworkflow/design.md)
+- 多插件改造方案（已实施）：[docs/2026-10-30-multi-plugin-repo-design.md](docs/2026-10-30-multi-plugin-repo-design.md)

@@ -1,6 +1,6 @@
 // 「工作流」启动面板的列表口径：子 Agent 配置只能被主流程引用，不能单独启动（2026-10-29 用户反馈）。
 import { describe, expect, it } from 'vitest';
-import { startableFlows } from '../dsh-plugin/src/picker.js';
+import { startableFlows } from '../../plugins/aiworkflow/src/picker.js';
 
 const at = '2026-10-29T12:00:00.000Z';
 

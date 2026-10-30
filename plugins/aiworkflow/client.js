@@ -1,4 +1,4 @@
-// 由 build.mjs 生成，勿手改。源码见 src/。
+// 由 scripts/build-plugin.mjs 生成，勿手改。源码见 src/。
 window.__ModuleLoader__.load({
   id: "@aiworkflow/dsh-plugin",
   factory(require) {

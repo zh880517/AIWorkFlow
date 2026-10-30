@@ -5,8 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { apply } from '../dsh-plugin/src/host.js';
-import { closeDatabase } from '../dsh-plugin/src/db.js';
+import { apply } from '../../plugins/aiworkflow/src/host.js';
+import { closeDatabase } from '../../plugins/aiworkflow/src/db.js';
 
 interface Mounted {
   handler: (req: unknown, res: unknown) => Promise<void>;

@@ -1,38 +1,38 @@
-# 流程图编辑器：交接说明（临时文档）
+# 流程图编辑器：实现交接
 
 > 给接手「修复画布编辑交互」的新会话看。只写事实与坑，不写猜测。
 
 ## 目标
 
-修 `dsh-plugin/src/editor/` 下的编辑交互问题（拖拽 / 连线 / 属性面板 / 分支条件 / 保存校验等）。
+修 `plugins/aiworkflow/src/editor/` 下的编辑交互问题（拖拽 / 连线 / 属性面板 / 分支条件 / 保存校验等）。
 插件已 profile 级安装，**不用重装**；改完构建 + 重载即可看到效果。
 
 ## 文件地图
 
 | 文件 | 职责 |
 |---|---|
-| `dsh-plugin/src/editor/page.tsx` | 页面壳：流程库（列出/新建/删除）→ 画布编辑器；保存、错误横幅、返回会话；撤销/重做历史、复制粘贴、右键菜单接线、快捷键 |
-| `dsh-plugin/src/editor/canvas.tsx` | React Flow 画布（provider / fitView / Background / Controls）；节点类型 `wf`；右键与拖动回调；视口中心 API |
-| `dsh-plugin/src/editor/menu.tsx` | 画布右键菜单（创建节点 / 复制 / 粘贴 / 删除 / 设为入口），视口坐标 + 贴边翻转 |
-| `dsh-plugin/src/editor/model.ts` | DSL ⇄ 画布映射：`canvasOf` / `buildFlow` / `makeNode` / `typeLabel` |
-| `dsh-plugin/src/editor/inspector.tsx` | 右侧属性面板：分区标题 + 加粗字段名 + 独立灰色说明；按节点类型给字段、多出边时编辑分支条件、设入口、删除节点 |
-| `dsh-plugin/src/editor/api.ts` | 前端 HTTP：`GET/PUT/DELETE /aiworkflow/flows[/:id]` |
-| `dsh-plugin/src/editor/styles.ts` | `.wf-*` 样式，只用 `--dsw-alias-*` token |
-| `dsh-plugin/src/client.tsx` | 注册侧栏页签 `aiworkflow` + 主面板 `main.key='aiworkflow'` |
+| `plugins/aiworkflow/src/editor/page.tsx` | 页面壳：流程库（列出/新建/删除）→ 画布编辑器；保存、错误横幅、返回会话；撤销/重做历史、复制粘贴、右键菜单接线、快捷键 |
+| `plugins/aiworkflow/src/editor/canvas.tsx` | React Flow 画布（provider / fitView / Background / Controls）；节点类型 `wf`；右键与拖动回调；视口中心 API |
+| `plugins/aiworkflow/src/editor/menu.tsx` | 画布右键菜单（创建节点 / 复制 / 粘贴 / 删除 / 设为入口），视口坐标 + 贴边翻转 |
+| `plugins/aiworkflow/src/editor/model.ts` | DSL ⇄ 画布映射：`canvasOf` / `buildFlow` / `makeNode` / `typeLabel` |
+| `plugins/aiworkflow/src/editor/inspector.tsx` | 右侧属性面板：分区标题 + 加粗字段名 + 独立灰色说明；按节点类型给字段、多出边时编辑分支条件、设入口、删除节点 |
+| `plugins/aiworkflow/src/editor/api.ts` | 前端 HTTP：`GET/PUT/DELETE /aiworkflow/flows[/:id]` |
+| `plugins/aiworkflow/src/editor/styles.ts` | `.wf-*` 样式，只用 `--dsw-alias-*` token |
+| `plugins/aiworkflow/src/client.tsx` | 注册侧栏页签 `aiworkflow` + 主面板 `main.key='aiworkflow'` |
 
 ## 构建 / 重载 / 验证
 
 ```bash
-npm run typecheck:plugin && npm run build:plugin
+npm run typecheck && npm run build
 ```
 
 然后 `plugin_manager`：`set_plugin target="include:aiworkflow-progress" enabled=false`，再 `enabled=true`（两次调用都必须同时给 target 和 enabled）。
 
-验证限制：本环境**没有浏览器控制/截图**，界面效果只能让用户看截图；能自动验证的是 `npm run typecheck:plugin`、`build:plugin`、`npm test`，以及 `Invoke-WebRequest http://127.0.0.1:11981/aiworkflow/flows` 这类接口冒烟。
+验证限制：本环境**没有浏览器控制/截图**，界面效果只能让用户看截图；能自动验证的是 `npm run typecheck`、`npm run build`、`npm test`，以及 `Invoke-WebRequest http://127.0.0.1:11981/aiworkflow/flows` 这类接口冒烟。
 
 ## 硬约束（都踩过）
 
-1. **不要 `import 'react/jsx-runtime'`**。宿主只提供 `react` / `react-dom`；混入第二份 jsx-runtime 会让 React Flow 报 **#31**（object with keys `$$typeof/type/key/ref/props`）。`build.mjs` 已把 `react/jsx-runtime` 别名到 `src/jsx-runtime-shim.ts`，自己新写的模块别绕开它。
+1. **不要 `import 'react/jsx-runtime'`**。宿主只提供 `react` / `react-dom`；混入第二份 jsx-runtime 会让 React Flow 报 **#31**（object with keys `$$typeof/type/key/ref/props`）。`scripts/build-plugin.mjs` 已把 `react/jsx-runtime` 别名到 `scripts/jsx-runtime-shim.ts`，自己新写的模块别绕开它。
 2. **JSX 用经典转换**（`React.createElement`），tsconfig 里 `jsx: "react"`；不要开 automatic。
 3. **颜色只能来自 `--dsw-alias-*`**。品牌色填充的按钮文字用 `var(--dsw-alias-bg-base)`（写死 `#fff` 会在深色主题下白底白字——这个 bug 修过一次）。
 4. **Client 半不能 require Harness 客户端包**（`@deepseek-ai/dsh-client-*`）；React Flow 是唯一允许的第三方依赖，已在 bundle 里。
@@ -43,7 +43,7 @@ npm run typecheck:plugin && npm run build:plugin
 
 | 现象 | 原因 | 修法 |
 |---|---|---|
-| 画布整块报 React #31 | 打包带进了第二份 `react/jsx-runtime` | `build.mjs` 别名到 `jsx-runtime-shim.ts` |
+| 画布整块报 React #31 | 打包带进了第二份 `react/jsx-runtime` | `scripts/build-plugin.mjs` 别名到 `scripts/jsx-runtime-shim.ts` |
 | 「新建流程」按钮空白 | 主按钮文字写死 `#fff`，深色主题下白底白字 | 文字改 `var(--dsw-alias-bg-base)` |
 | 主面板黑屏 | `main` 注册抛错 | 先注册侧栏项 + try/catch + `reportError` |
 | 画布浅色残留 | React Flow 默认样式 | `.wf-canvas` 里把 `--xy-*` 变量接到 `--dsw-alias-*` |
@@ -91,7 +91,7 @@ npm run typecheck:plugin && npm run build:plugin
 
 顺带修了上表里的 5 个交互/保存问题：点选连线误报未保存、第二条出边保存被拒「多个 default」、键盘删节点后编辑已删节点、新增节点落在视口外、卡点每个选项都警告未连线。
 
-验证过：`npm run typecheck:plugin`、`npm run build:plugin`、`npm test`（全部通过）；另外用一次性脚本跑过 `buildFlow` 的关键行为（单边写 next、双边只有一个 default、gate 按选项补 outlet、`canvasOf` 往返不丢条件/outlet）。界面效果仍需用户看截图——本环境没有浏览器控制。
+验证过：`npm run typecheck`、`npm run build`、`npm test`（全部通过）；另外用一次性脚本跑过 `buildFlow` 的关键行为（单边写 next、双边只有一个 default、gate 按选项补 outlet、`canvasOf` 往返不丢条件/outlet）。界面效果仍需用户看截图——本环境没有浏览器控制。
 
 ## 第二轮：P0 + P1（2026-10-23）
 
@@ -137,4 +137,4 @@ npm run typecheck:plugin && npm run build:plugin
 - 改选项文案同步改边标签；删选项连带删它的出边（`patchNode` 里做）。
 - 卡点只有一条出边、但绑定过选项时也写 `branches`（不再写 `next`），否则校验器会对每个选项报 `W_GATE_OPTION_UNWIRED`。
 - 另外：画布右键菜单的「新建节点」合并成一层子菜单（`MenuItem.children`，靠右翻左、贴底上移）。
-- 单测：`tests/editor-outlets.test.ts`（outletsOf / canvasOf 带 outlets / spreadSourceHandles 按 outlet 排），加一条「单出边绑了选项也写 branches」；总计 200 passed。
+- 单测：`tests/aiworkflow/editor-outlets.test.ts`（outletsOf / canvasOf 带 outlets / spreadSourceHandles 按 outlet 排），加一条「单出边绑了选项也写 branches」；总计 200 passed。

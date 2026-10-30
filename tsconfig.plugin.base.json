@@ -12,8 +12,7 @@
     "noEmit": true,
     "types": ["node"],
     "paths": {
-      "@shared/*": ["../shared/src/*"]
+      "@shared/*": ["./shared/src/*"]
     }
-  },
-  "include": ["src"]
+  }
 }

@@ -1,17 +1,19 @@
 {
-  "name": "aiworkflow",
+  "name": "dsh-plugins",
   "version": "0.1.0",
   "private": true,
-  "description": "DeepSeek Harness 插件：流程图驱动的分步执行（DSH 单宿主）",
+  "description": "DeepSeek Harness 插件集合：每个 plugins/<id>/ 是一个独立安装的插件包",
   "type": "module",
   "scripts": {
-    "build": "node dsh-plugin/build.mjs",
-    "build:plugin": "node dsh-plugin/build.mjs",
-    "check:plugin": "node dsh-plugin/check-bundles.mjs",
-    "market:plugin": "node dsh-plugin/market/build.mjs",
-    "release:plugin": "node dsh-plugin/release.mjs",
-    "typecheck": "npm run typecheck:plugin",
-    "typecheck:plugin": "tsc -p shared/tsconfig.json --noEmit && tsc -p dsh-plugin/tsconfig.json --noEmit",
+    "build": "node scripts/build.mjs --all",
+    "build:plugin": "node scripts/build.mjs --all",
+    "check": "npm run typecheck && npm test && npm run check:plugin && npm run check:docs",
+    "check:docs": "node scripts/check-docs.mjs",
+    "check:plugin": "node scripts/check-bundles.mjs",
+    "market:plugin": "node scripts/market.mjs",
+    "release:plugin": "node scripts/release.mjs",
+    "typecheck": "node scripts/typecheck.mjs",
+    "typecheck:plugin": "node scripts/typecheck.mjs",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -20,9 +22,7 @@
   },
   "keywords": [
     "deepseek-harness",
-    "dsh-plugin",
-    "workflow",
-    "flowchart"
+    "dsh-plugin"
   ],
   "license": "MIT",
   "devDependencies": {
