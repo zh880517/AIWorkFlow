@@ -1,12 +1,12 @@
 {
   "format": 1,
   "title": {
-    "en": "AIWorkFlow DSH plugins",
-    "zh": "AIWorkFlow DSH 插件集"
+    "en": "DSH plugins",
+    "zh": "DSH 插件集"
   },
   "description": {
-    "en": "DeepSeek Harness plugins maintained in the AIWorkFlow repository.",
-    "zh": "AIWorkFlow 仓库维护的 DeepSeek Harness 插件。"
+    "en": "DeepSeek Harness plugins maintained in the dsh_plugins repository.",
+    "zh": "dsh_plugins 仓库维护的 DeepSeek Harness 插件。"
   },
   "plugins": [
     {
@@ -21,9 +21,9 @@
       },
       "icon": "../plugins/aiworkflow/icon.svg",
       "author": "zh880517",
-      "homepage": "https://github.com/zh880517/AIWorkFlow",
+      "homepage": "https://github.com/zh880517/dsh_plugins",
       "repository": {
-        "url": "https://github.com/zh880517/AIWorkFlow",
+        "url": "https://github.com/zh880517/dsh_plugins",
         "directory": "plugins/aiworkflow"
       },
       "metadata": {
@@ -36,6 +36,16 @@
         ]
       },
       "versions": [
+        {
+          "version": "0.1.5",
+          "publishTimestamp": 1793330869,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/zh880517/dsh_plugins",
+            "commit": "e7e715dfa76156e472ffe75d1dd64d8d50adc8b0",
+            "path": "plugins/aiworkflow"
+          }
+        },
         {
           "version": "0.1.4",
           "publishTimestamp": 1793330218,
