@@ -7,7 +7,7 @@ DSH 侧就是 Plugins 里的多张卡片，各自安装、开关、卸载、升�
 
 | 插件 | 一句话 | 安装 | 文档 |
 |---|---|---|---|
-| aiworkflow | 把流程画成图，Agent 一次只领一步 | `git+https://github.com/zh880517/AIWorkFlow.git#main&path:/plugins/aiworkflow` | [docs/plugins/aiworkflow](docs/plugins/aiworkflow/README.md) |
+| aiworkflow | 把流程画成图，Agent 一次只领一步 | `git+https://github.com/zh880517/dsh_plugins.git#main&path:/plugins/aiworkflow` | [docs/plugins/aiworkflow](docs/plugins/aiworkflow/README.md) |
 
 ## 安装
 
@@ -25,7 +25,7 @@ git+<仓库地址>.git#<ref>&path:/plugins/<插件 id>
 启用了插件市场（Discover）实验 bundle 后，也可以添加索引来源，在市场里逐个安装：
 
 ```
-https://raw.githubusercontent.com/zh880517/AIWorkFlow/main/market/index.json
+https://raw.githubusercontent.com/zh880517/dsh_plugins/main/market/index.json
 ```
 
 ## 仓库结构

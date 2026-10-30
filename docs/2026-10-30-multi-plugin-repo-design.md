@@ -19,7 +19,7 @@
 
 ```mermaid
 flowchart LR
-  REPO["仓库 AIWorkFlow<br/>plugins/aiworkflow · plugins/next<br/>market/index.json"]
+  REPO["仓库 dsh_plugins<br/>plugins/aiworkflow · plugins/next<br/>market/index.json"]
   SPEC["安装 spec<br/>git+repo#ref&amp;path:/plugins/aiworkflow"]
   PNPM["pnpm（在 profile 目录执行）"]
   PROFILE["~/.dsh/profiles/&lt;name&gt;/package.json<br/>dependencies: a、b<br/>dsh.profile.bundles: [a, b]"]
@@ -161,8 +161,8 @@ docs/
 每个插件一条，形状固定：
 
 ```
-git+https://github.com/zh880517/AIWorkFlow.git#main&path:/plugins/aiworkflow
-git+https://github.com/zh880517/AIWorkFlow.git#main&path:/plugins/<next>
+git+https://github.com/zh880517/dsh_plugins.git#main&path:/plugins/aiworkflow
+git+https://github.com/zh880517/dsh_plugins.git#main&path:/plugins/<next>
 ```
 
 - `#main` 跟分支；钉版本用 40 位 commit（只钉包含构建产物的提交）。
@@ -255,7 +255,7 @@ docs/
 一句话定位。
 
 ## 安装
-git+https://github.com/zh880517/AIWorkFlow.git#main&path:/plugins/<id>
+git+https://github.com/zh880517/dsh_plugins.git#main&path:/plugins/<id>
 （钉版本、市场索引、升级方式各一句）
 
 ## 能做什么
@@ -409,7 +409,7 @@ docs/plugins/foo/README.md 缺失。
 |---|---|---|
 | Q1 | 新插件的 npm scope：继续 `@aiworkflow/*`，还是换成 `@<owner>/dsh-*` | 待定：现有 `@aiworkflow/dsh-plugin` 不动（改名会迫使所有用户重装）；第二个插件落地前确定统一 scope |
 | Q2 | 文档放 `docs/plugins/<id>/`（集中）还是 `plugins/<id>/docs/`（跟随代码） | 已定：集中式 `docs/plugins/<id>/`，已落地 |
-| Q3 | 仓库是否改名（现在叫 AIWorkFlow，但要做插件集合） | 先不改名：GitHub 会重定向旧地址，但依赖 URL、README 徽章、市场条目都要跟着改；等第二个插件落地后再评估 |
+| Q3 | 仓库是否改名（原名 AIWorkFlow，但要做插件集合） | 已定（2026-10-30）：GitHub 仓库改名为 `dsh_plugins`；本地目录仍是 `D:\GitHub\AIWorkFlow`，profile 的 `link:` 指向它，不受改名影响。旧 URL 由 GitHub 重定向，市场索引与 README 已换新地址 |
 
 ## 12. 决策记录（拟）
 

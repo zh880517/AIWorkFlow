@@ -127,7 +127,7 @@ if (!noCommit) {
 
 // 汇总：从刚生成的索引里读每个插件的安装 spec
 const index = JSON.parse(readFileSync(MARKET_INDEX, 'utf8'));
-const url = index.plugins[0]?.repository?.url ?? 'https://github.com/zh880517/AIWorkFlow';
+const url = index.plugins[0]?.repository?.url ?? 'https://github.com/zh880517/dsh_plugins';
 const slug = url.replace(/^https?:\/\/[^/]+\//, '');
 
 console.log('\n—— 生成结果 ——');

@@ -7,7 +7,7 @@ DeepSeek Harness 插件：把流程画成图，Agent 一次只领一步。
 ## 安装
 
 ```
-git+https://github.com/zh880517/AIWorkFlow.git#main&path:/plugins/aiworkflow
+git+https://github.com/zh880517/dsh_plugins.git#main&path:/plugins/aiworkflow
 ```
 
 `#main` 跟主分支；钉版本换成 commit。`&path:/plugins/aiworkflow` 是该包在仓库里的位置。

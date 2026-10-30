@@ -1,11 +1,11 @@
 {
   "title": {
-    "en": "AIWorkFlow DSH plugins",
-    "zh": "AIWorkFlow DSH 插件集"
+    "en": "DSH plugins",
+    "zh": "DSH 插件集"
   },
   "description": {
-    "en": "DeepSeek Harness plugins maintained in the AIWorkFlow repository.",
-    "zh": "AIWorkFlow 仓库维护的 DeepSeek Harness 插件。"
+    "en": "DeepSeek Harness plugins maintained in the dsh_plugins repository.",
+    "zh": "dsh_plugins 仓库维护的 DeepSeek Harness 插件。"
   },
   "author": "zh880517"
 }

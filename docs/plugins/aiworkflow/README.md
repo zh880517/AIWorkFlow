@@ -18,7 +18,7 @@
 **DSH 侧栏 Plugins → Add plugin**，粘贴：
 
 ```
-git+https://github.com/zh880517/AIWorkFlow.git#main&path:/plugins/aiworkflow
+git+https://github.com/zh880517/dsh_plugins.git#main&path:/plugins/aiworkflow
 ```
 
 - `#main` 跟随主分支；要固定版本就换成 commit（只能钉在包含构建产物的提交上，用 `git log --oneline -- plugins/aiworkflow/index.js` 查）；
@@ -30,11 +30,11 @@ git+https://github.com/zh880517/AIWorkFlow.git#main&path:/plugins/aiworkflow
 启用了插件市场（Discover）实验 bundle 后，可以加索引来源，然后在市场里搜 aiworkflow 直接装：
 
 ```
-https://raw.githubusercontent.com/zh880517/AIWorkFlow/main/market/index.json
+https://raw.githubusercontent.com/zh880517/dsh_plugins/main/market/index.json
 ```
 
 升级没有原地升级：重新安装新的 commit（或先 Remove 再装）。本地开发时 `npm run build` 后填本机绝对路径
-（例如 `D:/path/to/AIWorkFlow/plugins/aiworkflow`），改完重新构建再让条目重新加载。
+（例如 `D:/path/to/dsh_plugins/plugins/aiworkflow`），改完重新构建再让条目重新加载。
 
 装好之后：
 
